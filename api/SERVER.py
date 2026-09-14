@@ -219,6 +219,11 @@ def domain() -> dict:
                     {"value": c.value, "color": c.color, "label": c.label}
                     for c in v.colors
                 ],
+                # The colour of "no value" where that is a class rather than a
+                # gap — `mhw`'s heatwave-free ocean, which the WebP cannot carry
+                # because it shares alpha 0 with land. Null for every variable
+                # that has no such class.
+                "backgroundColor": v.background_color,
                 # How /image packs this variable's value into the WebP, ready to
                 # hand to Mapbox: `mix` is `raster-color-mix` verbatim and
                 # `range` is what the encoding can represent. Computed here, not

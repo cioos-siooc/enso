@@ -204,6 +204,13 @@ class Variable:
     # would throw that away.
     colormap: str | None = None
     colors: tuple[Category, ...] = ()
+    # What the *absence* of a value means on this variable, as a colour, where
+    # that is a thing rather than a gap. Only `mhw` declares one: its image is
+    # alpha 0 at land, ice AND heatwave-free ocean alike, so the ramp can never
+    # be handed a code 0 to paint — the frontend draws this as a flat fill under
+    # the raster instead. A continuous variable has no such class (its own gap is
+    # `NO_CLIM_RGBA`, which the encoding *does* carry) and leaves this None.
+    background_color: str | None = None
     # `anom` is computed as `sst - climatology(mmdd)` rather than stored.
     derived: bool = False
     # An ordinal class rather than a measurement. Three things follow, and each

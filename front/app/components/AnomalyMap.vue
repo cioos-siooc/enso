@@ -67,6 +67,28 @@ const WEST_SOURCE_ID = 'field-image-west'
 const WEST_LAYER_ID = 'field-layer-west'
 const WORLD = 360
 
+/**
+ * The flat colour under the field layers, for a variable whose "no value" is a
+ * class rather than a gap.
+ *
+ * `mhw` is the one that has one. Its WebP holds land, ice AND heatwave-free
+ * ocean at **alpha 0** alike — `encode()` sees NaN for all three — so no code 0
+ * ever reaches `raster-color` and the ramp has nothing to paint it with. The
+ * source alpha also wins over the ramp's, so there is no expression that could
+ * bring it back. A fill under the raster is what is left.
+ *
+ * It is exact only because the basemap's land sits ABOVE the field layers in
+ * this style: the fill covers the whole image quad, and the land drawn over it
+ * cuts it back to the ocean, which is the only place category 0 means anything.
+ * Move the raster above the land layer and this paints the continents blue.
+ *
+ * One source, one layer, both quads: on the globe the field is drawn twice (see
+ * `WEST_SOURCE_ID`), and the fill follows it as a second polygon in the same
+ * FeatureCollection rather than a second layer to keep below.
+ */
+const BACKGROUND_SOURCE_ID = 'field-background'
+const BACKGROUND_LAYER_ID = 'field-background-layer'
+
 const REGION_SOURCE_ID = 'region-box'
 const REGION_FILL_ID = 'region-box-fill'
 const REGION_LINE_ID = 'region-box-line'
@@ -219,6 +241,72 @@ function continuousRamp(
   return ramp
 }
 
+/** The colour under the raster, or null for a variable that declares none. */
+function backgroundColor(): string | null {
+  return store.domain?.variables[store.variable]?.backgroundColor ?? null
+}
+
+/** The image quad as a polygon ring — the fill below covers exactly the frame. */
+function backgroundRing(offset = 0): GeoJSON.Position[] {
+  const corners = imageCoordinates(offset)
+  return [...corners, corners[0]!] as GeoJSON.Position[]
+}
+
+/**
+ * The quads the fill has to cover: one in Mercator, two on the globe.
+ *
+ * Kept as one FeatureCollection rather than a second layer for the westward
+ * copy, so there is only ever one layer to keep underneath the field.
+ */
+function backgroundData(): GeoJSON.FeatureCollection {
+  const offsets = projection.value === 'globe' ? [0, -WORLD] : [0]
+  return {
+    type: 'FeatureCollection',
+    features: offsets.map(offset => ({
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'Polygon', coordinates: [backgroundRing(offset)] },
+    })),
+  }
+}
+
+/**
+ * Add, update or drop the flat colour under the field.
+ *
+ * Inserted below the LOWEST field layer present, which is the westward copy
+ * when the globe is on — `syncWestCopy` adds that immediately below `LAYER_ID`,
+ * so inserting before `LAYER_ID` here would sandwich the fill between the two
+ * halves of the same frame and hide the eastern one.
+ */
+function syncBackground() {
+  if (!map || !map.getLayer(LAYER_ID)) return
+  const color = backgroundColor()
+  const source = map.getSource(BACKGROUND_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+
+  if (!color) {
+    if (map.getLayer(BACKGROUND_LAYER_ID)) map.removeLayer(BACKGROUND_LAYER_ID)
+    if (source) map.removeSource(BACKGROUND_SOURCE_ID)
+    return
+  }
+
+  if (source) {
+    source.setData(backgroundData())
+    map.setPaintProperty(BACKGROUND_LAYER_ID, 'fill-color', color)
+    return
+  }
+
+  map.addSource(BACKGROUND_SOURCE_ID, { type: 'geojson', data: backgroundData() })
+  map.addLayer({
+    id: BACKGROUND_LAYER_ID,
+    type: 'fill',
+    source: BACKGROUND_SOURCE_ID,
+    // The same 0.85 the raster carries, so heatwave-free ocean and a Cat 1 cell
+    // sit on the basemap with the same weight — a fully opaque floor under a
+    // translucent field would read as a different surface, not as the same map.
+    paint: { 'fill-color': color, 'fill-opacity': 0.85, 'fill-antialias': false },
+  }, map.getLayer(WEST_LAYER_ID) ? WEST_LAYER_ID : LAYER_ID)
+}
+
 function addRaster() {
   const url = currentUrl()
   if (!map || !url || map.getSource(SOURCE_ID)) return
@@ -231,6 +319,7 @@ function addRaster() {
     paint: rasterPaint(store.variable),
   }, 'country-boundaries')
   syncWestCopy()
+  syncBackground()
 }
 
 /** Add or drop the westward copy so it exists exactly on the globe. */
@@ -255,6 +344,15 @@ function syncWestCopy() {
     map.removeLayer(WEST_LAYER_ID)
     map.removeSource(WEST_SOURCE_ID)
   }
+
+  // The fill sits below the lowest field layer, and which layer that is has just
+  // changed. Dropping and re-adding it is what re-seats it in the stack —
+  // `moveLayer` would do as well, and this keeps one definition of where it goes.
+  if (map.getLayer(BACKGROUND_LAYER_ID)) {
+    map.removeLayer(BACKGROUND_LAYER_ID)
+    map.removeSource(BACKGROUND_SOURCE_ID)
+  }
+  syncBackground()
 }
 
 /** Every field layer currently on the map, with the offset its quad sits at. */
@@ -417,6 +515,9 @@ function drawRegion(data: GeoJSON.Feature) {
 /** The ramp, mix and range all change with the variable, not just the URL. */
 function applyPaint() {
   if (!map || !map.getLayer(LAYER_ID)) return
+  // The floor under the field is the variable's too — `mhw` declares one, the
+  // continuous variables do not — so it is swapped on the same gesture.
+  syncBackground()
   const paint = rasterPaint(store.variable)
   for (const { layer } of fieldLayers()) {
     for (const [key, value] of Object.entries(paint)) {

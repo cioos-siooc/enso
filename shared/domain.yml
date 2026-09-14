@@ -192,6 +192,13 @@ variables:
     #
     # `colors` replaces `colormap`: matplotlib has no say here, because the point
     # of these five is that people already recognise them from NOAA's own maps.
+    # NOAA's no-heatwave blue, from that same pixel match. The raster itself
+    # cannot carry it: land, ice and heatwave-free ocean are ALL alpha 0 in the
+    # WebP, so the ramp never sees a code 0 to colour. It is drawn instead as a
+    # flat fill under the raster, covering the image quad — which is exact only
+    # because the basemap's land sits ABOVE the field layers in the style, so
+    # the blue shows through at the heatwave-free ocean and nowhere else.
+    background_color: '#b3f2ff'
     colors:
       - {value: 1, color: '#ffff80', label: Moderate}
       - {value: 2, color: '#ffb333', label: Strong}

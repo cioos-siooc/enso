@@ -122,6 +122,14 @@ export interface DomainMeta {
     /** The classes, in NOAA's own colours. Empty for a continuous variable. */
     categories: Array<{ value: number, color: string, label: string }>
     /**
+     * What "no value" looks like where it is a class rather than a gap — `mhw`'s
+     * heatwave-free ocean, in NOAA's own `#b3f2ff`. The raster cannot carry it:
+     * land, ice and calm ocean are all alpha 0 in the WebP, so no code 0 ever
+     * reaches the ramp. `AnomalyMap` draws it as a flat fill under the field
+     * layers instead. Null for every variable with no such class.
+     */
+    backgroundColor: string | null
+    /**
      * How `/image` packs this variable's value into the WebP's RGB channels.
      * The images carry data, not colour — Mapbox applies the ramp itself — so
      * these go straight into the raster layer's paint properties. The API
