@@ -229,7 +229,7 @@ function addRaster() {
     type: 'raster',
     source: SOURCE_ID,
     paint: rasterPaint(store.variable),
-  })
+  }, 'country-boundaries')
   syncWestCopy()
 }
 
@@ -516,7 +516,8 @@ onMounted(() => {
 
   map = new mapboxgl.Map({
     container: container.value,
-    style: 'mapbox://styles/mapbox/dark-v11',
+    // style: 'mapbox://styles/mapbox/dark-v11',
+    style: 'mapbox://styles/taimazb/cmu1ilr2t000401r223kb2ghd?fresh=true',
     minZoom: 1,
     maxZoom:6,
     // Globe by default, opened on the North Pacific. `bounds` and `center`/`zoom`
@@ -527,6 +528,8 @@ onMounted(() => {
       : { bounds: [[b.west, b.south], [b.east, b.north]] as [[number, number], [number, number]], fitBoundsOptions: { padding: 20 } }),
     projection: { name: projection.value },
   })
+
+  console.log(map)
 
   map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right')
 

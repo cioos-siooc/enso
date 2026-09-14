@@ -90,7 +90,7 @@ the dev file; `.env.prod.example` is the template. The six that matter:
   docker compose -f docker-compose.prod.yml --env-file .env.prod stop front api
   docker compose -f docker-compose.prod.yml --env-file .env.prod \
     --profile maintenance up -d maintenance
-  # ... the migration ...
+  # ... the work ...
   docker compose -f docker-compose.prod.yml --env-file .env.prod \
     --profile maintenance down maintenance
   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
@@ -805,6 +805,15 @@ partition again, 129 GB of extra HDD I/O, and background merges consolidate the 
 partitions on their own as long as free space exceeds the largest one (~31 GiB against
 90 GB). Check `system.parts` afterwards and spend it only where something is still
 fragmented.
+
+**Do not pass `--no-deps`.** `repartition` reads `system.parts` and does every insert
+through ClickHouse, so it needs `db-ch` up — unlike `render`, which is the command that
+flag exists for. Without it compose starts `db-ch` and waits on its healthcheck; with it
+you get `Connection refused` on `db-ch:8123` and nothing else to go on.
+
+**Rebuild `process` first, with `--profile tools`.** `up -d --build` skips it — see the
+gotcha below — so a migration run against a freshly deployed server will fail with
+argparse's `invalid choice: 'repartition'` until `--profile tools build process` has run.
 
 **Run it detached** — `run -d --name ...`, then `docker logs -f`. A `docker compose run`
 container **outlives the client that started it**, so a terminal closing does not stop the
@@ -1685,6 +1694,27 @@ menu, pick the default region — report nothing. Found in the browser, not by r
   the migration; `shared.ch.is_repartitioned()` is what answers "is this server on the new
   key". Pause the cron for the duration — `run`'s ingest and the migration would otherwise
   contend for the same partitions.
+- **`up -d --build` does NOT rebuild `process`, and nothing says so.** It is behind the
+  `tools` profile, and compose skips services outside the active profiles when building —
+  verified: a bare `config --services` on the prod file lists `api`, `db-ch` and `front`
+  only, and `process` appears solely under `--profile tools`. So a deploy that rebuilds the
+  API and the frontend leaves the **pipeline image on whatever code it was last built
+  with**, and `docker compose run` reuses that image rather than rebuilding it. A deploy is
+  therefore two commands, not one:
+
+  ```bash
+  docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+  docker compose -f docker-compose.prod.yml --env-file .env.prod --profile tools build process
+  ```
+
+  **The loud symptom is the lucky one**: a new subcommand fails with argparse's
+  `invalid choice: 'repartition'`, which is unmistakable. The quiet one is what to worry
+  about — a *changed* code path in `ingest.py`, `download.py` or `shared/` keeps running the
+  old version under cron, silently, for as long as nobody rebuilds. `shared/` is baked into
+  both images and mounted into neither in prod, so `api` can be on new code while `process`
+  is on old, which is exactly the drift that directory exists to prevent. Check with
+  `docker compose ... run --rm --no-deps process python -c "import CRW, pathlib; print(pathlib.Path(CRW.__file__).stat().st_mtime)"`,
+  or just rebuild — it is cached and cheap when nothing changed.
 - **`CH_IMAGE_TAG` must be >= the version that wrote `CH_DATA_DIR`.** ClickHouse has no
   downgrade path. Dev runs `clickhouse-server:latest`, so a data directory copied from a
   dev box to prod carries whatever major was current — 26.5.1.882 for the first copy —

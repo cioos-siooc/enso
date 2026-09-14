@@ -80,12 +80,16 @@ same cell is ~0.18 s either way, which is why this only ever showed up as *the f
 is slow*.
 
 Editing the DDL does nothing to a database that already holds the archive
-(`ensure_schema()` is `CREATE TABLE IF NOT EXISTS`), so there is a migration. Start with the
-plan — it is read-only and free:
+(`ensure_schema()` is `CREATE TABLE IF NOT EXISTS`), so there is a migration. Build the
+pipeline image first — `up -d --build` skips `process`, which sits behind the `tools`
+profile — then start with the plan, which is read-only and free:
 
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
-  run --rm --no-deps process python -m CRW.cli repartition --dry-run
+  --profile tools build process
+
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  run --rm process python -m CRW.cli repartition --dry-run
 ```
 
 Three things to know before running it for real:
