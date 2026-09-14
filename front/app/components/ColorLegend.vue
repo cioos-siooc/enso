@@ -20,6 +20,25 @@
       than disabled.
     -->
     <div v-if="categorical" class="flex w-48 flex-col gap-0.5">
+      <!--
+        The class the raster cannot carry, and therefore the one the key has to.
+        `mhw`'s WebP holds land, ice AND heatwave-free ocean at alpha 0 alike, so
+        the map draws code 0 as a flat fill under the raster instead — which
+        means the commonest thing on screen is the one colour the five stops
+        below do not account for. It leads rather than trails the list because it
+        is the floor of the same ordinal scale: 0, then 1..5.
+      -->
+      <div
+        v-if="backgroundColor"
+        class="flex items-center gap-1.5 text-[11px] text-muted"
+      >
+        <span
+          class="h-2.5 w-4 shrink-0 rounded-sm"
+          :style="{ background: backgroundColor }"
+        />
+        <span class="tabular-nums text-default">0</span>
+        <span>no heatwave</span>
+      </div>
       <div
         v-for="stop in stops"
         :key="stop.value"
@@ -191,6 +210,13 @@ const store = useMainStore()
 const stops = computed(() => store.activeStops)
 const meta = computed(() => store.domain?.variables?.[store.variable])
 const categorical = computed(() => store.activeIsCategorical)
+/**
+ * What the map paints under the raster for this variable, where it paints
+ * anything — `mhw`'s no-heatwave blue, NOAA's own. Read from `/domain` rather
+ * than written here, so the key and the fill cannot come to disagree about
+ * which blue it is. Null for every continuous variable.
+ */
+const backgroundColor = computed(() => meta.value?.backgroundColor ?? null)
 
 const scale = computed(() => store.activeScale)
 const bounds = computed(() => store.scaleBoundsFor(store.variable))
