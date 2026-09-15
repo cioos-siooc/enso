@@ -99,8 +99,8 @@ def mask_filter(region) -> str:
     region has a mask — one aggregation, not two that could drift into computing
     different means.
 
-    A set membership rather than a join: `region_cells` holds 26,158 rows for the
-    BC EEZ, ClickHouse builds the tuple set once and probes it per row, and the
+    A set membership rather than a join: `region_cells` holds 26,222 rows for
+    `pacific_bioregions`, ClickHouse builds the tuple set once and probes it per row, and the
     `gy`/`gx` BETWEEN in front of it still does the primary-key work.
     """
     if not region.masked:
@@ -114,7 +114,7 @@ def mask_filter(region) -> str:
 def build_region_cells(client, keys: list[str] | None = None) -> dict[str, int]:
     """Rasterise every polygon region into `region_cells`.
 
-    Cheap and idempotent — 26,158 rows for the only region that has one today,
+    Cheap and idempotent — 26,222 rows for the only region that has one today,
     and a `ReplacingMergeTree` on (region, gy, gx) — so it is re-run rather than
     checked: `init` and `rollup` both call it, and a changed polygon needs no
     migration beyond running it again.

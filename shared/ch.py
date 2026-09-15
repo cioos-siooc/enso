@@ -308,13 +308,14 @@ DDL: tuple[str, ...] = (
     # `polygon`. A plain box region has none and needs none — its `BETWEEN` says
     # everything there is to say about which cells it holds.
     #
-    # This exists because a maritime zone is not a rectangle. The BC EEZ's
-    # bounding box is 60,990 cells against the zone's 26,158, so 57% of what a
-    # box query would average is Alaskan, American or high-seas water. The box
+    # This exists because Canada's Pacific waters are not a rectangle.
+    # `pacific_bioregions`' bounding box is 55,533 cells against the region's
+    # 26,222, so 53% of what a box query would average is Alaskan, American or
+    # high-seas water. The box
     # survives as the PREFILTER — `ORDER BY (gy, gx, date)` makes it a set of
     # contiguous key ranges rather than a scan — and this table narrows it.
     #
-    # MATERIALISED RATHER THAN EVALUATED. Point-in-polygon on 60,990 cells is
+    # MATERIALISED RATHER THAN EVALUATED. Point-in-polygon on 55,533 cells is
     # milliseconds, but it would sit inside the rollup's 113-billion-row scan and
     # be re-decided on every pass. Written once by `CRW.cli mask`, read as a
     # subquery set thereafter.

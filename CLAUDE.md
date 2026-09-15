@@ -402,31 +402,58 @@ Widening it needs no re-ingest: `gy`/`gx` index the *global* grid, so only `doma
 
 #### One named region is a polygon, not a box
 
-Every named region is a lat/lon rectangle except **`bc_eez`**, which declares a
+Every named region is a lat/lon rectangle except **`pacific_bioregions`**, which declares a
 `polygon:` and no bounds — `shared/domain.py` derives its box from the ring, so a
 hand-written box cannot go stale behind a changed geometry, and `shared/mask.py` cuts that
-box down to the 26,158 cells actually in the zone. See `region_cells` below for the cost
+box down to the 26,222 cells actually inside. See `region_cells` below for the cost
 of not doing this, and `shared/mask.py` for how a cell is decided.
 
-**Provenance matters here in a way it does not for a Niño box.** A Niño index box is a
-convention anyone can write down; a maritime limit is a legal instrument, and Canada and
-the United States do not agree about two pieces of this one — the Dixon Entrance A–B line
-in the north and the wedge off Juan de Fuca in the south. The geometry is the **Flanders
-Marine Institute's (VLIZ) Marine Regions v12** `Canadian Exclusive Economic Zone`
-(mrgid 8493), Pacific component only, and the file records its own source, retrieval date
-and simplification. That is the widely cited marine-science rendering and **not** the
-Canadian authority. **DFO's Open Maps does not publish the limit as a standalone vector**:
-its catalogue carries only products *clipped* to the zone, and the `DFO Regions 2021`
-"Pacific" polygon is land — checked by point-in-polygon, the Strait of Georgia and
-everything offshore fall outside it. A cross-check that the footprint is right anyway:
-this ring's bounding box (`−138.795…−122.836`, `46.568…56.012`) matches the extent DFO's
-own BC-EEZ raster climatologies are published on to three decimals.
+**Provenance matters here in a way it does not for a Niño box, and it is why this region is
+not called an EEZ.** A Niño index box is a convention anyone can write down; a maritime
+limit is a legal instrument, and Canada and the United States do not agree about two pieces
+of Canada's Pacific one — the Dixon Entrance A–B line in the north and the wedge off Juan
+de Fuca in the south. The geometry is **Fisheries and Oceans Canada's `Federal Marine
+Bioregions`** (open.canada.ca record `23eb8b56-dac8-4efc-be7c-b8fa11ba62e9`), the union of
+the four bioregions it marks `OCEAN_E = Pacific`: **Offshore Pacific, Northern Shelf,
+Southern Shelf, Strait of Georgia**. Reprojected from Canada Albers Equal Area Conic
+(NAD83) to WGS84; the file records its own source, retrieval date and simplification.
 
-Two things about the stored file. It carries **outer rings only** — the 2,588 interior
-rings are islands, and land is cut by `sst_daily` holding ocean cells, not by the
-geometry, which also keeps the outline clean on the map. And it is **Douglas–Peucker
-simplified at 0.002°**, a twenty-fifth of a grid cell: measured, that moves **21 of 26,155
-cells** against the unsimplified ring, and takes 37,875 vertices to 6,001 (120 KB).
+**It was the Flanders Marine Institute's (VLIZ) Marine Regions v12 EEZ (mrgid 8493) until
+2026-09-15**, which is the widely cited marine-science rendering and *not* the Canadian
+authority. The two footprints agree almost everywhere and disagree exactly where the states
+do — measured, cell by cell:
+
+| | VLIZ v12 EEZ | DFO bioregions |
+|---|---|---|
+| mask cells | 26,158 | 26,222 |
+| cells in common | 25,968 (99.3% / 99.0%) | |
+| outer-ring area | 511,063 km² | 512,340 km² |
+| bbox lat | 46.57…56.01 | 46.53…55.13 |
+| Dixon Entrance N of the A–B line | **excluded** | **included** (152 cells at 54–55°N) |
+| Juan de Fuca wedge | excluded | excluded |
+
+So the swap buys the Canadian reading of Dixon Entrance and costs a north-coast sliver
+above 55°N plus an offshore edge near Haida Gwaii (190 cells in all). The DFO layer stops
+at 55.13°N where the EEZ runs to 56.01°N, because a bioregion's seaward edge follows the
+zone only where the zone is what bounds it.
+
+**The catch, and it is the reason the label reads `Pacific Bioregions (DFO)` rather than
+`BC EEZ`: this is a marine-planning framework, not a published maritime limit.** The
+dataset's own description calls its boundaries fuzzy and revisable on ecosystem grounds.
+Naming it for the zone would put a bioregion behind a legal instrument's name, which is the
+same class of misattribution as crediting NOAA with the Hobday definition. (The earlier
+note here that "DFO's Open Maps does not publish the limit as a standalone vector" still
+stands — it does not. This is not that limit; it is the closest Canadian-authority
+footprint of the same water.)
+
+Two things about the stored file. It carries **outer rings only** — the 362 interior
+rings are islands (Vancouver Island at 31,840 km² and Graham Island at 6,499 km² the
+largest), and land is cut by `sst_daily` holding ocean cells, not by the geometry, which
+also keeps the outline clean on the map. And it is **Douglas–Peucker simplified at 0.002°**,
+a twenty-fifth of a grid cell: measured, that moves **15 of 26,223 cells** against the
+unsimplified ring, and takes 11,131 vertices to 4,573 (104 KB). The union is a
+**MultiPolygon of two** parts — the second is a 20-vertex sliver of Boundary Bay at
+49.0–49.09°N, detached from the main body by the Point Roberts peninsula.
 
 #### The third state: ocean with no anomaly
 
@@ -455,10 +482,10 @@ Both containers mount `./shared` at `/app/shared`. Seven modules:
   response names its quantity in `quantity` (null at a point) so no client infers it
   from the scope.
 - **`mask.py` + `regions/*.geojson`** — the one region that is **not a box**. A region is
-  normally a lat/lon rectangle; the BC EEZ is a 200-nautical-mile arc closed by two
-  negotiated lateral boundaries, and its bounding box is 60,990 cells against the zone's
-  26,158 — so 57% of what a box query would average is Alaskan, American or high-seas
-  water. The box survives as the **prefilter** (`ORDER BY (gy, gx, date)` makes it
+  normally a lat/lon rectangle; Canada's Pacific bioregions are a 200-nautical-mile arc
+  closed by two negotiated lateral boundaries, and their bounding box is 55,533 cells
+  against the region's 26,222 — so 53% of what a box query would average is Alaskan,
+  American or high-seas water. The box survives as the **prefilter** (`ORDER BY (gy, gx, date)` makes it
   contiguous key ranges) and this rasterises the polygon into `region_cells`, which the
   two rollup builders intersect it with. **A cell is in the region when its centre is
   inside the ring** — no partial weighting, because a fractional-coverage weight would be
@@ -532,17 +559,17 @@ consequences, both load-bearing:
    gating `anom`, but sharper: there is no value that could signal the difference.
 
 **`region_cells`** — which grid cells a **polygon** region covers: one row per (region,
-cell), and rows only for the `domain.yml` regions that declare a `polygon`. **26,158 rows
-today**, all of them the BC EEZ.
+cell), and rows only for the `domain.yml` regions that declare a `polygon`. **26,222 rows
+today**, all of them `pacific_bioregions`.
 
 A plain box needs none — its `BETWEEN` says everything there is to say about which cells
-it holds. A maritime zone is not a rectangle: the BC EEZ's bounding box is 60,990 cells
-against the zone's 26,158, so **57% of what a box query would average is Alaskan, American
-or high-seas water**. Measured on 2021-06-28, the heat dome: the zone's SST mean is
-13.98 °C against the box's 13.66, and its anomaly +1.58 against +1.46 — the box dilutes
-the thing the region exists to show.
+it holds. Canada's Pacific waters are not a rectangle: `pacific_bioregions`' bounding box
+is 55,533 cells against the region's 26,222, so **53% of what a box query would average is
+Alaskan, American or high-seas water**. Measured on 2021-06-28, the heat dome: the region's
+SST mean is 13.99 °C against the box's 13.74, and its anomaly +1.58 against +1.48 — the box
+dilutes the thing the region exists to show.
 
-**Materialised rather than evaluated.** Point-in-polygon over 60,990 cells is
+**Materialised rather than evaluated.** Point-in-polygon over 55,533 cells is
 milliseconds, but it would sit inside the rollup's 113-billion-row scan and be re-decided
 on every pass. Written once by `CRW.cli mask`, read thereafter as a set membership —
 `AND (gy, gx) IN (SELECT gy, gx FROM region_cells WHERE region = ...)`, appended after the
@@ -557,9 +584,9 @@ masked path would be a second definition of what the region covers.
 MHW half of the daily rollup, and to `region_clim`'s query. Masking one only would divide
 a zone numerator by a bounding-box denominator, or put the zone's anomaly against the
 box's climatology — the `mean(sst - clim) == mean(sst) - mean(clim)` identity needs both
-sides averaging the same cells. Verified: `/region/bc_eez?variable=anom` for 2021-06-28
-returns **1.578** against a direct cell-wise `avg(sst - clim)` over the polygon of
-**1.5785**, on the same 23,814 cells.
+sides averaging the same cells. Verified: `/region/pacific_bioregions?variable=anom` for
+2021-06-28 returns **1.583** against a direct cell-wise `avg(sst - clim)` over the polygon
+of **1.5827**, on the same 23,875 cells.
 
 **`region_clim`** — 8 regions × 366 MMDD = **2,928 rows**. The climatology side of a
 region anomaly.
@@ -1571,7 +1598,7 @@ screenshot and look at it.
 fetches it once, keeps it in a module-level `Map`, and guards the response against the
 selection having moved while it was in flight. **Nothing is drawn until it arrives**:
 showing the bounding box first and swapping it for the zone a moment later reads as a bug,
-and for the BC EEZ the box is 2.3× the zone's area, so it would be claiming the numbers
+and for `pacific_bioregions` the box is 2.1× the region's area, so it would be claiming the numbers
 cover water they do not. If the fetch fails, the region draws no box at all rather than a
 rectangle that misstates it — the numbers beside it are unaffected, since they come off a
 rollup built from the mask. `frameRegion()` still flies to the **bounding box**, which is
@@ -1980,34 +2007,70 @@ Verified on the state ribbon, the extent quantity, deep links and the point cont
   trend +6.12% per decade" while the map legend beside it stays NOAA's five categories;
   both CSVs export as `mhw_extent_*` with a `mhw_extent_pct` column.
 
-Verified on the BC EEZ (the first polygon region):
+Verified on `pacific_bioregions` (the one polygon region, DFO's Federal Marine Bioregions,
+swapped in for VLIZ's EEZ on 2026-09-15):
 
-- **The mask is the zone, not its box.** 26,158 cells of a 60,990-cell bounding box, and
-  point-in-polygon spot checks land where they should: Puget Sound and SE Alaska outside,
-  the Strait of Georgia, offshore Haida Gwaii and the water off Tofino inside, the high
-  seas 250 nm out excluded.
+- **The union is the right four polygons.** The dataset's 14 features carry an `OCEAN_E`
+  field; the four marked `Pacific` are Offshore Pacific (315,724 km²), Northern Shelf
+  (101,663), Southern Shelf (28,158) and Strait of Georgia (8,969), and their union is
+  454,181 km² in the source's own Albers projection — against ~450,000 km² for the
+  Canadian Pacific EEZ, so the footprint is the same water.
+- **The 362 interior rings really are islands.** The largest measure 31,840 km²
+  (Vancouver Island, actual 31,285), 6,499 (Graham), 2,608 (Moresby), 2,294 (Princess
+  Royal) — all land, so dropping them loses no water.
+- **The mask is the region, not its box.** 26,222 cells of a 55,533-cell bounding box, and
+  point-in-polygon spot checks land where they should: Puget Sound, SE Alaska, the Juan de
+  Fuca wedge and the high seas 250 nm out all outside; the Strait of Georgia, offshore
+  Haida Gwaii and the water off Tofino inside. **Dixon Entrance north of the A–B line is
+  inside**, which is the one place this differs from VLIZ's EEZ and the reason for the
+  swap.
 - **The rollup agrees with the geometry, end to end.** For 2021-06-28,
-  `/region/bc_eez?variable=anom` returns **1.578** on **23,814** cells; recomputing the
-  same day in Python — pull the 43,040 bounding-box rows out of ClickHouse, test each
-  cell centre against the ring, take the cos(lat)-weighted `avg(sst − clim)` — gives
-  **1.5785** on **23,814** cells. So the SQL mask and `shared/mask.py` select the same
-  cells, and the commuting-means identity survives the mask.
-- **The box would have been a different number**: 1.4558 over the same day, on 43,040
-  cells. The mask is worth 0.12 °C on the heat dome's peak day and 0.08–0.32 °C on the
-  days spot-checked.
-- **Cost.** `mask` is seconds; `rollup --clim --region bc_eez --fresh` builds
+  `/region/pacific_bioregions?variable=anom` returns **1.583** on **23,875** cells;
+  recomputing the same day in Python — pull the 40,921 bounding-box rows out of
+  ClickHouse, test each cell centre against the ring, take the cos(lat)-weighted
+  `avg(sst − clim)` — gives **1.5827** on **23,875** cells. So the SQL mask and
+  `shared/mask.py` select the same cells, and the commuting-means identity survives the
+  mask.
+- **The box would have been a different number**: 1.4839 over the same day, on 40,921
+  cells; SST 13.74 against the region's 13.99. The mask is worth ~0.10 °C on the heat
+  dome's peak day.
+- **Cost.** `mask` is **2.5 s**; `rollup --clim --region pacific_bioregions --fresh` builds
   `region_cells`, all 366 `region_clim` rows and all 15,217 `region_daily` rows in
-  **7.7 s** — it is a small region, and the bounding box still does the key-range work.
-- **`mhw` and the ranking come through it.** The extent series reads 45.1 → 69.5% across
-  25–29 June 2021, and `monthlyRanking` puts June 2015 first (the Blob) and August 2004,
-  2014, 2015 at the top — 42 years, `areaMean: true`.
-- **Browser** (Chromium, per the recipe above): the zone's real outline draws — the
-  200 nm arc, the Dixon Entrance line, the Juan de Fuca boundary — the dock reads
-  `BC EEZ / Area mean over the region`, the chart and the 42-year June ranking populate,
-  and `/region/bc_eez/geometry` is fetched exactly once. One console error appears and is
-  **pre-existing and unrelated**: Mapbox's own marker fog-opacity evaluation
-  (`Marker._evaluateOpacity` → `transform.getOpacityAtLatLng`) throws on the globe at
-  northern latitudes for `gulf_of_alaska` and `ne_pacific` too, and not for `nino34`.
+  **6.2 s** — it is a small region, and the bounding box still does the key-range work.
+- **The ranking comes through it.** `monthlyRanking?variable=anom` puts June 2015 first
+  (the Blob) at +1.614 over 42 years with `areaMean: true`, and the annual ranking reads
+  2015, 2016, 2014 — the same years the EEZ version gave.
+- **Renaming the key orphans its rows**, and nothing cleans them up: `region_cells`,
+  `region_daily` and `region_clim` all keep the old `bc_eez` rows until an
+  `ALTER … DELETE WHERE region = 'bc_eez'` removes them. `/region/bc_eez` 404s from
+  `/domain` alone, so the stale rows are invisible rather than wrong — which is exactly
+  why they are easy to leave behind.
+
+- **Browser** (Chromium, per the recipe above): the region's real outline draws — the
+  200 nm arc offshore, the Dixon Entrance line across the top, the Juan de Fuca boundary
+  at the bottom — the dock reads `Pacific Bioregions (DFO) / Area mean over the region`,
+  the chart and the 42-year August ranking populate, and
+  `/region/pacific_bioregions/geometry` is fetched exactly once. The CSV downloads as
+  `anom_weekly_pacific-bioregions-dfo_1984-12-31_2026-08-24.csv`. **No console errors at
+  all** — including the Mapbox marker fog-opacity throw the EEZ version used to trip,
+  which is a globe-at-northern-latitudes thing and not about the geometry. One cosmetic
+  difference from VLIZ's ring: DFO's outline follows the mainland inlets and the east side
+  of Vancouver Island in detail, so the coastal half of the outline is a busier green line
+  than the EEZ's was.
+
+**Not yet re-verified since the swap:** the `mhw` extent series — see below.
+
+**`region_daily`'s `mhw` columns for this region are zeros and must be rebuilt.** The
+rollup was run on a dev database in the middle of `CRW.cli repartition mhw_daily`: all
+17.58 B rows were sitting in `mhw_daily_repart` awaiting the `--finish` exchange, so
+`mhw_daily` was empty and the fresh rollup wrote confident `mhw_area_frac = 0` for all
+15,217 days. This is precisely the failure the "roll up only once `mhw_daily` is complete"
+note warns about, arriving through the migration rather than through a partial backfill —
+and `/coverage` reports `mhw.complete: false`, so the frontend gates the variable off and
+the zeros are not on screen. **After `repartition --finish`, re-run
+`rollup --region pacific_bioregions --fresh`.** The other nine regions were rolled up
+before the migration and still carry good `mhw` numbers, so this region is the only one
+affected.
 
 Verified on the annual ranking (Chromium, per the recipe above):
 

@@ -180,7 +180,7 @@ export interface DomainMeta {
   noClimColor: string
   /**
    * `lat`/`lon` are the BOUNDING BOX on every entry. `masked` says that box is
-   * not the region: a polygon region (the BC EEZ) covers only the cells inside
+   * not the region: a polygon region (`pacific_bioregions`) covers only the cells inside
    * its outline, and the outline is fetched from `/region/{key}/geometry` by
    * whoever draws it rather than shipped in this payload.
    */
