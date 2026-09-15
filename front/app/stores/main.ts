@@ -323,6 +323,19 @@ export interface Series {
 const DEFAULT_POINT = { lat: 48, lon: -128 }
 
 /**
+ * Which region request is the current one.
+ *
+ * Two of them can be in flight at once — the state ribbon sets a variable and a
+ * region in one gesture, and any future call site that touches both will do the
+ * same — and the rollup reads are fast enough that they finish in either order.
+ * Without this the *older* response can land last and leave the chart plotting
+ * Niño 3.4's heatwave extent under the whole Pacific's heading, which reads as
+ * data rather than as a bug. Module-level and deliberately not reactive: it is
+ * bookkeeping about requests, not state anything renders.
+ */
+let regionRequestSeq = 0
+
+/**
  * Region the app opens on. Nino 3.4 is the index the repo is named for, and it
  * is the one number this dashboard exists to show — so it is what the numbers
  * panel reads before anyone has clicked anything.
@@ -904,6 +917,9 @@ export const useMainStore = defineStore('main', {
       const sameRanking = this.regionRanking?.region === key
         && this.regionRanking.variable === this.variable
 
+      const seq = ++regionRequestSeq
+      const current = () => seq === regionRequestSeq
+
       this.loadingRegion = true
       this.regionError = null
       try {
@@ -916,6 +932,10 @@ export const useMainStore = defineStore('main', {
             ? Promise.resolve(this.regionRanking!)
             : api.get<MonthlyRanking>(`/region/${key}/monthlyRanking`, { variable: this.variable }),
         ])
+        // Superseded: a later call has already asked for a different region,
+        // variable or period. Dropping the payload is the whole point — it is a
+        // real answer to a question nobody is asking any more.
+        if (!current()) return
         this.regionSeries = series
         this.regionRanking = ranking
       }
@@ -923,13 +943,47 @@ export const useMainStore = defineStore('main', {
         // Handled, not swallowed: the panel says so, and the console still
         // carries the stack for whoever is debugging the deploy.
         console.error(`[enso] /region/${key} failed`, error)
+        if (!current()) return
         this.regionSeries = null
         this.regionRanking = null
         this.regionError = requestErrorMessage(error, `the ${key} series`)
       }
       finally {
-        this.loadingRegion = false
+        // Only the live request owns the spinner; a superseded one clearing it
+        // would report the newer fetch as finished.
+        if (current()) this.loadingRegion = false
       }
+    },
+
+    /**
+     * Show a named region *and* a variable, as one gesture and one fetch.
+     *
+     * The state ribbon's two halves each select a field as well as a region —
+     * reading "El Niño" and landing on a marine-heatwave chart would be a
+     * non-sequitur — and calling `setVariable()` then `selectRegion()` issued
+     * two overlapping region requests, the first for the region being left
+     * behind. `loadRegionSeries`'s sequence guard now discards that one, but
+     * the request was never worth making: setting the variable here, without
+     * its action, leaves `selectRegion` below to do the single fetch.
+     *
+     * No `variable_changed` event: arriving here is one gesture, reported by
+     * whoever owns it (the ribbon's `state_ribbon_clicked` carries the
+     * variable), not a press of the variable toggle. Same reasoning as
+     * `useUrlState`'s `$patch`.
+     */
+    showRegion(key: string, variable: VariableName): Promise<void> | void {
+      if (variable !== this.variable && this.variableReady(variable)) {
+        this.variable = variable
+        // Both cached series are for the old field. The point one is dropped
+        // rather than refetched — `setScope('point')` reloads it on the way
+        // back — and dropping the region one is what makes `selectRegion`
+        // refetch even when the region itself has not changed.
+        this.pointSeries = null
+        this.monthlyRanking = null
+        this.regionSeries = null
+        this.regionRanking = null
+      }
+      return this.selectRegion(key)
     },
 
     /**

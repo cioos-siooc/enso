@@ -209,18 +209,20 @@ const ensoTitle = computed(() =>
 function showEnso() {
   const e = enso.value
   if (!e) return
-  trackEvent('state_ribbon_clicked', { half: 'enso', region: e.region, phase: e.phase })
-  if (store.variableReady('anom')) store.setVariable('anom')
-  store.selectRegion(e.region)
+  trackEvent('state_ribbon_clicked', { half: 'enso', region: e.region, phase: e.phase, variable: 'anom' })
+  // One call, because the two are one gesture: `setVariable` followed by
+  // `selectRegion` fetched the region being left behind as well, and the two
+  // rollup reads race.
+  store.showRegion(e.region, 'anom')
 }
 
 function showHeatwave() {
   const h = heatwave.value
   if (!h) return
-  trackEvent('state_ribbon_clicked', { half: 'heatwave', region: h.region })
-  // Guarded: `mhw` is gated on its own archive being complete, and a ribbon
-  // built from a rollup that exists is not proof that the gate has opened.
-  if (store.variableReady('mhw')) store.setVariable('mhw')
-  store.selectRegion(h.region)
+  trackEvent('state_ribbon_clicked', { half: 'heatwave', region: h.region, variable: 'mhw' })
+  // As above — and `showRegion` keeps the gate: `mhw` is only adopted when its
+  // own archive is complete, since a ribbon built from a rollup that exists is
+  // not proof that the gate has opened.
+  store.showRegion(h.region, 'mhw')
 }
 </script>
