@@ -1,5 +1,11 @@
 <template>
-  <div ref="container" class="size-full" />
+  <!-- Two elements, not one: Mapbox adds `.mapboxgl-map` to its container, and that
+       unlayered `position: relative` beats a layered Tailwind `absolute` passed in by
+       the host. On one element the compare map fell in below the primary, out of
+       sight, and both halves of the divider showed the primary's date. -->
+  <div>
+    <div ref="container" class="size-full" />
+  </div>
 </template>
 
 <script setup lang="ts">

@@ -1283,6 +1283,11 @@ divider, because two components each deciding where to fly would fight. Framing 
 - **The second map mounts only while compare is on.** It is a second WebGL context.
 - **It is stacked on the first and clipped with `clip-path: inset(0 0 0 X%)`.** A clip path
   clips hit-testing too, so each half takes the drags and clicks for the map it shows.
+- **`FieldMap`'s root is a wrapper around the Mapbox container, and must stay one.** Mapbox
+  adds `.mapboxgl-map { position: relative }` to its container, unlayered, which beats the
+  host's layered Tailwind `absolute`. With the class on the container itself the compare map
+  sat below the primary, hidden by `overflow: hidden`, and both halves showed the primary's
+  date. Nothing errored and both maps reported their own image URL.
 - **The cameras are locked both ways** with `jumpTo` inside a re-entrancy guard, since
   `jumpTo` fires the other map's `move` synchronously. Hand-rolled; no `mapbox-gl-compare`.
 - **`toggleCompare()` opens on the same bucket a year earlier**, clamped to coverage, and
@@ -2248,7 +2253,10 @@ Verified on the baseline labelling (Chromium, per the recipe above):
 
 Verified on v2.0 (Chromium, per the recipe above; desktop 1440×900 and phone 390×844):
 
-- **Compare.** On the globe and on Mercator both halves draw, and the region outline shows
+- **Compare.** December 2015 against December 2010 over Nino 3.4 shows El Nino red left of
+  the divider and La Nina blue right of it, and a chart click moves only the left half. The
+  first v2.0 check missed the stacking bug above because the two dates it used looked alike.
+  On the globe and on Mercator both halves draw, and the region outline shows
   on both. Dragging either half moves both cameras to the same centre and zoom. Monthly
   re-snaps both dates (`2026-08-01` / `2025-08-01`). A `c=` link with `r=ne_pacific`
   reopens both dates and the region. No page errors.
