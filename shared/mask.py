@@ -2,8 +2,8 @@
 
 A region in `domain.yml` is normally a lat/lon box, and a box needs nothing more
 than `WHERE gy BETWEEN ... AND gx BETWEEN ...`. A few real-world regions are not
-boxes — the BC EEZ is a 200-nautical-mile arc with two negotiated lateral
-boundaries — and for those the box is only a *prefilter*: the cells it selects
+boxes — Canada's Pacific bioregions are a 200-nautical-mile arc with two
+negotiated lateral boundaries — and for those the box is only a *prefilter*: the cells it selects
 have to be narrowed again to the ones actually inside the polygon.
 
 **That narrowing is materialised, not evaluated per query.** The rasterisation
@@ -49,8 +49,8 @@ def cells_in(region: Region, grid: GlobalGrid) -> tuple[np.ndarray, np.ndarray]:
         return GY.ravel(), GX.ravel()
 
     # matplotlib rather than shapely: it is already a dependency of both services
-    # (shared/render.py), `contains_points` is vectorised, and a mask is 60,669
-    # tests for the BC EEZ -- milliseconds. A geometry library would be a new
+    # (shared/render.py), `contains_points` is vectorised, and a mask is 55,533
+    # tests for `pacific_bioregions` -- milliseconds. A geometry library would be a new
     # wheel in two images for one predicate.
     lat = grid.lat(GY).ravel()
     lon = grid.lon(GX).ravel()

@@ -408,7 +408,7 @@ function densify(from: number, to: number, at: (v: number) => [number, number]):
  *
  * Only a masked region has one — `/domain`'s `masked` flag says which — and
  * `/region/{key}/geometry` 404s for a box, whose outline is `regionPolygon()`
- * below. The ring is 120 KB for the BC EEZ, which is why it is not in `/domain`:
+ * below. The ring is 104 KB for `pacific_bioregions`, which is why it is not in `/domain`:
  * most sessions never select it, and the ones that do pay for it once.
  *
  * Longitudes arrive UNWRAPPED on the 0-360 frame, like every other region bound
@@ -473,7 +473,7 @@ function syncRegionBox() {
   if (region.masked) {
     // Nothing is drawn until the real outline is in. Drawing the bounding box
     // first and swapping it for the zone a moment later reads as a bug, and the
-    // box is 2.3x the zone's area for the BC EEZ — it would be claiming the
+    // box is 2.1x the region's area for `pacific_bioregions` — it would be claiming the
     // numbers cover Alaskan and high-seas water they do not.
     void regionOutline(region.key).then((feature) => {
       // The selection can move while this is in flight.

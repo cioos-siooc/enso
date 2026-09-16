@@ -290,8 +290,8 @@ def domain() -> dict:
         # not, because that is what the camera frames and what a caller needs to
         # place it. `masked` says the box is not the region: a polygon region's
         # numbers cover only the cells inside its outline, and the outline itself
-        # is at `/region/{key}/geometry` rather than here — it is 120 KB for the
-        # BC EEZ against ~2 KB for this whole payload, and most sessions never
+        # is at `/region/{key}/geometry` rather than here — it is 104 KB for
+        # `pacific_bioregions` against ~2 KB for this whole payload, and most sessions never
         # select it.
         "regions": [
             {
@@ -469,8 +469,8 @@ def named_region(
 def named_region_geometry(key: str) -> dict:
     """The outline of a polygon region, as a GeoJSON Feature.
 
-    Served separately from `/domain` rather than inlined in it: the BC EEZ ring
-    is 120 KB against ~2 KB for the whole domain payload, and it is needed only
+    Served separately from `/domain` rather than inlined in it: the
+    `pacific_bioregions` ring is 104 KB against ~2 KB for the whole domain payload, and it is needed only
     once someone selects that region. `/domain`'s `masked` flag is what tells a
     client this endpoint has something to give.
 
