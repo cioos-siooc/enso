@@ -123,6 +123,7 @@ python -m CRW.cli mask     [--region KEY]                  # region_cells, for p
 python -m CRW.cli rollup   [--start|--end] [--region KEY] [--fresh] [--clim]  # region_daily
 python -m CRW.cli run      [--date] [--keep-nc] [--recheck-days N]
 python -m CRW.cli status                                  # per-status day/row counts, per archive
+python -m CRW.cli check    [--days N] [--full] [--stale-after N]  # data invariants, exit 1 on failure
 python -m CRW.cli repair-mhw-land [--date]                # re-do the leap days (see below)
 python -m CRW.cli repartition [--table] [--dry-run] [--optimize] [--finish]  # one-off
 ```
@@ -897,7 +898,8 @@ FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is n
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | liveness + ClickHouse reachability |
+| `GET /health` | liveness + ClickHouse reachability, plus each archive's last ingested date and lag (never fails over staleness) |
+| `GET /health/data` | 503 once either archive is more than `STALE_AFTER_DAYS` (default 3) behind — for an external monitor |
 | `GET /domain` | grid extent, image bounds, variable metadata, per-variable colour stops and `encoding` (mix, ranges, `limits`), `noClimColor`, region list |
 | `GET /coverage` | ingested date range, row count, climatology completeness, MHW archive range and completeness |
 | `GET /state` | the header ribbon's two findings: ENSO phase from Nino 3.4, and basin marine-heatwave extent against the date's normal |
@@ -1183,7 +1185,10 @@ same stack as the ocean-acidification dashboard.
 app/app.vue                        header + coverage badge; awaits store.loadMetadata()
 app/components/StateRibbon.vue     the basin's state in one line, under the header
 app/pages/index.vue                numbers + ranks dock on the left, map over the chart
-app/components/AnomalyMap.vue      MapboxGL + the field image source
+app/components/AnomalyMap.vue      map host: projection, camera, swipe-compare divider
+app/components/FieldMap.vue        one MapboxGL map drawing the field for one date
+app/components/StoryPicker.vue     header button + list of guided stories
+app/components/StoryCard.vue       the current story step's caption and Prev/Next
 app/components/TimeControl.vue     variable + period toggles, date stepper, playback
 app/components/ColorLegend.vue     gradient + the colour range control (popover)
 app/components/BaselineNote.vue    what the chart's values are measured against (+ popover)
@@ -1193,12 +1198,16 @@ app/components/StatsPanel.vue      the dock's headline value and stat cards
 app/components/MonthlyRankPanel.vue  the map's month, every year ranked (under the cards)
 app/components/SideDock.vue        resizable left-hand dock (drag handle, remembered width)
 app/composables/useApi.ts          axios wrapper
-app/composables/usePlayback.ts     play/stop loop + frame prefetch for the map animation
+app/composables/usePlayback.ts     page-wide play/stop loop + frame prefetch for the map animation
+app/composables/useViewport.ts     the shared phone-width flag (false under SSR)
+app/composables/useStory.ts        the active story and stepping through it
 app/composables/useUrlState.ts     query params <-> store, so a view can be linked
 app/utils/periods.ts               daily/weekly/monthly bucket maths (mirrors the API)
 app/utils/ranking.ts               ranking layout + both ECharts options (pure -> testable headlessly)
 app/utils/colorScale.ts            domain.yml's colour stops evaluated at a single value
 app/utils/csv.ts                   CSV export of the plotted series and the rankings (pure text + one download)
+app/utils/mapView.ts               CameraView, ProjectionName, the globe's opening view
+app/stories/index.ts               the guided stories, as View steps with captions
 app/app.config.ts                  maps Nuxt UI's internal icons onto mdi
 app/stores/main.ts                 Pinia store
 ```
@@ -1252,6 +1261,82 @@ Three things about it:
   pressing a toggle, so a deep link looks like a page view rather than like the visitor
   having changed the variable. The URL writes the resolved **cell**, not the raw click, so
   a link reopens on the same grid cell.
+
+**Applying a view is `store.applyView(view)`, and a story step uses the same action.** The
+URL is parsed into a `View` and handed over, so a link and a story step cannot disagree about
+how a view is entered. Two more keys: `c=YYYY-MM-DD` is swipe compare's second date, and
+`story=<key>&step=<n>` opens a story at a step, whose own view wins over every other key.
+
+#### Swipe compare
+
+**Only the date differs between the two halves.** Variable, period, colour range, scope and
+region are shared by construction, so one legend describes both and a colour means the same
+thing either side of the divider. Comparing anom against MHW was deliberately not built (see
+`ROADMAP.md`, A7).
+
+That is why the map was split in two. **`FieldMap.vue` holds all the Mapbox drawing and takes
+`date` as a prop**: everything else it reads from the store, so two instances can only differ
+in the date. **`AnomalyMap.vue` is the host**: it owns the projection, the camera and the
+divider, because two components each deciding where to fly would fight. Framing (`frame()`,
+`frameRegion()`) and `store.cameraRequest` go to the primary map; the compare map follows.
+
+- **The second map mounts only while compare is on.** It is a second WebGL context.
+- **It is stacked on the first and clipped with `clip-path: inset(0 0 0 X%)`.** A clip path
+  clips hit-testing too, so each half takes the drags and clicks for the map it shows.
+- **The cameras are locked both ways** with `jumpTo` inside a re-entrancy guard, since
+  `jumpTo` fires the other map's `move` synchronously. Hand-rolled; no `mapbox-gl-compare`.
+- **`toggleCompare()` opens on the same bucket a year earlier**, clamped to coverage, and
+  `setPeriod()` re-snaps `compareDate` with `selectedDate`. Playback moves the main date
+  only.
+- **The field maps are created after the host mounts.** The saved projection is read in
+  the host's `onMounted`. Reading it during setup would render the projection buttons
+  differently on the server, and a child's `onMounted` runs before its parent's, so the
+  map would open on the wrong projection.
+- The chart marks the compare bucket with a dashed sky `CMP` line beside `MAP`. Each half's
+  date label is dropped when that half is too narrow to hold it.
+
+#### The phone layout
+
+**`useViewport()` is one shared `narrow` flag (below 768px), false under SSR and set on
+mount.** The server cannot know the viewport, so it renders desktop and a phone switches
+once after hydration. Reading `matchMedia` in setup would be a hydration mismatch. Use the
+flag only where CSS cannot help (which component tree mounts, a prop, a number in script);
+anything that is only styling uses Tailwind's `md:`, the same breakpoint.
+
+- **The dock becomes a `UDrawer` bottom sheet** behind a peek bar naming the selection.
+  Exactly one of dock or sheet is mounted, so `MonthlyRankPanel`'s chart never initialises
+  in a hidden, zero-sized box. Both mount the panels through one `statsProps`/`rankProps`.
+- **The time bar wraps** (`flex-wrap`), on desktop too once compare's second stepper is
+  open. On a phone it uses `sm` controls, icon-only labels and no fps slider, because every
+  wrapped row comes out of the chart's pane.
+- **Playback prefetches 3 frames and holds 8 on a phone**, not 8 and 24. The frames cannot
+  be made lighter instead: a smaller image tier would have to be rendered from NetCDF, and
+  only the retention window is on disk.
+- A story's card takes the peek bar's place, **outside** the `UDrawer`: the drawer's default
+  slot is its trigger, so a Next button inside it would also open the sheet.
+
+#### Guided stories
+
+**`stories/index.ts` holds them, as `View` steps with a caption each**, plus an optional
+`play: { until }` that plays the map from the step's date to that bucket and stops. They are
+editorial copy, not data, so they live in the frontend rather than in `domain.yml`.
+`tests/stories.test.ts` checks every step's region key against `shared/domain.yml`, because
+`applyView` silently ignores a key it does not know.
+
+**`draft: true` stories show in dev only**, and `StoryPicker` renders nothing when there are
+no stories, so production shows no Stories button until a real one exists. **The only story
+today is a draft placeholder** (`player-check`) exercising every kind of step. The real
+stories are waiting on the user's event list.
+
+- **`useStory()` is page-wide state**, like the playhead: the picker starts a story, the
+  card steps it, and the URL writes it.
+- **Exit puts back the view from before the story, camera included.**
+  `store.mapCamera` is written on the primary map's `moveend` and once on load, since the
+  constructor's own view fires none. A story opened from a link has no prior view, so exit
+  leaves the app where the story left it.
+- **`usePlayback()` is module-level state**, one playhead for the page, so the time bar's
+  button shows a story's playback as playing. It no longer stops itself on unmount;
+  `TimeControl` does that.
 
 #### Downloading what is plotted
 
@@ -1699,7 +1784,10 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `csv_downloaded` (`kind: series | ranking`, plus `quantity` and, on a ranking,
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
 `baseline_note_opened` (`variable`),
-`about_opened`, `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`.
+`about_opened`, `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
+`compare_toggled` (`on`), `compare_date_changed` (1 s trailing debounce, like the colour
+range), `story_started` (`fromLink`), `story_step` (`direction`), `story_exited`
+(`step`, `of`, `completed`). `playback_started` now carries `until` for a story's bounded run.
 Server-side:
 `point_queried` (including the out-of-domain 400 — where people click outside the box is
 the argument for widening it, which costs only a `domain.yml` edit), `point_ranking_queried`,
@@ -1711,6 +1799,38 @@ reached only from the region menu, so picking the region already active is still
 `changed`, as the fetch below it rightly is, made the commonest path of all — open the
 menu, pick the default region — report nothing. Found in the browser, not by reading.
 
+
+### Tests and CI
+
+`.github/workflows/ci.yml` runs two jobs on push and PR: **pytest** over `shared/` and
+`CRW.checks` (`uv run --project process pytest tests`), and, in `front/`, **lint, vitest and
+`nuxt build`**. Type checking is not gated: `vue-tsc` reports ~100 errors on the existing
+code (mostly `mapbox-gl` having no bundled types, and Pinia getters losing inference in
+`main.ts`).
+
+- **`shared/testdata/periods_cases.json` is asserted by both** `tests/test_periods.py` and
+  `front/tests/periods.test.ts`. That turns "change one and change the other" into a failing
+  test; editing only the TypeScript week rule fails 20 cases.
+- **The Python tests use synthetic arrays, never NetCDF.** The orientation and leap-day
+  tests build 3600×7200 grids in memory and monkeypatch `_read_raw`.
+- **CI installs with `npm install --legacy-peer-deps`, not `npm ci`**, the same as
+  `front/Dockerfile`. The committed lock had drifted out of sync with `package.json` and
+  was regenerated that way.
+- **Running front tooling on the host:** `front/node_modules` on the host is an empty,
+  root-owned mount point left by Docker, so `npm install` there fails with EACCES. Copy
+  `front/` (without `node_modules`) to a scratch directory and install there.
+
+### `CRW.cli check`
+
+One line per invariant, exit 1 if any fails. Each one is a failure this project has already
+had, and none of them was reported at the time. It checks: freshness per archive, 366
+climatology keys, **`mhw_status` saying "ingested" while `mhw_daily` is empty** (a
+repartition in flight, which `/coverage` cannot see), category range and leap-day land over
+the last `--days` (default 45), every region rolled up through the last ingested date, and
+any region whose heatwave extent is zero on every day.
+
+**`--full` read 0 rows on dev.** ClickHouse 26.5 answered the whole-archive category count
+over 17.6 B rows from per-part metadata in 6 ms. Not verified on prod.
 
 ## Gotchas
 
@@ -1880,6 +2000,15 @@ menu, pick the default region — report nothing. Found in the browser, not by r
   198.51.100.0/24, 203.0.113.0/24) — Python's `ipaddress` counts them as private. Real
   public IPv4 and IPv6 pass; a test with `203.0.113.7` looks like geoip is broken when it
   is not.
+- **Lossless WebP rewrites the RGB of fully transparent pixels.** Without `exact=True`,
+  libwebp may replace the value channels under alpha 0, so `_bleed()`'s coastline fill does
+  not fully survive encoding. Measured on a cached 1996 frame: 1,784 of 23,279 coastal land
+  texels decode as code 0. `raster-resampling: nearest` keeps it off screen, and passing
+  `exact=True` would only fix frames rendered from now on.
+- **`TimeseriesChart`'s resize observer must watch the template ref.** The plot sits in
+  `<ClientOnly>`, so `container` is null at `onMounted`. For its whole life before v2.0 the
+  chart never followed its container, and it only showed once the time bar started wrapping
+  and the canvas spilled over the note below.
 - **`/image` renders on demand but never caches** (`api/modules/render.py`). Only
   `process` writes the cache, because only it knows whether the retention window still
   holds days that have yet to land in a bucket. So an unrendered bucket costs ~2.9 s
@@ -2117,5 +2246,29 @@ Verified on the baseline labelling (Chromium, per the recipe above):
   (`vue/no-multiple-template-root` in `index.vue`, `no-dynamic-delete` in
   `main.ts`) are pre-existing.
 
-Not built yet: a cron entry for `run`, tests. Ideas deliberately deferred, with their costs and
+Verified on v2.0 (Chromium, per the recipe above; desktop 1440×900 and phone 390×844):
+
+- **Compare.** On the globe and on Mercator both halves draw, and the region outline shows
+  on both. Dragging either half moves both cameras to the same centre and zoom. Monthly
+  re-snaps both dates (`2026-08-01` / `2025-08-01`). A `c=` link with `r=ne_pacific`
+  reopens both dates and the region. No page errors.
+- **Phone.** No horizontal overflow; the sheet opens with the stats and the ranking; the
+  divider drags by touch (50% → 19%); playback advances; the chart's canvas matches its
+  container after the time bar wraps.
+- **Stories.** Each placeholder step applies its view and camera. The play step starts at
+  `2015-03-02` and stops at `2015-05-04`. Finish restores the prior variable, period, date,
+  cell and camera. `story=player-check&step=2` opens on step 2. The phone card steps
+  without opening the sheet.
+- **`/health`** stays 200 with a 17-day lag; **`/health/data`** answers 503 at the default
+  3 days and 200 with `STALE_AFTER_DAYS=30`.
+- **`CRW.cli check`** on the dev database fails exactly the two known problems (empty
+  `mhw_daily` mid-repartition, and `pacific_bioregions`' all-zero extent).
+- **The leap-day repair is not in the dev copy of the MHW archive.** In
+  `mhw_daily_repart`, every 29 February from 1988 to 2024 carries ~2,022,000 Cat 5 cells,
+  the unrepaired signature. After `repartition --finish`, `check` will fail
+  `mhw.leap_day_land` until `CRW.cli repair-mhw-land` has run.
+- **Not verified:** that each new analytics event fires exactly once. Dev runs with no
+  PostHog key, so `trackEvent` is a no-op and the events were read from code, not observed.
+
+Not built yet: a cron entry for `run`. Ideas deliberately deferred, with their costs and
 constraints, are in [ROADMAP.md](ROADMAP.md) — read it before proposing a feature.
