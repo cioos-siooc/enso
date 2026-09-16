@@ -28,7 +28,7 @@
     <span class="hidden sm:inline">About</span>
   </UButton>
 
-  <UModal v-model:open="open" :title="title" :ui="{ content: 'max-w-2xl' }">
+  <UModal v-model:open="open" :title="title" :fullscreen="narrow" :ui="{ content: 'max-w-2xl' }">
     <template #body>
       <div v-if="tab === 'guide'" class="space-y-5 text-sm">
         <p class="text-muted">
@@ -355,6 +355,9 @@
 <script setup lang="ts">
 import { useMainStore } from '~/stores/main'
 import { trackEvent } from '~/composables/useAnalytics'
+
+/** A phone gets the guide as a full screen; a 672px dialog would not fit. */
+const { narrow } = useViewport()
 
 /** The prior work this dashboard is modelled on. */
 const PRIOR_WORK = 'https://github.com/IOS-OSD-DPG/Pacific_SST_Monitoring'

@@ -46,10 +46,12 @@
       <!-- Each half names its bucket, pinned against the divider so the label
            travels with the half it describes. -->
       <span
+        v-if="halfWidth(split) > LABEL_ROOM"
         class="pointer-events-none absolute top-2 z-10 mr-6 whitespace-nowrap rounded bg-elevated/90 px-2 py-0.5 text-xs font-medium text-highlighted shadow"
         :style="{ right: `${100 - split}%` }"
       >{{ leftLabel }}</span>
       <span
+        v-if="halfWidth(100 - split) > LABEL_ROOM"
         class="pointer-events-none absolute top-2 z-10 ml-6 whitespace-nowrap rounded bg-elevated/90 px-2 py-0.5 text-xs font-medium text-highlighted shadow"
         :style="{ left: `${split}%` }"
       >{{ rightLabel }}</span>
@@ -59,12 +61,13 @@
          is projected, then what is being read off it. Stacked with a gap rather
          than positioned individually so neither has to know the other's height. -->
     <div class="absolute left-2 top-2 z-20 flex flex-col items-start gap-2">
-      <UFieldGroup v-if="token" size="xs" class="rounded-lg shadow-lg">
+      <UFieldGroup v-if="token" :size="narrow ? 'sm' : 'xs'" class="rounded-lg shadow-lg">
         <UButton
           v-for="item in PROJECTIONS"
           :key="item.value"
           :icon="item.icon"
-          :label="item.label"
+          :label="narrow ? undefined : item.label"
+          :aria-label="item.label"
           :color="projection === item.value ? 'primary' : 'neutral'"
           :variant="projection === item.value ? 'solid' : 'subtle'"
           :title="item.title"
@@ -101,6 +104,7 @@ import { bucketLabel } from '~/utils/periods'
  */
 const store = useMainStore()
 const token = useRuntimeConfig().public.mapboxToken
+const { narrow } = useViewport()
 
 const root = ref<HTMLElement | null>(null)
 /** The main map. Framing flights go to it; the compare map follows. */
@@ -250,6 +254,24 @@ function startDrag(event: PointerEvent) {
   window.addEventListener('pointerup', onUp)
 }
 
+/**
+ * The pane's width, so a half too narrow for its label drops the label rather
+ * than clipping it at the pane's edge. A label is ~130px with its gap.
+ */
+const paneWidth = ref(0)
+const LABEL_ROOM = 150
+let paneObserver: ResizeObserver | null = null
+
+function halfWidth(percent: number): number {
+  return (percent / 100) * paneWidth.value
+}
+
+onMounted(() => {
+  if (!root.value) return
+  paneObserver = new ResizeObserver(([entry]) => { paneWidth.value = entry?.contentRect.width ?? 0 })
+  paneObserver.observe(root.value)
+})
+
 const leftLabel = computed(() => store.selectedDate ? bucketLabel(store.selectedDate, store.period) : '')
 const rightLabel = computed(() => store.compareDate ? bucketLabel(store.compareDate, store.period) : '')
 
@@ -330,6 +352,7 @@ watch(() => store.cameraRequest, (view) => {
 })
 
 onBeforeUnmount(() => {
+  paneObserver?.disconnect()
   stopDrag?.()
   unlink()
   primary = null

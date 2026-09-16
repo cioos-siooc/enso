@@ -421,9 +421,16 @@ function render() {
 
 let observer: ResizeObserver | null = null
 
-onMounted(() => {
-  observer = new ResizeObserver(() => chart?.resize())
-  if (container.value) observer.observe(container.value)
+// The TEMPLATE REF, not the mount: the plot sits inside `<ClientOnly>`, so
+// `container` is still null when `onMounted` runs and nothing would ever be
+// observed — the trap the ranking grid fell into first. Unobserved, the canvas
+// kept its first height when the time bar above it wrapped onto another row
+// (a phone, or compare's second stepper) and overflowed onto the note below.
+watch(container, (el, previous) => {
+  if (previous) observer?.unobserve(previous)
+  if (!el) return
+  observer ??= new ResizeObserver(() => chart?.resize())
+  observer.observe(el)
   if (hasData.value) nextTick(render)
 })
 
@@ -433,10 +440,7 @@ watch(() => props.series, () => {
     chart = null
     return
   }
-  nextTick(() => {
-    if (container.value && observer) observer.observe(container.value)
-    render()
-  })
+  nextTick(render)
 })
 
 // Merged in rather than re-rendered: a full `notMerge` setOption would reset the

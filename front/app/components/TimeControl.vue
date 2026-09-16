@@ -1,11 +1,14 @@
 <template>
-  <div class="flex items-center gap-2 rounded-lg border border-default bg-elevated/90 px-2 py-1 shadow-lg backdrop-blur">
+  <!-- Wraps rather than scrolls: on a phone, and on a desktop with the dock and
+       compare's second stepper both open, the controls do not fit one row, and a
+       horizontally scrolling toolbar hides the one control you are looking for. -->
+  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-default bg-elevated/90 px-2 py-1 shadow-lg backdrop-blur">
     <!--
       UFieldGroup, not UButtonGroup: Nuxt UI v4 renamed it and the old name
       resolves to an empty comment node instead of erroring, so the control
       simply vanishes from the DOM.
     -->
-    <UFieldGroup size="xs">
+    <UFieldGroup :size="size">
       <UButton
         v-for="item in VARIABLES"
         :key="item.value"
@@ -18,9 +21,9 @@
       />
     </UFieldGroup>
 
-    <div class="h-5 w-px bg-accented" />
+    <div class="hidden h-5 w-px bg-accented md:block" />
 
-    <UFieldGroup size="xs">
+    <UFieldGroup :size="size">
       <UButton
         v-for="item in PERIODS"
         :key="item.value"
@@ -31,14 +34,14 @@
       />
     </UFieldGroup>
 
-    <div class="h-5 w-px bg-accented" />
+    <div class="hidden h-5 w-px bg-accented md:block" />
 
     <div class="flex items-center gap-1">
       <UButton
         icon="i-mdi-chevron-left"
         variant="ghost"
         color="neutral"
-        size="xs"
+        :size="size"
         :disabled="atStart"
         @click="step(-1)"
       />
@@ -46,7 +49,7 @@
       <UInput
         v-model="dateInput"
         type="date"
-        size="xs"
+        :size="size"
         :min="store.coverage?.start ?? undefined"
         :max="store.coverage?.end ?? undefined"
         class="w-36"
@@ -56,7 +59,7 @@
         icon="i-mdi-chevron-right"
         variant="ghost"
         color="neutral"
-        size="xs"
+        :size="size"
         :disabled="atEnd"
         @click="step(1)"
       />
@@ -68,14 +71,14 @@
         icon="i-mdi-skip-next"
         variant="ghost"
         color="neutral"
-        size="xs"
+        :size="size"
         :disabled="!latest || atEnd"
         :title="latest ? `Jump to the latest ${periodWord} frame` : 'Coverage unknown'"
         @click="goLatest()"
       />
     </div>
 
-    <div class="h-5 w-px bg-accented" />
+    <div class="hidden h-5 w-px bg-accented md:block" />
 
     <!-- Swipe compare. Only the date is the user's to set on the second map:
          variable, period and colour range are shared, so the legend describes
@@ -84,10 +87,11 @@
     <div class="flex items-center gap-1">
       <UButton
         icon="i-mdi-compare-horizontal"
-        :label="store.compareDate ? undefined : 'Compare'"
+        :label="store.compareDate || narrow ? undefined : 'Compare'"
+        aria-label="Compare"
         :color="store.compareDate ? 'primary' : 'neutral'"
         :variant="store.compareDate ? 'solid' : 'ghost'"
-        size="xs"
+        :size="size"
         :disabled="!store.selectedDate"
         :title="store.compareDate ? 'Stop comparing' : 'Compare this map with another date, side by side'"
         @click="store.toggleCompare()"
@@ -97,14 +101,14 @@
           icon="i-mdi-chevron-left"
           variant="ghost"
           color="neutral"
-          size="xs"
+          :size="size"
           :disabled="compareAtStart"
           @click="stepCompare(-1)"
         />
         <UInput
           v-model="compareInput"
           type="date"
-          size="xs"
+          :size="size"
           :min="store.coverage?.start ?? undefined"
           :max="store.coverage?.end ?? undefined"
           class="w-36"
@@ -115,14 +119,14 @@
           icon="i-mdi-chevron-right"
           variant="ghost"
           color="neutral"
-          size="xs"
+          :size="size"
           :disabled="compareAtEnd"
           @click="stepCompare(1)"
         />
       </template>
     </div>
 
-    <div class="h-5 w-px bg-accented" />
+    <div class="hidden h-5 w-px bg-accented md:block" />
 
     <!-- Playback runs until stopped: the playhead is just repeated store.setDate(),
          so stepping or clicking the chart mid-run relocates it rather than fighting
@@ -134,25 +138,26 @@
         :icon="playing ? 'i-mdi-pause' : 'i-mdi-play'"
         :color="playing ? 'primary' : 'neutral'"
         :variant="playing ? 'solid' : 'ghost'"
-        size="xs"
+        :size="size"
         :disabled="!canPlay"
         :title="playing ? 'Stop' : 'Play'"
         @click="toggle()"
       />
       <USlider
+        v-if="!narrow"
         v-model="fps"
         :min="MIN_FPS"
         :max="MAX_FPS"
         :step="1"
-        size="xs"
+        :size="size"
         class="w-20"
         :aria-label="`Animation speed, ${fps} frames per second`"
       />
-      <span class="w-12 shrink-0 text-xs tabular-nums text-muted">{{ fps }} fps</span>
+      <span class="hidden w-12 shrink-0 text-xs tabular-nums text-muted sm:inline">{{ fps }} fps</span>
     </div>
 
     <!-- The input still picks a day; this is what that day's bucket covers. -->
-    <span v-if="store.period !== 'daily' && store.selectedDate" class="pr-1 text-xs text-muted">
+    <span v-if="store.period !== 'daily' && store.selectedDate" class="hidden pr-1 text-xs text-muted sm:inline">
       {{ bucketLabel(store.selectedDate, store.period) }}
     </span>
 
@@ -163,15 +168,17 @@
          what is plotted — it is the one button here that leaves the app. -->
     <UButton
       icon="i-mdi-download"
-      label="Download data"
       variant="ghost"
       color="neutral"
-      size="xs"
+      :size="size"
       class="ml-auto shrink-0"
       :disabled="!canExport"
+      :aria-label="`Download this ${periodWord} series as CSV`"
       :title="canExport ? `Download this ${periodWord} series as CSV` : 'Nothing plotted to download'"
       @click="exportSeries()"
-    />
+    >
+      <span class="hidden sm:inline">Download data</span>
+    </UButton>
   </div>
 </template>
 
@@ -214,6 +221,12 @@ const VARIABLES = [
   },
 ]
 const { playing, fps, canPlay, toggle, stop } = usePlayback()
+
+/** Finger-sized on a phone, compact everywhere else. */
+const { narrow } = useViewport()
+// 'sm', not larger: the time bar shares the chart's pane, and every row it
+// wraps onto is a row the chart loses on a phone.
+const size = computed(() => (narrow.value ? 'sm' : 'xs'))
 
 const dateInput = computed({
   get: () => store.selectedDate ?? '',

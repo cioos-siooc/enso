@@ -11,7 +11,7 @@
        exactly the thing the sentence is about. -->
   <div
     v-if="enso || heatwave"
-    class="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-default bg-elevated/40 px-4 py-1.5 text-xs"
+    class="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-default bg-elevated/40 px-3 py-1.5 text-xs md:px-4"
   >
     <button
       v-if="enso"
@@ -51,7 +51,7 @@
     </button>
 
     <div class="ml-auto flex items-center gap-2 text-dimmed">
-      <span v-if="asOf" class="tabular-nums">as of {{ asOf }}</span>
+      <span v-if="asOf" class="hidden tabular-nums sm:inline">as of {{ asOf }}</span>
 
       <!-- On demand, not always on. Both sentences above are written to be read
            without it; this is where the caveats that would otherwise clutter

@@ -9,7 +9,7 @@
        its own underneath it — two controls for one decision. As a dropdown the
        button states the region currently being read and opening it is how you
        change it, which is the same gesture either way. -->
-  <UFieldGroup size="xs" class="rounded-lg shadow-lg">
+  <UFieldGroup :size="narrow ? 'sm' : 'xs'" class="rounded-lg shadow-lg">
     <UButton
       icon="i-mdi-map-marker"
       label="Point"
@@ -35,6 +35,7 @@
 import { useMainStore } from '~/stores/main'
 
 const store = useMainStore()
+const { narrow } = useViewport()
 
 /**
  * Picking a region IS switching to region scope — `store.selectRegion()` sets

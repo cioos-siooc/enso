@@ -1,6 +1,7 @@
 import { trackEvent } from '~/composables/useAnalytics'
 import { useMainStore } from '~/stores/main'
 import { bucketStart, shiftBuckets } from '~/utils/periods'
+import { isNarrow } from '~/composables/useViewport'
 
 export const MIN_FPS = 1
 export const MAX_FPS = 10
@@ -10,6 +11,14 @@ const DEFAULT_FPS = 4
 const AHEAD = 8
 /** Decoded frames held at once — see the note on memory below. */
 const CACHE_MAX = 24
+/**
+ * The same two on a phone. A decoded 2048px frame is ~4 MB, and mobile browsers
+ * evict a page's memory far sooner than a desktop's. The frames cannot be made
+ * lighter instead: a smaller image tier would have to be rendered from NetCDF,
+ * and only the retention window's files are still on disk.
+ */
+const AHEAD_NARROW = 3
+const CACHE_MAX_NARROW = 8
 /** A single slow frame must not freeze playback. */
 const FRAME_TIMEOUT_MS = 3000
 
@@ -63,7 +72,7 @@ export function usePlayback() {
       img.decoding = 'async'
       img.src = url
       cache.set(url, img)
-      while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
+      while (cache.size > (isNarrow() ? CACHE_MAX_NARROW : CACHE_MAX)) cache.delete(cache.keys().next().value!)
     }
     return img
   }
@@ -101,7 +110,8 @@ export function usePlayback() {
       // Queue the window in front of the frame just shown. Cheap: these are
       // ~78 KB each and already rendered to disk on the API side.
       let ahead: string | null = target
-      for (let i = 0; i < AHEAD; i++) {
+      const aheadCount = isNarrow() ? AHEAD_NARROW : AHEAD
+      for (let i = 0; i < aheadCount; i++) {
         ahead = next(ahead)
         if (!ahead) break
         warm(api.imageUrl(ahead, store.period, store.variable))

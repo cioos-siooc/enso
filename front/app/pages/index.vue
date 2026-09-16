@@ -6,7 +6,7 @@
          reopen for every cell. It is on the LEFT because the map's own controls
          (projection, legend, time bar) grew on the right and below. -->
     <SideDock
-      v-if="dockOpen"
+      v-if="!narrow && dockOpen"
       side="left"
       :title="subjectTitle"
       storage-key="enso.dock.width"
@@ -28,21 +28,7 @@
            map is on — the rail of twelve is gone, since the numbers above
            already say which bucket is being described. -->
       <div class="flex min-h-0 grow flex-col gap-3 overflow-y-auto">
-        <StatsPanel
-          :series="store.activeSeries"
-          :loading="store.activeSeriesLoading"
-          :empty-message="emptyPointMessage"
-          :error="!!store.activeError"
-          :stops="store.seriesStops"
-          :categorical="store.seriesIsCategorical"
-          :unit="store.seriesUnitLabel"
-          :precision="store.seriesPrecision"
-          :signed="store.variable === 'anom'"
-          :variable-label="variableLabel"
-          :period="store.period"
-          :selected-date="store.selectedDate"
-          :rank-order="rankOrder"
-        />
+        <StatsPanel v-bind="statsProps" />
 
         <!-- One panel, both scopes. A region's ranking is the same question over
              a different daily series — the API defines the ranking once and
@@ -55,18 +41,7 @@
         <MonthlyRankPanel
           v-if="store.activeRanking || store.activeSeriesLoading"
           class="min-h-0 grow border-t border-default pt-3"
-          :ranking="store.activeRanking"
-          :stops="store.seriesStops"
-          :loading="store.activeSeriesLoading"
-          :empty-message="emptyPointMessage"
-          :error="!!store.activeError"
-          :selected-date="store.selectedDate"
-          :unit="store.seriesUnitLabel"
-          :categorical="store.seriesIsCategorical"
-          :zero-line="store.variable === 'anom'"
-          :precision="store.seriesPrecision"
-          :rank-order="rankOrder"
-          :period="store.period"
+          v-bind="rankProps"
           @select="store.setDate($event)"
         />
       </div>
@@ -76,7 +51,7 @@
     <!-- Closed, the dock leaves a strip rather than vanishing: a panel with no
          visible way back is a panel users do not find twice. -->
     <button
-      v-else
+      v-else-if="!narrow"
       type="button"
       class="flex w-7 shrink-0 cursor-pointer flex-col items-center gap-2 border-r border-default bg-default py-3 text-muted transition-colors hover:text-default"
       title="Show the panel"
@@ -97,7 +72,7 @@
            never sit on top of the line, and the chart takes whatever height is
            left — the note is ~18px and only present for a variable that
            declares a baseline. -->
-      <div class="flex h-[38%] shrink-0 flex-col border-t border-default p-3">
+      <div class="flex h-[46%] min-h-72 shrink-0 flex-col border-t border-default p-2 md:h-[38%] md:min-h-0 md:p-3">
         <div class="relative min-h-0 grow">
           <TimeseriesChart
             :series="store.activeSeries"
@@ -117,6 +92,44 @@
         </div>
         <BaselineNote class="mt-1 shrink-0" />
       </div>
+
+      <!-- On a phone the dock has no room beside the map, so the same two
+           panels live in a bottom sheet instead. The peek bar is the sheet's
+           handle and says what the panels are about, so the selection is still
+           named on screen while the sheet is closed. Only one of dock or sheet
+           is ever mounted, which keeps the ranking's chart from initialising in
+           a hidden, zero-sized box. -->
+      <UDrawer
+        v-if="narrow"
+        v-model:open="sheetOpen"
+        :title="subjectTitle"
+        :description="subjectSubtitle"
+        :ui="{ content: 'h-[85dvh]', body: 'flex min-h-0 flex-col' }"
+      >
+        <button
+          type="button"
+          class="flex min-h-12 shrink-0 cursor-pointer items-center gap-2 border-t border-default bg-elevated px-4 text-left"
+          @click="sheetOpen = true"
+        >
+          <UIcon name="i-mdi-chevron-up" class="size-5 shrink-0 text-muted" />
+          <span class="min-w-0 grow">
+            <span class="block truncate text-sm font-semibold text-highlighted">{{ subjectTitle }}</span>
+            <span class="block truncate text-xs text-muted">Numbers and year rankings</span>
+          </span>
+        </button>
+
+        <template #body>
+          <div class="flex min-h-0 grow flex-col gap-3 overflow-y-auto">
+            <StatsPanel v-bind="statsProps" />
+            <MonthlyRankPanel
+              v-if="store.activeRanking || store.activeSeriesLoading"
+              class="min-h-[60dvh] grow border-t border-default pt-3"
+              v-bind="rankProps"
+              @select="store.setDate($event)"
+            />
+          </div>
+        </template>
+      </UDrawer>
     </div>
   </div>
 </template>
@@ -138,6 +151,46 @@ useUrlState()
  * making the first thing a user sees a closed dock.
  */
 const dockOpen = ref(true)
+
+const { narrow } = useViewport()
+/** The phone layout's bottom sheet. Closed: the map is what a phone opens on. */
+const sheetOpen = ref(false)
+
+/**
+ * The two panels' props, once. The dock and the phone's sheet mount the same
+ * components, and two copies of a dozen bindings is how one of them ends up
+ * describing a different series.
+ */
+const statsProps = computed(() => ({
+  series: store.activeSeries,
+  loading: store.activeSeriesLoading,
+  emptyMessage: emptyPointMessage.value,
+  error: !!store.activeError,
+  stops: store.seriesStops,
+  categorical: store.seriesIsCategorical,
+  unit: store.seriesUnitLabel,
+  precision: store.seriesPrecision,
+  signed: store.variable === 'anom',
+  variableLabel: variableLabel.value,
+  period: store.period,
+  selectedDate: store.selectedDate,
+  rankOrder: rankOrder.value,
+}))
+
+const rankProps = computed(() => ({
+  ranking: store.activeRanking,
+  stops: store.seriesStops,
+  loading: store.activeSeriesLoading,
+  emptyMessage: emptyPointMessage.value,
+  error: !!store.activeError,
+  selectedDate: store.selectedDate,
+  unit: store.seriesUnitLabel,
+  categorical: store.seriesIsCategorical,
+  zeroLine: store.variable === 'anom',
+  precision: store.seriesPrecision,
+  rankOrder: rankOrder.value,
+  period: store.period,
+}))
 
 const periodLabel = computed(
   () => ({ daily: 'daily', weekly: 'weekly mean', monthly: 'monthly mean' })[store.period],
