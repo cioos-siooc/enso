@@ -221,6 +221,10 @@ async function setProjection(name: ProjectionName) {
 
 function onPrimaryReady(map: mapboxgl.Map) {
   primary = map
+  // The constructor's own view fires no `moveend`, so the opening camera is
+  // recorded here or a story started before any pan has nothing to return to.
+  store.mapCamera = cameraOf(map)
+  map.on('moveend', () => { store.mapCamera = cameraOf(map) })
   // A deep link or a story can pick a region before the map exists.
   if (store.scope === 'region') frameRegion(false)
   if (secondary) link()

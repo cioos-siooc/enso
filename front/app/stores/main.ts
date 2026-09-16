@@ -45,6 +45,26 @@ export type VariableName = 'sst' | 'anom' | 'mhw'
  */
 export type Scope = 'point' | 'region'
 
+/**
+ * Everything that makes up "what is on screen", as data.
+ *
+ * A deep link and a story step are both one of these, applied by `applyView`,
+ * so there is one definition of putting the app into a view. Every field is
+ * optional: absent means "leave it as it is".
+ */
+export interface View {
+  variable?: VariableName
+  period?: Period
+  /** Any day; snapped to the period's bucket. */
+  date?: string
+  /** A named region key. Wins over `point`. */
+  region?: string
+  point?: { lat: number, lon: number }
+  /** Swipe compare's second date; `null` turns compare off. */
+  compareDate?: string | null
+  camera?: CameraView
+}
+
 /** A variable's displayed range — what the colour ramp is spread over. */
 export interface ColorScaleRange { vmin: number, vmax: number }
 
@@ -525,6 +545,12 @@ export const useMainStore = defineStore('main', {
      * view twice still a change.
      */
     cameraRequest: null as (CameraView & { seq: number }) | null,
+    /**
+     * Where the main map last came to rest. Written on `moveend` only, so a pan
+     * is one write rather than sixty a second; read by `currentView()`, so
+     * leaving a story puts the camera back as well as the selection.
+     */
+    mapCamera: null as CameraView | null,
   }),
 
   getters: {
@@ -1084,6 +1110,84 @@ export const useMainStore = defineStore('main', {
       if (start && target < start) target = start
       this.setCompareDate(target)
       trackEvent('compare_toggled', { on: true, variable: this.variable, period: this.period })
+    },
+
+    /**
+     * Put the app into `view`, in one pass and with one fetch.
+     *
+     * `variable` and `period` are written straight into state rather than
+     * through `setVariable`/`setPeriod`, which would each fire their own refetch
+     * of a selection that is about to be replaced anyway — three requests for
+     * one view. They are also the two actions that report an analytics event,
+     * and arriving at a view is not the same gesture as pressing a toggle.
+     */
+    async applyView(view: View) {
+      const patch: { variable?: VariableName, period?: Period } = {}
+      // Gated exactly as the toggle is: a stale link or a story written before
+      // an archive was complete must not open on a variable the app would
+      // refuse to draw, and silently falling back beats an empty map.
+      if (view.variable && view.variable !== this.variable && this.variableReady(view.variable)) {
+        patch.variable = view.variable
+      }
+      if (view.period && view.period !== this.period) patch.period = view.period
+      const changed = Object.keys(patch).length > 0
+      if (changed) {
+        this.$patch(patch)
+        // Both cached series are for the old field or window. Dropped, not
+        // refetched: the selection below fetches the one on screen.
+        this.pointSeries = null
+        this.monthlyRanking = patch.variable ? null : this.monthlyRanking
+        this.regionSeries = null
+        this.regionRanking = patch.variable ? null : this.regionRanking
+      }
+
+      // After the period is in force, so the date snaps to the right bucket —
+      // and ALWAYS, not only when the view names one. The `$patch` above skips
+      // `setPeriod`, which is also what re-snaps the current date; without this
+      // a monthly view with no date keeps the weekly bucket it had.
+      const target = view.date ?? this.selectedDate
+      if (target) this.setDate(target)
+      if (view.compareDate === null) this.compareDate = null
+      else if (view.compareDate) this.setCompareDate(view.compareDate)
+      else if (this.compareDate) this.setCompareDate(this.compareDate)
+
+      // One selection, one fetch. `track: false` on the point for the same
+      // reason the patch skips the actions: this is not a click on the map.
+      const region = view.region && this.domain?.regions?.some(r => r.key === view.region)
+        ? view.region
+        : null
+      if (region) {
+        const same = region === this.activeRegion && this.scope === 'region' && this.regionSeries
+        this.activeRegion = region
+        this.scope = 'region'
+        if (!same) await this.loadRegionSeries()
+      }
+      else if (view.point) {
+        await this.selectPoint(view.point.lat, view.point.lon, { track: false })
+      }
+      else if (changed) {
+        if (this.scope === 'region') await this.loadRegionSeries()
+        else if (this.selectedPoint) {
+          const { lat, lon } = this.selectedPoint
+          await this.selectPoint(lat, lon, { track: false })
+        }
+      }
+
+      if (view.camera) this.requestCamera(view.camera)
+    },
+
+    /** The view on screen now, camera included, for putting back later. */
+    currentView(): View {
+      return {
+        ...(this.mapCamera ? { camera: { ...this.mapCamera } } : {}),
+        variable: this.variable,
+        period: this.period,
+        date: this.selectedDate ?? undefined,
+        compareDate: this.compareDate,
+        ...(this.scope === 'region' && this.activeRegion
+          ? { region: this.activeRegion }
+          : this.selectedPoint ? { point: { ...this.selectedPoint } } : {}),
+      }
     },
 
     /** Fly the map somewhere. See `cameraRequest`. */

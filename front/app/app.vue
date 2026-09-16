@@ -28,6 +28,7 @@
           {{ store.coverage.start }} &ndash; {{ store.coverage.end }}
         </UBadge> -->
         <UBadge variant="subtle" color="neutral" class="hidden sm:inline-flex">v{{ version }}</UBadge>
+        <StoryPicker />
         <AboutDialog />
       </header>
 

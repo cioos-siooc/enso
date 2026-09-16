@@ -22,6 +22,19 @@ const CACHE_MAX_NARROW = 8
 /** A single slow frame must not freeze playback. */
 const FRAME_TIMEOUT_MS = 3000
 
+/*
+ * One playhead for the whole page, not one per caller. The time bar's play
+ * button and a story step that plays a range drive the same loop, so the button
+ * shows a story's playback as playing and pressing it stops that playback.
+ */
+const playing = ref(false)
+const fps = ref(DEFAULT_FPS)
+/** Invalidates an in-flight loop, so stop/start cannot leave two running. */
+let run = 0
+const cache = new Map<string, HTMLImageElement>()
+/** Last bucket the current run may reach; null runs to the end of coverage. */
+let until: string | null = null
+
 /**
  * Play the map forward one bucket at a time until the user stops it.
  *
@@ -50,13 +63,6 @@ export function usePlayback() {
   const store = useMainStore()
   const api = useApi()
 
-  const playing = ref(false)
-  const fps = ref(DEFAULT_FPS)
-
-  /** Invalidates an in-flight loop, so stop/start cannot leave two running. */
-  let run = 0
-  const cache = new Map<string, HTMLImageElement>()
-
   const canPlay = computed(() => Boolean(store.selectedDate && store.coverage?.end))
 
   function warm(url: string): HTMLImageElement {
@@ -83,11 +89,12 @@ export function usePlayback() {
     return Promise.race([decoded, sleep(FRAME_TIMEOUT_MS)])
   }
 
-  /** The next bucket, or null once the end of coverage is past. */
+  /** The next bucket, or null once the end of coverage — or `until` — is past. */
   function next(from: string): string | null {
     const stepped = shiftBuckets(from, store.period, 1)
     const end = store.coverage?.end
     if (end && stepped > bucketStart(end, store.period)) return null
+    if (until && stepped > bucketStart(until, store.period)) return null
     return stepped
   }
 
@@ -126,11 +133,17 @@ export function usePlayback() {
     if (mine === run) playing.value = false
   }
 
-  function play() {
+  /**
+   * Start playing. `until` bounds the run at that date's bucket, for a story
+   * step that plays one event rather than the rest of the archive; the play
+   * button passes nothing and runs to the end of coverage.
+   */
+  function play(options: { until?: string } = {}) {
     if (!canPlay.value || playing.value) return
+    until = options.until ?? null
     // Parked on the last bucket, there is nothing forward to play — rewind
     // rather than start a loop that exits on its first tick.
-    if (store.selectedDate && !next(store.selectedDate)) {
+    if (!until && store.selectedDate && !next(store.selectedDate)) {
       const start = store.coverage?.start
       if (!start) return
       store.setDate(bucketStart(start, store.period))
@@ -145,12 +158,14 @@ export function usePlayback() {
       period: store.period,
       fps: fps.value,
       from: store.selectedDate,
+      until,
     })
     void loop()
   }
 
   function stop() {
     playing.value = false
+    until = null
     run++
   }
 
@@ -158,8 +173,6 @@ export function usePlayback() {
     if (playing.value) stop()
     else play()
   }
-
-  onBeforeUnmount(stop)
 
   return { playing, fps, canPlay, play, stop, toggle }
 }

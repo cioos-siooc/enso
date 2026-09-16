@@ -141,7 +141,7 @@
         :size="size"
         :disabled="!canPlay"
         :title="playing ? 'Stop' : 'Play'"
-        @click="toggle()"
+        @click="playing ? stop() : play()"
       />
       <USlider
         v-if="!narrow"
@@ -220,7 +220,7 @@ const VARIABLES = [
     pending: 'Marine heatwave needs its own archive, which has not finished ingesting',
   },
 ]
-const { playing, fps, canPlay, toggle, stop } = usePlayback()
+const { playing, fps, canPlay, play, stop } = usePlayback()
 
 /** Finger-sized on a phone, compact everywhere else. */
 const { narrow } = useViewport()
@@ -297,7 +297,11 @@ function setCompare(iso: string) {
   }, 1000)
 }
 
-onBeforeUnmount(() => { if (compareTimer) clearTimeout(compareTimer) })
+onBeforeUnmount(() => {
+  if (compareTimer) clearTimeout(compareTimer)
+  // The playhead is page-wide now; the component that shows it stops it on the way out.
+  stop()
+})
 
 const canExport = computed(() => (store.activeSeries?.dates.length ?? 0) > 0)
 

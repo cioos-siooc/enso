@@ -19,6 +19,8 @@
  */
 import { useMainStore, type VariableName } from '~/stores/main'
 import { PERIODS, type Period } from '~/utils/periods'
+import { findStory } from '~/stories'
+import { useStory } from '~/composables/useStory'
 
 /** Query keys, kept short because these links get pasted into chat and email. */
 const KEYS = {
@@ -29,7 +31,12 @@ const KEYS = {
   point: 'at',
   /** Swipe compare's second date; absent when compare is off. */
   compare: 'c',
+  /** A guided story and its 1-based step. */
+  story: 'story',
+  step: 'step',
 } as const
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 const VARIABLES: VariableName[] = ['sst', 'anom', 'mhw']
 
@@ -57,66 +64,35 @@ function first(value: unknown): string | null {
 export function useUrlState() {
   const store = useMainStore()
   const route = useRoute()
+  const story = useStory()
 
   /**
-   * Read the query into the store, in one pass and with one fetch.
-   *
-   * `variable` and `period` are written straight into state rather than through
-   * `setVariable`/`setPeriod`, which would each fire their own refetch of a
-   * selection that is about to be replaced anyway — three requests for one link.
-   * They are also the two actions that report an analytics event, and arriving
-   * on a link is not the same gesture as pressing a toggle: a deep link should
-   * look like a page view, not like the visitor having changed the variable.
+   * Read the query into the store. A story link opens the story at its step,
+   * whose own view wins over any other key; anything else is one `applyView`.
    */
   async function applyQuery() {
     const q = route.query
+    const storyKey = first(q[KEYS.story])
+    if (storyKey && findStory(storyKey)) {
+      await story.start(storyKey, Number(first(q[KEYS.step]) ?? 1) - 1, { fromLink: true })
+      return
+    }
+
     const variable = first(q[KEYS.variable]) as VariableName | null
     const period = first(q[KEYS.period]) as Period | null
     const date = first(q[KEYS.date])
     const region = first(q[KEYS.region])
     const point = first(q[KEYS.point])
-
-    const patch: { variable?: VariableName, period?: Period } = {}
-    // Gated exactly as the toggle is: a stale link to `mhw` from before its
-    // archive was complete must not open on a variable the app would refuse to
-    // draw, and silently falling back is better than an empty map.
-    if (variable && VARIABLES.includes(variable) && store.variableReady(variable)) {
-      patch.variable = variable
-    }
-    if (period && PERIODS.some(p => p.value === period)) patch.period = period
-    if (Object.keys(patch).length) store.$patch(patch)
-
-    // After the period is in force, so the date snaps to the right bucket — and
-    // ALWAYS, not only when the link carries one. `$patch` above deliberately
-    // skips `setPeriod`, which is also the thing that re-snaps the current date;
-    // without this, `?p=monthly` with no `d` leaves the date on the weekly
-    // bucket the bootstrap chose, and the panel reports "no value for this
-    // bucket" against a series that has one for the month.
-    const target = date ?? store.selectedDate
-    if (target) store.setDate(target)
-    // Same snapping, same reason. No `toggleCompare()`: that reports a gesture,
-    // and opening a link is not one.
     const compare = first(q[KEYS.compare])
-    if (compare && /^\d{4}-\d{2}-\d{2}$/.test(compare)) store.setCompareDate(compare)
 
-    // One selection, one fetch. `track: false` on the point for the same reason
-    // the patch above skips the actions: this is not a click on the map.
-    if (region && store.domain?.regions?.some(r => r.key === region)) {
-      store.activeRegion = region
-      store.scope = 'region'
-      await store.loadRegionSeries()
-    }
-    else if (point) {
-      const p = parsePoint(point)
-      if (p) await store.selectPoint(p.lat, p.lon, { track: false })
-    }
-    else if (patch.variable || patch.period) {
-      // No selection named, but the field or the window changed under the
-      // opening cell the bootstrap already fetched — so that series is for the
-      // wrong variable and has to be replaced.
-      const p = store.selectedPoint
-      if (p) await store.selectPoint(p.lat, p.lon, { track: false })
-    }
+    await store.applyView({
+      variable: variable && VARIABLES.includes(variable) ? variable : undefined,
+      period: period && PERIODS.some(p => p.value === period) ? period : undefined,
+      date: date ?? undefined,
+      region: region ?? undefined,
+      point: point ? parsePoint(point) ?? undefined : undefined,
+      compareDate: compare && ISO_DATE.test(compare) ? compare : undefined,
+    })
   }
 
   /** The query the current state deserves, with defaults left out. */
@@ -124,6 +100,13 @@ export function useUrlState() {
     const q: Record<string, string> = {
       [KEYS.variable]: store.variable,
       [KEYS.period]: store.period,
+    }
+    // A story link reopens on the step, and the step's own view is what it
+    // shows; the view keys are written too, so the link still says what is on
+    // screen to someone reading it.
+    if (story.active.value) {
+      q[KEYS.story] = story.active.value.key
+      q[KEYS.step] = String(story.step.value + 1)
     }
     if (store.selectedDate) q[KEYS.date] = store.selectedDate
     if (store.compareDate) q[KEYS.compare] = store.compareDate
@@ -156,7 +139,8 @@ export function useUrlState() {
     // `flush: 'post'` keeps it off the critical path of the frame.
     watch(
       () => [store.variable, store.period, store.selectedDate, store.compareDate, store.scope,
-             store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon],
+             store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon,
+             story.active.value?.key, story.step.value],
       sync,
       { flush: 'post' },
     )

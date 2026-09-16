@@ -65,6 +65,9 @@
       <div class="relative grow">
         <AnomalyMap />
         <ColorLegend class="absolute bottom-4 left-1/2 z-10 -translate-x-1/2" />
+        <!-- Over the map's lower-left, clear of the scope controls above it and
+             the legend to its right. On a phone it takes the peek bar's place. -->
+        <StoryCard v-if="!narrow" class="absolute bottom-10 left-2 z-20" />
       </div>
 
       <!-- The chart and, under it, what its values are measured against. The
@@ -99,6 +102,10 @@
            named on screen while the sheet is closed. Only one of dock or sheet
            is ever mounted, which keeps the ranking's chart from initialising in
            a hidden, zero-sized box. -->
+      <!-- A story's card takes the peek bar's place on a phone. Outside the
+           drawer, whose default slot is its trigger: inside it, pressing Next
+           would also open the sheet. -->
+      <StoryCard v-if="narrow && story.active.value" compact class="m-2 shrink-0" />
       <UDrawer
         v-if="narrow"
         v-model:open="sheetOpen"
@@ -107,6 +114,7 @@
         :ui="{ content: 'h-[85dvh]', body: 'flex min-h-0 flex-col' }"
       >
         <button
+          v-if="!story.active.value"
           type="button"
           class="flex min-h-12 shrink-0 cursor-pointer items-center gap-2 border-t border-default bg-elevated px-4 text-left"
           @click="sheetOpen = true"
@@ -137,6 +145,7 @@
 <script setup lang="ts">
 import { useMainStore } from '~/stores/main'
 import { useUrlState } from '~/composables/useUrlState'
+import { useStory } from '~/composables/useStory'
 
 const store = useMainStore()
 
@@ -153,6 +162,7 @@ useUrlState()
 const dockOpen = ref(true)
 
 const { narrow } = useViewport()
+const story = useStory()
 /** The phone layout's bottom sheet. Closed: the map is what a phone opens on. */
 const sheetOpen = ref(false)
 
