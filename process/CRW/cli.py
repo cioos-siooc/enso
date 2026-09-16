@@ -7,6 +7,7 @@
     python -m CRW.cli rollup   [--start/--end]      # build region_daily
     python -m CRW.cli run      [--date ...]         # download + ingest + render
     python -m CRW.cli status   [--date ...]
+    python -m CRW.cli check    [--days N] [--full]  # data invariants; exit 1 on a failure
     python -m CRW.cli repartition [--table]      # one-off partition-key migration
 
 `run` is the daily job: for each date it downloads, ingests, then renders that
@@ -44,6 +45,7 @@ from shared.periods import PERIODS, span
 from shared.render import DEFAULT_WIDTH
 
 from . import (
+    checks as checks_mod,
     climatology,
     config,
     download,
@@ -692,6 +694,22 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_check(args) -> int:
+    """Run the data invariants and print one line per check."""
+    marks = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
+    with get_client() as client:
+        results = checks_mod.run_checks(
+            client, days=args.days, full=args.full, stale_after=args.stale_after,
+        )
+    width = max(len(r.name) for r in results)
+    for r in results:
+        print(f"{marks[r.level]}  {r.name:<{width}}  {r.detail}")
+    failed = sum(r.level == "fail" for r in results)
+    print(f"\n{failed} failed, {sum(r.level == 'warn' for r in results)} warnings, "
+          f"{len(results)} checks")
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="CRW.cli", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -808,6 +826,15 @@ def main(argv: list[str] | None = None) -> int:
         help="swap the migrated table into place (atomic, and the irreversible step)",
     )
     p_part.set_defaults(func=cmd_repartition)
+
+    p_check = sub.add_parser("check", help="data invariants; exits 1 if any fails")
+    p_check.add_argument("--days", type=int, default=45,
+                         help="how far back the daily-table checks read (default 45)")
+    p_check.add_argument("--full", action="store_true",
+                         help="scan the whole archive — a full read of mhw_daily")
+    p_check.add_argument("--stale-after", type=int, default=3,
+                         help="days behind before freshness fails (default 3)")
+    p_check.set_defaults(func=cmd_check)
 
     with_selection(sub.add_parser("status", help="summarise pipeline state")).set_defaults(
         func=cmd_status

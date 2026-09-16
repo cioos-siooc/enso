@@ -10,4 +10,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+# `CRW` is the process package; its checks are pure functions of a client.
+sys.path.insert(0, str(ROOT / "process"))
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")

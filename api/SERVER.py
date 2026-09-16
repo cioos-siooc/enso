@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from shared.domain import global_grid, quantities, regions, subset, variable, variables
 
 from modules import render, state
+from modules.freshness import data_freshness
 from modules.clickhouse_helpers import client, reset
 from modules.periods import Period
 from modules.posthog_helpers import capture_event
@@ -133,12 +134,47 @@ class BoxRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
+    """Liveness. Always 200 while the API is up — the container healthcheck.
+
+    Carries how far behind the archive is, as information only: a stale archive
+    is still a site worth serving. `/health/data` is the one that fails.
+    """
     try:
         client().query("SELECT 1")
     except Exception as exc:  # noqa: BLE001 — health must report, not raise
         reset()
         return {"status": "degraded", "clickhouse": str(exc)}
-    return {"status": "ok", "clickhouse": "ok"}
+    try:
+        data = data_freshness()
+    except Exception as exc:  # noqa: BLE001 — see above
+        data = {"error": str(exc)}
+    return {"status": "ok", "clickhouse": "ok", "data": data}
+
+
+@app.get("/health/data")
+def health_data() -> JSONResponse:
+    """503 when either archive is more than `STALE_AFTER_DAYS` behind.
+
+    For an external uptime monitor, and never for Docker: see
+    `modules/freshness.py` for why staleness is not liveness.
+    """
+    try:
+        data = data_freshness()
+    except Exception as exc:  # noqa: BLE001 — unreachable data is not fresh data
+        reset()
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Could not read the ingest status.", "error": {"code": "status_unreadable", "message": str(exc)}},
+        )
+    if data["stale"]:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": f"The archive is more than {data['staleAfterDays']} days behind.",
+                "error": {"code": "data_stale", **data},
+            },
+        )
+    return JSONResponse(content=data)
 
 
 @app.get("/domain")
