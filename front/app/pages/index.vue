@@ -106,6 +106,7 @@
             :error="!!store.activeError"
             :title="chartTitle"
             :selected-date="store.selectedDate"
+            :compare-date="store.compareDate"
             :stops="store.seriesStops"
             :zero-line="store.variable === 'anom'"
             :unit="store.seriesUnitLabel"

@@ -60,6 +60,8 @@ const props = defineProps<{
   title?: string
   /** Bucket currently on the map, marked on the x-axis. */
   selectedDate?: string | null
+  /** The compare map's bucket in swipe compare, marked beside it; null when off. */
+  compareDate?: string | null
   /**
    * The active variable's colour stops, already spread over the displayed range
    * (`store.activeStops`). The line is coloured with exactly these, so a value
@@ -153,6 +155,21 @@ function markLine(): echarts.SeriesOption['markLine'] {
         formatter: 'MAP',
         position: 'insideEndTop',
         color: '#fbbf24',
+        fontSize: 10,
+      },
+    })
+  }
+  // Sky rather than a second amber: the two lines are two different maps, and
+  // the divider's right half is the one this marks.
+  if (props.compareDate) {
+    data.push({
+      xAxis: props.compareDate,
+      lineStyle: { color: '#38bdf8', width: 1, type: 'dashed' },
+      label: {
+        show: true,
+        formatter: 'CMP',
+        position: 'insideEndTop',
+        color: '#38bdf8',
         fontSize: 10,
       },
     })
@@ -424,7 +441,7 @@ watch(() => props.series, () => {
 
 // Merged in rather than re-rendered: a full `notMerge` setOption would reset the
 // dataZoom window, so every click on the chart would throw away the user's zoom.
-watch(() => props.selectedDate, () => {
+watch(() => [props.selectedDate, props.compareDate], () => {
   if (chart && hasData.value) chart.setOption({ series: [{ markLine: markLine() }] })
 })
 

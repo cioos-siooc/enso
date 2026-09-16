@@ -5,6 +5,7 @@ import type { ColorStop } from '~/utils/colorScale'
 import type { Period } from '~/utils/periods'
 import type { MonthlyRanking } from '~/utils/ranking'
 import { bucketStart } from '~/utils/periods'
+import type { CameraView } from '~/utils/mapView'
 
 /**
  * Turn a failed request into something worth showing the user.
@@ -509,6 +510,21 @@ export const useMainStore = defineStore('main', {
      * value is packed into the WebP rather than baked in as colour.
      */
     scales: {} as Partial<Record<VariableName, ColorScaleRange>>,
+    /**
+     * The second map's bucket in swipe compare, or null when compare is off.
+     *
+     * Only the DATE is compared. Variable, period and colour range are shared
+     * by both maps by construction, so one legend describes both halves and a
+     * colour means the same thing either side of the divider. Snapped to
+     * `period` exactly like `selectedDate`, and re-snapped with it.
+     */
+    compareDate: null as string | null,
+    /**
+     * A camera move someone other than the map asked for — a story step. The
+     * map host watches it and flies there. `seq` makes asking for the same
+     * view twice still a change.
+     */
+    cameraRequest: null as (CameraView & { seq: number }) | null,
   }),
 
   getters: {
@@ -1041,12 +1057,47 @@ export const useMainStore = defineStore('main', {
       this.selectedDate = bucketStart(date, this.period)
     },
 
+    /** Set the compare map's date, snapped the same way. */
+    setCompareDate(date: string) {
+      this.compareDate = bucketStart(date, this.period)
+    },
+
+    /**
+     * Turn swipe compare on or off.
+     *
+     * On, it opens on the same bucket a year earlier — the comparison people
+     * reach for first ("this August against last August"), and one that keeps
+     * the season constant so the difference is the year. Clamped to the start
+     * of coverage, where a year earlier does not exist.
+     */
+    toggleCompare() {
+      if (this.compareDate) {
+        trackEvent('compare_toggled', { on: false, variable: this.variable, period: this.period })
+        this.compareDate = null
+        return
+      }
+      if (!this.selectedDate) return
+      const d = new Date(`${this.selectedDate}T00:00:00Z`)
+      d.setUTCFullYear(d.getUTCFullYear() - 1)
+      let target = d.toISOString().slice(0, 10)
+      const start = this.coverage?.start
+      if (start && target < start) target = start
+      this.setCompareDate(target)
+      trackEvent('compare_toggled', { on: true, variable: this.variable, period: this.period })
+    },
+
+    /** Fly the map somewhere. See `cameraRequest`. */
+    requestCamera(view: CameraView) {
+      this.cameraRequest = { ...view, seq: (this.cameraRequest?.seq ?? 0) + 1 }
+    },
+
     /** Switch averaging window; re-snaps the date and reloads the point series. */
     setPeriod(period: Period) {
       if (period === this.period) return
       trackEvent('period_changed', { period, from: this.period, variable: this.variable, scope: this.scope })
       this.period = period
       if (this.selectedDate) this.setDate(this.selectedDate)
+      if (this.compareDate) this.setCompareDate(this.compareDate)
       // Both series are bucketed by the API, so both are stale. The inactive
       // one is dropped rather than refetched — switching scope reloads it, and
       // fetching a series nobody is looking at is a request for nothing.

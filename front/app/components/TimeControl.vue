@@ -77,6 +77,53 @@
 
     <div class="h-5 w-px bg-accented" />
 
+    <!-- Swipe compare. Only the date is the user's to set on the second map:
+         variable, period and colour range are shared, so the legend describes
+         both halves. The second stepper is sky-tinted to match the chart's CMP
+         line and the right half of the divider. -->
+    <div class="flex items-center gap-1">
+      <UButton
+        icon="i-mdi-compare-horizontal"
+        :label="store.compareDate ? undefined : 'Compare'"
+        :color="store.compareDate ? 'primary' : 'neutral'"
+        :variant="store.compareDate ? 'solid' : 'ghost'"
+        size="xs"
+        :disabled="!store.selectedDate"
+        :title="store.compareDate ? 'Stop comparing' : 'Compare this map with another date, side by side'"
+        @click="store.toggleCompare()"
+      />
+      <template v-if="store.compareDate">
+        <UButton
+          icon="i-mdi-chevron-left"
+          variant="ghost"
+          color="neutral"
+          size="xs"
+          :disabled="compareAtStart"
+          @click="stepCompare(-1)"
+        />
+        <UInput
+          v-model="compareInput"
+          type="date"
+          size="xs"
+          :min="store.coverage?.start ?? undefined"
+          :max="store.coverage?.end ?? undefined"
+          class="w-36"
+          :ui="{ base: 'ring-sky-400/70' }"
+          aria-label="Compare date"
+        />
+        <UButton
+          icon="i-mdi-chevron-right"
+          variant="ghost"
+          color="neutral"
+          size="xs"
+          :disabled="compareAtEnd"
+          @click="stepCompare(1)"
+        />
+      </template>
+    </div>
+
+    <div class="h-5 w-px bg-accented" />
+
     <!-- Playback runs until stopped: the playhead is just repeated store.setDate(),
          so stepping or clicking the chart mid-run relocates it rather than fighting
          it, and reaching the end of coverage stops it. Typing in the date
@@ -201,6 +248,43 @@ function step(buckets: number) {
 function goLatest() {
   if (latest.value) store.setDate(latest.value)
 }
+
+const compareInput = computed({
+  get: () => store.compareDate ?? '',
+  set: (value: string) => { if (value) setCompare(value) },
+})
+
+const compareAtStart = computed(() => store.compareDate === snapped(store.coverage?.start))
+const compareAtEnd = computed(() => store.compareDate === latest.value)
+
+function stepCompare(buckets: number) {
+  if (!store.compareDate) return
+  setCompare(shiftBuckets(store.compareDate, store.period, buckets))
+}
+
+/**
+ * Move the compare map, reporting one event for where it came to rest.
+ *
+ * A trailing debounce, like the colour range: stepping ten weeks back is ten
+ * clicks and one decision.
+ */
+let compareTimer: ReturnType<typeof setTimeout> | null = null
+
+function setCompare(iso: string) {
+  store.setCompareDate(clamp(iso))
+  if (compareTimer) clearTimeout(compareTimer)
+  compareTimer = setTimeout(() => {
+    compareTimer = null
+    trackEvent('compare_date_changed', {
+      date: store.compareDate,
+      mapDate: store.selectedDate,
+      variable: store.variable,
+      period: store.period,
+    })
+  }, 1000)
+}
+
+onBeforeUnmount(() => { if (compareTimer) clearTimeout(compareTimer) })
 
 const canExport = computed(() => (store.activeSeries?.dates.length ?? 0) > 0)
 

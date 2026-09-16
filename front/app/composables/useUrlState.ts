@@ -27,6 +27,8 @@ const KEYS = {
   date: 'd',
   region: 'r',
   point: 'at',
+  /** Swipe compare's second date; absent when compare is off. */
+  compare: 'c',
 } as const
 
 const VARIABLES: VariableName[] = ['sst', 'anom', 'mhw']
@@ -92,6 +94,10 @@ export function useUrlState() {
     // bucket" against a series that has one for the month.
     const target = date ?? store.selectedDate
     if (target) store.setDate(target)
+    // Same snapping, same reason. No `toggleCompare()`: that reports a gesture,
+    // and opening a link is not one.
+    const compare = first(q[KEYS.compare])
+    if (compare && /^\d{4}-\d{2}-\d{2}$/.test(compare)) store.setCompareDate(compare)
 
     // One selection, one fetch. `track: false` on the point for the same reason
     // the patch above skips the actions: this is not a click on the map.
@@ -120,6 +126,7 @@ export function useUrlState() {
       [KEYS.period]: store.period,
     }
     if (store.selectedDate) q[KEYS.date] = store.selectedDate
+    if (store.compareDate) q[KEYS.compare] = store.compareDate
     if (store.scope === 'region') {
       if (store.activeRegion) q[KEYS.region] = store.activeRegion
     }
@@ -148,7 +155,7 @@ export function useUrlState() {
     // `selectedDate` up to ten times a second and `replaceState` is cheap, but
     // `flush: 'post'` keeps it off the critical path of the frame.
     watch(
-      () => [store.variable, store.period, store.selectedDate, store.scope,
+      () => [store.variable, store.period, store.selectedDate, store.compareDate, store.scope,
              store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon],
       sync,
       { flush: 'post' },
