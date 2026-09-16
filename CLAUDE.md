@@ -2117,4 +2117,5 @@ Verified on the baseline labelling (Chromium, per the recipe above):
   (`vue/no-multiple-template-root` in `index.vue`, `no-dynamic-delete` in
   `main.ts`) are pre-existing.
 
-Not built yet: a cron entry for `run`, tests.
+Not built yet: a cron entry for `run`, tests. Ideas deliberately deferred, with their costs and
+constraints, are in [ROADMAP.md](ROADMAP.md) — read it before proposing a feature.

@@ -160,7 +160,8 @@ the **max** category over a week or month (a category's mean is not a category),
 region takes the mean of its daily area means, and `/monthlyRanking` ranks a month by its
 mean daily category.
 
-Full endpoint notes, schema rationale and gotchas: [CLAUDE.md](CLAUDE.md).
+Full endpoint notes, schema rationale and gotchas: [CLAUDE.md](CLAUDE.md). Ideas not yet built,
+with what each would cost: [ROADMAP.md](ROADMAP.md).
 
 > Two conventions in this codebase are load-bearing and fail silently if broken: the
 > longitude roll onto a 0–360 grid, and the north-up→south-up flip of the climatology
