@@ -91,6 +91,7 @@
             :categorical="store.seriesIsCategorical"
             :label="variableLabel"
             @select="store.setDate($event)"
+            @select-compare="setCompareFromChart"
           />
         </div>
         <BaselineNote class="mt-1 shrink-0" />
@@ -146,6 +147,7 @@
 import { useMainStore } from '~/stores/main'
 import { useUrlState } from '~/composables/useUrlState'
 import { useStory } from '~/composables/useStory'
+import { trackEvent } from '~/composables/useAnalytics'
 
 const store = useMainStore()
 
@@ -218,6 +220,18 @@ const periodLabel = computed(
  * percentage as a category.
  */
 const variableLabel = computed(() => store.seriesLabel)
+
+/** A modifier-click on the chart, with compare on. One click is one decision, so no debounce. */
+function setCompareFromChart(date: string) {
+  store.setCompareDate(date)
+  trackEvent('compare_date_changed', {
+    date: store.compareDate,
+    mapDate: store.selectedDate,
+    variable: store.variable,
+    period: store.period,
+    source: 'chart',
+  })
+}
 
 /**
  * A cell as hemispheres, not signed degrees.

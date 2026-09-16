@@ -114,6 +114,7 @@
           class="w-36"
           :ui="{ base: 'ring-sky-400/70' }"
           aria-label="Compare date"
+          title="Or Shift-click the chart"
         />
         <UButton
           icon="i-mdi-chevron-right"

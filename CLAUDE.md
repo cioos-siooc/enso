@@ -1297,6 +1297,11 @@ divider, because two components each deciding where to fly would fight. Framing 
   the host's `onMounted`. Reading it during setup would render the projection buttons
   differently on the server, and a child's `onMounted` runs before its parent's, so the
   map would open on the wrong projection.
+- **Shift-, Ctrl- or Cmd-click on the chart sets the compare date**, while compare is on. All
+  three, because Ctrl-click on a Mac is a right click and never reaches the chart. With
+  compare off the modifier is ignored, so a click never opens a second map. It reports
+  `compare_date_changed` with `source: 'chart'` and no debounce, since one click is one
+  choice.
 - The chart marks the compare bucket with a dashed sky `CMP` line beside `MAP`. Each half's
   date label is dropped when that half is too narrow to hold it.
 

@@ -97,7 +97,7 @@ const props = defineProps<{
 
 const seriesName = computed(() => props.label ?? 'Value')
 
-const emit = defineEmits<{ select: [date: string] }>()
+const emit = defineEmits<{ select: [date: string], selectCompare: [date: string] }>()
 
 // ECharts' default axis ink is #6E7079, which is a mid grey meant for a light
 // theme — against this dashboard's dark pane the ticks and the unit name read as
@@ -396,8 +396,17 @@ function option(): echarts.EChartsOption {
  * with `showSymbol: false` and `large`, so there is nothing for ECharts' own
  * `'click'` event to hit. Converting the raw pixel and snapping to the nearest
  * bucket is what makes anywhere in the plot area a valid target.
+ *
+ * With compare on, a Shift-, Ctrl- or Cmd-click sets the compare date instead.
+ * All three, because Ctrl-click on a Mac is a right click and never arrives
+ * here. With compare off the modifier is ignored: opening a second map is the
+ * time bar's toggle, not a side effect of a click.
  */
-function onZrClick(event: { offsetX?: number, offsetY?: number, event?: { zrX?: number, zrY?: number } }) {
+function onZrClick(event: {
+  offsetX?: number
+  offsetY?: number
+  event?: { zrX?: number, zrY?: number, shiftKey?: boolean, ctrlKey?: boolean, metaKey?: boolean }
+}) {
   if (!chart) return
   const px = event.offsetX ?? event.event?.zrX
   const py = event.offsetY ?? event.event?.zrY
@@ -407,7 +416,13 @@ function onZrClick(event: { offsetX?: number, offsetY?: number, event?: { zrX?: 
   const x = chart.convertFromPixel({ gridIndex: 0 }, pixel)?.[0]
   if (x == null) return
   const date = nearestDate(Number(x))
-  if (date && date !== props.selectedDate) emit('select', date)
+  if (!date) return
+  const native = event.event
+  const modified = native?.shiftKey || native?.ctrlKey || native?.metaKey
+  if (modified && props.compareDate) {
+    if (date !== props.compareDate) emit('selectCompare', date)
+  }
+  else if (date !== props.selectedDate) emit('select', date)
 }
 
 function render() {
