@@ -60,7 +60,7 @@
           <span class="text-2xl font-semibold tabular-nums text-highlighted">{{ row.value }}</span>
           <span v-if="row.unit" class="text-sm text-muted">{{ row.unit }}</span>
         </p>
-        <p class="mt-0.5 truncate text-xs text-dimmed">{{ row.note || ' ' }}</p>
+        <p class="mt-0.5 truncate text-xs text-dimmed">{{ row.note || '\u00a0' }}</p>
       </div>
     </div>
 

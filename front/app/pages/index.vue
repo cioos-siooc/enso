@@ -1,10 +1,10 @@
 <template>
-  <!-- The panel sits beside the map, not over it. Reading numbers is a
-       per-selection question, so the map has to stay clickable while the panel
-       is open — it was a fullscreen modal first, which meant close / click /
-       reopen for every cell. It is on the LEFT because the map's own controls
-       (projection, legend, time bar) grew on the right and below. -->
   <div class="flex h-full min-h-0">
+    <!-- The panel sits beside the map, not over it. Reading numbers is a
+         per-selection question, so the map has to stay clickable while the panel
+         is open — it was a fullscreen modal first, which meant close / click /
+         reopen for every cell. It is on the LEFT because the map's own controls
+         (projection, legend, time bar) grew on the right and below. -->
     <SideDock
       v-if="dockOpen"
       side="left"

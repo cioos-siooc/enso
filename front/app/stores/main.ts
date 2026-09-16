@@ -864,7 +864,11 @@ export const useMainStore = defineStore('main', {
 
     /** Drop the override, back to domain.yml's vmin/vmax. */
     resetScale(variable: VariableName) {
-      delete this.scales[variable]
+      // Rebuilt rather than `delete`d: a new object is also what Pinia's
+      // `activeScale` watchers see as a change.
+      this.scales = Object.fromEntries(
+        Object.entries(this.scales).filter(([key]) => key !== variable),
+      ) as typeof this.scales
       try {
         localStorage.removeItem(scaleKey(variable))
       }
