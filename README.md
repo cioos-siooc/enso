@@ -1,4 +1,4 @@
-# Pacific Sea Surface Temperature
+# Ocean Heat Atlas
 
 Daily sea-surface temperature, anomaly and marine-heatwave category for the Pacific basin,
 from **NOAA Coral Reef Watch**, ingested into ClickHouse and served as an interactive map
