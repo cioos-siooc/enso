@@ -51,6 +51,37 @@ subset:
   nlat: 2500
   nlon: 3800
 
+# A THIRD grid, for the land layers only: NOAA CPC Global Unified (precip, tmax,
+# tmin), 0.5 degree, daily, from NOAA PSL. `land_temp_daily` and
+# `land_precip_daily` index THIS grid — same `gy`/`gx` column names as
+# `sst_daily`, an entirely different meaning. Nothing joins a land table to an
+# ocean one, and nothing should.
+#
+# The Pacific box is NOT redeclared here. `subset` above is the one definition of
+# what is ingested, and it resolves against this grid to gy 60..309 (250 rows)
+# and gx 200..579 (380 cols) — 95,000 cells, of which ~20,878 carry temperature
+# and ~22,952 precipitation. A second nlat/nlon pair would be a second definition
+# of the box that could drift from the first.
+#
+# TWO ORIENTATION FACTS, and they are NOT the ocean's:
+#
+#   1. `lon0: 0.25` because the CPC files are ALREADY 0-360. This is the one
+#      source in the project that needs **no longitude roll** — every other
+#      reader in `shared/fields.py` rolls by half the grid, and copying that
+#      habit here would draw the Pacific over Africa.
+#
+#   2. `lat0: -89.75` is south-up, matching `global` — but the CPC files are
+#      **north-up** (`lat[0] = +89.75`), so they must be FLIPPED at read time,
+#      exactly as the CoralTemp climatology files are. Unflipped, the land layer
+#      puts Siberia in the Southern Ocean and renders perfectly plausibly.
+land:
+  resolution: 0.5
+  # Cell-centre of index 0 on each axis.
+  lat0: -89.75
+  lon0: 0.25
+  nlat: 360  # gy in [0, 359]
+  nlon: 720  # gx in [0, 719]
+
 variables:
   sst:
     long_name: Daily sea surface temperature

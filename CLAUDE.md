@@ -128,6 +128,18 @@ python -m CRW.cli repair-mhw-land [--date]                # re-do the leap days 
 python -m CRW.cli repartition [--table] [--dry-run] [--optimize] [--finish]  # one-off
 ```
 
+**The land pipeline is a second CLI, `python -m CPC.cli`**, because NOAA CPC is a different
+program from Coral Reef Watch and its files are one per **year**, not per date:
+```bash
+python -m CPC.cli init                                    # the two land tables
+python -m CPC.cli fetch    [--year|--start-year|--end-year] [--variable] [--force]
+python -m CPC.cli backfill [--year ...] [--product temp|precip] [--start|--end] [--fresh]
+python -m CPC.cli run      [--recheck-days N]             # current year: fetch + ingest what is new
+python -m CPC.cli scan                                    # year files on disk, per variable
+python -m CPC.cli status                                  # per-status day/row counts, per product
+```
+It has no `render`, no `rollup` and **no prune** — see the land archive section below.
+
 **There are two daily archives and every command covers both by default.** CoralTemp SST
 and the Marine Heatwave category are separate products with separate URLs, separate
 directories, separate tables and separate status bookkeeping — `--product` narrows
@@ -290,6 +302,116 @@ the same reason `render` is: a weekly frame is a max over seven days, so re-rend
 with only the leap day on disk would replace a good seven-day max with a one-day one. Per
 date it fetches the CoralTemp file plus every MHW file the leap day's week and month span,
 re-ingests, re-renders the three `mhw` buckets and rebuilds `region_daily` for that date.
+
+#### The land archive: NOAA CPC Global Unified
+
+**A fourth archive, from a different NOAA program**, added so the dashboard can show what
+an El Niño does *on land* beside what it does to the ocean — a dry Indonesia and northern
+Australia, a wet Peru and Ecuador, a warm winter in western Canada. It is the Climate
+Prediction Center's gauge-and-station analysis, not Coral Reef Watch's, which is why it
+lives in its own package (`process/CPC/`, `python -m CPC.cli`) rather than under `CRW`.
+
+```
+https://downloads.psl.noaa.gov/Datasets/cpc_global_precip/precip.{YYYY}.nc
+https://downloads.psl.noaa.gov/Datasets/cpc_global_temp/{tmax,tmin}.{YYYY}.nc
+```
+
+Public domain, no login. `psl.noaa.gov/thredds/fileServer/Datasets/...` serves
+byte-identical files and is the fallback host.
+
+**ONE NETCDF PER YEAR, not per date**, and that is the structural difference everything
+else follows from. `precip.2015.nc` holds all 365 days as `(time, lat, lon)` float32, ~63 MB;
+`tmax`/`tmin` are ~58–90 MB. So `CPC.cli` takes **years** where `CRW.cli` takes dates,
+`shared.fields.read_land_year` opens a file once and the ingest slices days out of the
+resulting stack, and `run` has **no catch-up watermark**: "what is new" is simply the dates
+in the current year's file that status does not have, so a missed run, a late publication
+and a normal day are one code path with no argument.
+
+**Nothing prunes it.** The whole record from 1985 is ~9.5 GB for all three variables, against
+~153 GB for CoralTemp — so unlike every other archive here it is kept forever. Land history
+therefore stays re-ingestable and re-renderable without a re-download, and there is no
+retention window to reason about on this side at all.
+
+**The current year's file is rewritten in place** as days are appended (`history: Updated
+2026-09-17`), at ~2 days' latency. A past year is immutable — `tmax.2015.nc` was last
+modified in 2020 — and is fetched once.
+
+##### Its two orientation conventions are the opposite of CoralTemp's
+
+Both are applied in `shared/fields.py`, like the ocean's, and `_check_land_axes` verifies
+both against the **file's own `lat`/`lon` variables on every read** rather than trusting
+either. That is exact where the ocean side's `check_orientation()` is heuristic, and it is
+warranted, because these two are easy to get backwards:
+
+1. **Longitude: already 0–360** (`lon 0.25 … 359.75`). This is the one source in the project
+   that must **not** be rolled. Copying the habit every other reader here has would draw the
+   Pacific over Africa.
+2. **Latitude: north-up** (`lat[0] = +89.75`), so it **must** be flipped — the same flip the
+   CoralTemp climatology files get, and the opposite of the CoralTemp dailies.
+
+The grid is `domain.yml`'s **third** block, `land`: 0.5°, 360×720, south-up on the project's
+convention. The Pacific box is **not** redeclared for it — `subset`'s existing bounds resolve
+against this grid to `gy 60..309` × `gx 200..579`, **250×380 = 95,000 cells**, via
+`domain.subset_shape(grid)`. A second `nlat`/`nlon` pair would be a second definition of the
+box that could drift from the first.
+
+Measured over the box: **20,878 cells/day carry temperature and 22,952 carry precipitation.**
+The two are not the same land — Darwin has rainfall and no temperature — which is why there
+are two tables and not one.
+
+##### `land_temp_daily` and `land_precip_daily`
+
+**`gy`/`gx` in these two tables index the LAND grid, not the global 0.05° one.** Same column
+names, entirely different meaning: `gy = 60` is 59.75°S here and 86.975°S in `sst_daily`.
+This is the most likely way for someone to read them wrong. Nothing joins a land table to an
+ocean one and nothing should.
+
+| | |
+|---|---|
+| `land_temp_daily` | `tmax_raw`, `tmin_raw` Int16 at 0.01 °C; `tmean` ALIAS `(tmax_raw + tmin_raw) * 0.005` |
+| `land_precip_daily` | `precip_raw` UInt16 at **0.1 mm** |
+| rows | ~318 M and ~350 M over 1985→, against `sst_daily`'s 113.7 B |
+| ingest cost | ~26 s per year per product, measured; 8,375,939 rows for precip 2015 |
+
+**Both temperature columns are stored and the mean is derived.** An ALIAS costs no storage,
+`tmin` has to be downloaded to compute a mean anyway, and the two questions ENSO actually
+raises on land are a `tmin` one (a warm winter in western Canada) and a `tmax` one (a heat
+extreme) — neither survives the average. Temperature ingests only cells valid in **both**;
+measured, the two masks are byte-identical on every day checked, and a day where they
+diverge is logged rather than half-stored.
+
+**Precip is 0.1 mm in a UInt16, deliberately not 0.01.** At 0.01 mm a UInt16 caps at
+**655.35 mm** against a measured global maximum of **666.69 mm** and a declared `valid_range`
+of 1000 — it would have clipped real values, at exactly the extremes a rainfall map is read
+for. `to_precip_counts` raises on an overflow rather than clipping, for the same reason
+`shared/render.py` clamps rather than wraps.
+
+**Both tables are dense, and a stored 0 is a real reading.** A dry day over Darwin is 0.0 mm
+and belongs in the table. A sparse precip table would save about half the rows (42–56% of
+land cells are wet on a given day, measured) and would buy that by making an absent row mean
+"dry", "outside the gauge network" or "never ingested" indistinguishably — `mhw_daily`'s
+trap, with no `sst_daily` equivalent to LEFT JOIN against for the answer.
+
+**Unlike CoralTemp, `remote_size`/`remote_modified` in `land_*_status` describe the YEAR
+FILE**, not the date's own file. Every date in 2026 shares one pair, and that pair changes
+daily. They answer "is this year worth fetching again", not "was this date revised" — a
+revision inside an unchanged-length year file is invisible to them, which is what
+`run --recheck-days` (default 14) exists for.
+
+##### The download host fails at HTTP 200
+
+`downloads.psl.noaa.gov` served a **497-byte nginx "currently unavailable" page** in place of
+`tmin.2026.nc` during development; the next request for the same URL returned the real 58 MB
+body. `raise_for_status()` does not catch that, and `.part`-and-rename alone would have
+promoted the page to a real filename, where it would have surfaced days later as an
+unreadable NetCDF blaming the ingest. So `CPC/download.py` **validates the body before the
+rename** — HDF5/NetCDF magic bytes, then length against `Content-Length` — retries with a
+backoff, and falls back to the THREDDS host. These files are HDF5 (`\x89HDF`), not classic
+NetCDF.
+
+**Not built yet on the land side:** climatology and anomaly, image rendering and a palette
+(BrBG for precip, plus percent-of-normal), region rollups, `/coverage` gating, and anything
+in `api/` or `front/`. See ROADMAP.md B6.
 
 #### Two baselines, and they are not reconcilable
 
@@ -766,6 +888,25 @@ Entry point `process/CRW/cli.py` (`python -m CRW.cli`). Modules:
 - `imaging.py` — day/week/month × sst/anom/mhw rendering, and the retention window
 - `status.py` — the `ingest_status` table
 - `repartition.py` — the one-off partition-key migration (`CRW.cli repartition`)
+
+**`process/CPC/` is a second package, not a subdirectory of the first** (`python -m CPC.cli`),
+for the land layers. Same module names, same shapes, importing the same `shared/` contract:
+- `config.py` — `YearFile` (a `(variable, year)` pair, not a date), `scan()`, `ARCHIVE_START`
+- `download.py` — a `Product` per variable (`PRECIP`, `TMAX`, `TMIN`); validates the body
+  before the rename, retries, and falls back to a second host
+- `ingest.py` — a `Target` per table (`TEMP_TARGET`, `PRECIP_TARGET`); `ingest_year` walks
+  time indices **inside** a year file rather than walking files
+- `status.py` — a **binding**, not a copy: `CRW/status.py` is already table-parameterised, so
+  the land products import its functions and bind them to `land_temp_status` /
+  `land_precip_status`
+
+The naming is deliberate and worth keeping: CPC is the Climate Prediction Center, a different
+NOAA program, and a CPC product inside a package named for Coral Reef Watch would be the same
+class of misnaming as calling a bioregion an EEZ. Its `run` is also a genuinely different
+shape — yearly files, no watermark — rather than a flag on the ocean one.
+
+Land inserts are **one per year** (~7.6 M rows, about one CoralTemp day), not batched by day:
+a land day is only ~21 k rows, so finer batching would only create parts.
 
 Inserts are batched across days (`--batch`, default **5** — a day is ~7.5 M rows now, not
 OISST's 96 k, so the old default of 30 was a 225 M-row insert).

@@ -386,6 +386,94 @@ DDL: tuple[str, ...] = (
     # same day, so a `run` that lands between the two sees a date as SST-ingested
     # and MHW-pending.
     _STATUS_DDL.format(database=DATABASE, table="mhw_status"),
+    # --- The land layers: NOAA CPC Global Unified -----------------------------
+    #
+    # `gy`/`gx` HERE INDEX THE 0.5-DEGREE LAND GRID, NOT THE GLOBAL 0.05-DEGREE
+    # ONE. Same column names, entirely different meaning — `gy = 60` is 59.75S
+    # in these two tables and 86.975S in `sst_daily`. This is the most likely way
+    # for someone to read these wrong later. Nothing joins a land table to an
+    # ocean one and nothing should: they describe different cells over different
+    # surfaces, and `domain.yml`'s `land` block is the only place the arithmetic
+    # is written down (`lat = -89.75 + gy * 0.5`, mirrored in the ALIASes below).
+    #
+    # TWO TABLES, NOT ONE, because the two products do not share a land mask:
+    # measured over the box, temperature has 20,878 valid cells a day and
+    # precipitation 22,952. One table would need a sentinel on the ~2,000 cells
+    # where they disagree, which is `mhw_daily`'s "absence is ambiguous" trap
+    # with no `sst_daily` equivalent to LEFT JOIN against for the answer.
+    #
+    # BOTH ARE DENSE — every valid cell, every day, wet or dry. A sparse precip
+    # table storing only rain would save about half the rows (42-56% of land
+    # cells are wet on a given day, measured across 2015) and would buy that with
+    # the same ambiguity: a missing row would mean dry, outside the gauge
+    # network, or never ingested. At ~350 M rows against `sst_daily`'s 113.7 B,
+    # there is nothing here worth trading clarity for.
+    f"""
+    CREATE TABLE IF NOT EXISTS {DATABASE}.land_temp_daily
+    (
+        date      Date    CODEC(DoubleDelta, ZSTD(3)),
+        gy        UInt16  CODEC(DoubleDelta, ZSTD(3)),  -- LAND grid, 0..359
+        gx        UInt16  CODEC(DoubleDelta, ZSTD(3)),  -- LAND grid, 0..719
+
+        -- 0.01 degC counts. The source declares valid_range -90..50, so
+        -- -9000..5000, comfortably inside Int16. Unlike `sst_raw` these counts
+        -- are a QUANTISATION rather than the source's own encoding — CPC ships
+        -- float32 — costing ~0.005 degC on an analysis whose real uncertainty is
+        -- how many weather stations were nearby.
+        tmax_raw  Int16   CODEC(ZSTD(3)),
+        tmin_raw  Int16   CODEC(ZSTD(3)),
+
+        tmax      Float32 ALIAS tmax_raw * 0.01,
+        tmin      Float32 ALIAS tmin_raw * 0.01,
+        -- BOTH are stored and the mean is derived, not the other way round. An
+        -- ALIAS costs no storage, tmin has to be downloaded to compute a mean
+        -- anyway, and the two questions ENSO actually raises on land are a tmin
+        -- one (a warm winter in western Canada) and a tmax one (a heat
+        -- extreme) — neither survives the average.
+        tmean     Float32 ALIAS (tmax_raw + tmin_raw) * 0.005,
+        lat       Float32 ALIAS -89.75 + gy * 0.5,
+        lon       Float32 ALIAS 0.25 + gx * 0.5
+    )
+    ENGINE = MergeTree
+    PARTITION BY {DAILY_PARTITION_SQL}
+    ORDER BY (gy, gx, date)
+    """,
+    f"""
+    CREATE TABLE IF NOT EXISTS {DATABASE}.land_precip_daily
+    (
+        date        Date   CODEC(DoubleDelta, ZSTD(3)),
+        gy          UInt16 CODEC(DoubleDelta, ZSTD(3)),  -- LAND grid, 0..359
+        gx          UInt16 CODEC(DoubleDelta, ZSTD(3)),  -- LAND grid, 0..719
+
+        -- 0.1 mm counts in a UInt16, and the scale is deliberately NOT 0.01.
+        -- Rain is non-negative, so UInt16 is the natural type, but at 0.01 mm it
+        -- would cap at 655.35 mm against a measured global maximum of 666.69 mm
+        -- and a declared valid_range of 1000 — i.e. it would clip real values,
+        -- at exactly the extremes a rainfall map is read for. 0.1 mm reaches
+        -- 6553.5 mm and is the precision daily rainfall is reported at anyway.
+        --
+        -- A stored 0 is a REAL READING: a dry day, not a missing one. Cells
+        -- outside the gauge analysis have no row at all.
+        precip_raw  UInt16 CODEC(ZSTD(3)),
+
+        precip      Float32 ALIAS precip_raw * 0.1,
+        lat         Float32 ALIAS -89.75 + gy * 0.5,
+        lon         Float32 ALIAS 0.25 + gx * 0.5
+    )
+    ENGINE = MergeTree
+    PARTITION BY {DAILY_PARTITION_SQL}
+    ORDER BY (gy, gx, date)
+    """,
+    # One per land product, same shape and same reasoning as the two above.
+    #
+    # One difference of substance, and it needs saying because the column names
+    # do not change: `remote_size` / `remote_modified` describe the YEAR FILE a
+    # date came out of, not the date's own file — CPC ships one NetCDF per year.
+    # So every date in 2026 shares one pair of values, and that pair changes
+    # every day as the current year's file is rewritten in place. It is what
+    # says a year is worth fetching again, not what says a date was revised.
+    _STATUS_DDL.format(database=DATABASE, table="land_temp_status"),
+    _STATUS_DDL.format(database=DATABASE, table="land_precip_status"),
 )
 
 # Status values used by process/CRW. ReplacingMergeTree keyed on `date` means

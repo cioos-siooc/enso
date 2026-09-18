@@ -17,6 +17,12 @@ which is why they are asserted here rather than trusted at each call site:
 
 Everything returned is already subset to `domain.yml`'s box, so row 0 is the
 box's southern edge and column 0 its western edge.
+
+**The NOAA CPC land archive is read here too, and its conventions are not these
+two.** It is already 0-360 (so it must NOT be rolled) and it is north-up (so it
+must be flipped), on its own 0.5-degree grid. See the land section at the foot of
+this module; `_check_land_axes` verifies both against the file's own coordinates
+rather than trusting either.
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ from pathlib import Path
 import netCDF4
 import numpy as np
 
-from .domain import global_grid, subset, variable
+from .domain import global_grid, land_grid, subset, subset_shape, variable
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +52,13 @@ CLIM_DIR = Path(os.environ.get("CRW_CLIM_DIR", "/opt/data/climatology"))
 # 7,477,923 ocean cells in the Pacific box — but not the lifetime: like the
 # dailies it is pruned to the retention window.
 MHW_DIR = Path(os.environ.get("CRW_MHW_DIR", "/opt/data/MHW"))
+# The land archive: NOAA CPC Global Unified, from NOAA PSL. A FOURTH archive, and
+# the only one that is **one file per YEAR** rather than per date — `precip.2015.nc`
+# holds all 365 days. It also has the opposite lifetime to the dailies: nothing
+# prunes it. The whole record from 1985 is ~9.5 GB for all three variables, so it
+# is kept forever like the climatology, which is what keeps land history
+# re-ingestable and re-renderable without a re-download.
+LAND_DIR = Path(os.environ.get("CPC_NC_DIR", "/opt/data/land"))
 
 # coraltemp_v3.1_19850101.nc
 DAILY_RE = re.compile(r"^coraltemp_v3\.1_(?P<date>\d{8})\.nc$")
@@ -53,6 +66,9 @@ DAILY_RE = re.compile(r"^coraltemp_v3\.1_(?P<date>\d{8})\.nc$")
 MHW_RE = re.compile(r"^noaa-crw_mhw_v1\.0\.1_category_(?P<date>\d{8})\.nc$")
 # ct5km_v3.1_clim-sst-mean-daily-window-01day-01grid-source19912020_day0101.nc
 CLIM_GLOB = "ct5km_v3.1_clim-sst-mean-daily-window-01day-01grid-source*_day{mmdd:04d}.nc"
+# precip.2015.nc / tmax.2015.nc / tmin.2015.nc — a YEAR, not a date.
+LAND_RE = re.compile(r"^(?P<variable>precip|tmax|tmin)\.(?P<year>\d{4})\.nc$")
+LAND_VARIABLES = ("precip", "tmax", "tmin")
 
 VARIABLE_NAME = "analysed_sst"
 MHW_VARIABLE_NAME = "heatwave_category"
@@ -344,3 +360,199 @@ def anomaly(daily_raw: np.ndarray, clim_raw: np.ndarray) -> np.ndarray:
 def no_clim_mask(daily_raw: np.ndarray, clim_raw: np.ndarray) -> np.ndarray:
     """Ocean cells with SST but no climatology — anomaly undefined, not land."""
     return valid_mask(daily_raw) & ~valid_mask(clim_raw)
+
+
+# --- The land archive: NOAA CPC Global Unified -------------------------------
+#
+# A different NOAA program (Climate Prediction Center, not Coral Reef Watch), a
+# different grid (0.5 degree, `domain.yml`'s `land` block) and a different file
+# shape (one NetCDF per YEAR, `(time, lat, lon)`). The reader lives here anyway,
+# because this module exists to be the ONE place a grid convention is applied,
+# and this source has two of its own:
+#
+#   1. It is **already 0-360** (`lon 0.25 .. 359.75`), so it is the one source in
+#      the project that must NOT be rolled. Rolling it by half the grid — the
+#      habit every other reader here has — would draw the Pacific over Africa.
+#
+#   2. It is **north-up** (`lat[0] = +89.75`), so it must be flipped, exactly as
+#      the CoralTemp climatology files are.
+#
+# Neither failure is loud. `_check_land_axes` therefore verifies both against the
+# file's own coordinate variables on every read, which is exact rather than
+# heuristic: if the rows and columns we slice are not the degrees `domain.yml`
+# says they are, nothing downstream can tell.
+
+# What the files use for "no data here" — ocean, and land outside the gauge
+# network. Not a `_FillValue`, so netCDF4's own masking is not what finds it.
+LAND_MISSING = -9.96921e36
+# Anything at or below this is the missing sentinel. A generous threshold rather
+# than an equality test: the value is a float32 the file declares to 6 digits,
+# and a real temperature never approaches -1e30.
+LAND_MISSING_FLOOR = -1e30
+
+# Storage quantisation, and the two scales are not the same choice.
+#
+# Temperature: 0.01 degC into Int16. `valid_range` is -90..50, so -9000..5000,
+# comfortably inside the type. Unlike SST these counts are a QUANTISATION rather
+# than the source's own encoding — CPC ships float32 — costing ~0.005 degC on an
+# analysis whose real uncertainty is station density.
+#
+# Precipitation: 0.1 mm into UInt16, deliberately NOT 0.01. Rain is non-negative,
+# and 0.01 mm would cap a UInt16 at 655.35 mm against a measured global maximum
+# of 666.69 mm and a declared `valid_range` of 1000 — i.e. it would clip real
+# values, at exactly the extremes a rainfall map is read for. 0.1 mm reaches
+# 6553.5 mm and is the precision daily rainfall is reported at anyway.
+LAND_TEMP_SCALE = 0.01
+LAND_PRECIP_SCALE = 0.1
+LAND_PRECIP_MAX_COUNT = 65535
+
+
+def land_path(variable_name: str, year: int, nc_dir: Path | None = None) -> Path:
+    """The year file for one land variable, e.g. `tmax.2015.nc`."""
+    if variable_name not in LAND_VARIABLES:
+        raise ValueError(
+            f"unknown land variable {variable_name!r}; known: {LAND_VARIABLES}"
+        )
+    return (nc_dir or LAND_DIR) / f"{variable_name}.{year}.nc"
+
+
+def _land_file_slices() -> tuple[slice, slice]:
+    """The box as a slice into a NORTH-UP file's `(lat, lon)` axes.
+
+    Sliced on the way off disk rather than after: a year of the full grid is
+    ~378 MB of float32, the box is ~138 MB, and nothing needs the rest.
+    """
+    grid = land_grid()
+    gy0, gy1 = subset().gy_range(grid)
+    gx0, gx1 = subset().gx_range(grid)
+    # Project row `gy` counts north from the south pole; the file's rows count
+    # south from the north pole. This is the flip, expressed as an index.
+    return slice(grid.nlat - 1 - gy1, grid.nlat - gy0), slice(gx0, gx1 + 1)
+
+
+def _check_land_axes(ds) -> None:
+    """Verify the file's own lat/lon against `domain.yml`'s `land` grid.
+
+    The exact form of the orientation guard the ocean side gets heuristically
+    from `check_orientation()`. Both of this source's conventions are checked at
+    once: if the file were south-up, or on a -180..180 longitude frame, the
+    degrees at the sliced indices would not be the degrees the grid declares, and
+    every downstream consumer would be told the wrong cell's value with complete
+    confidence.
+    """
+    grid = land_grid()
+    lat = np.asarray(ds.variables["lat"][:], dtype="float64")
+    lon = np.asarray(ds.variables["lon"][:], dtype="float64")
+    if lat.shape != (grid.nlat,) or lon.shape != (grid.nlon,):
+        raise ValueError(
+            f"land file has a {lat.size}x{lon.size} grid, domain.yml's `land` "
+            f"declares {grid.nlat}x{grid.nlon}"
+        )
+    ys, xs = _land_file_slices()
+    gy0, gy1 = subset().gy_range(grid)
+    gx0, gx1 = subset().gx_range(grid)
+
+    # [::-1] is the flip itself: applied, the file's rows must read as the
+    # project's south-up latitudes.
+    want_lat = grid.lat(np.arange(gy0, gy1 + 1))
+    got_lat = lat[ys][::-1]
+    if not np.allclose(got_lat, want_lat, atol=1e-6):
+        raise ValueError(
+            "land file latitudes do not match the `land` grid after the flip "
+            f"(got {got_lat[0]:.3f}..{got_lat[-1]:.3f}, expected "
+            f"{want_lat[0]:.3f}..{want_lat[-1]:.3f}). The file is expected to be "
+            "north-up; see shared/fields.py."
+        )
+    # No roll, and this is what says so. CPC ships 0-360 already.
+    want_lon = grid.lon(np.arange(gx0, gx1 + 1))
+    got_lon = lon[xs]
+    if not np.allclose(got_lon, want_lon, atol=1e-6):
+        raise ValueError(
+            "land file longitudes do not match the `land` grid "
+            f"(got {got_lon[0]:.3f}..{got_lon[-1]:.3f}, expected "
+            f"{want_lon[0]:.3f}..{want_lon[-1]:.3f}). CPC files are already "
+            "0-360 and must NOT be rolled; see shared/fields.py."
+        )
+
+
+def read_land_year(
+    variable_name: str, year: int, nc_dir: Path | None = None
+) -> tuple[list[dt.date], np.ndarray]:
+    """One year of a land variable over the box: `(dates, stack)`.
+
+    `stack` is `(ntime, 250, 380)` float32 in the source's own units — degC or
+    mm — south-up and unrolled, with `LAND_MISSING` left visible rather than
+    masked. Quantisation into storage counts happens at ingest.
+
+    **Per year, not per date, and deliberately.** These are 60-80 MB HDF5 files
+    holding every day of a year; opening one per date would be ~365 opens of the
+    same file to read a 250x380 slice out of each.
+
+    `dates` is as long as `stack`'s first axis and comes from the file's own
+    `time`, so a partly-written current-year file — which is the normal state of
+    `precip.2026.nc` — reports exactly the days it holds.
+    """
+    path = land_path(variable_name, year, nc_dir)
+    ys, xs = _land_file_slices()
+    with netCDF4.Dataset(path) as ds:
+        _check_land_axes(ds)
+        time = ds.variables["time"]
+        stamps = netCDF4.num2date(
+            time[:], time.units, only_use_cftime_datetimes=False, only_use_python_datetimes=True
+        )
+        dates = [dt.date(t.year, t.month, t.day) for t in stamps]
+
+        var = ds.variables[variable_name]
+        var.set_auto_maskandscale(False)
+        stack = np.asarray(var[:, ys, xs], dtype="float32")
+
+    # The flip. See `_land_file_slices`.
+    stack = stack[:, ::-1, :]
+
+    want = subset_shape(land_grid())
+    if stack.shape[1:] != want:
+        raise ValueError(f"{path.name}: box came out {stack.shape[1:]}, expected {want}")
+    if len(dates) != stack.shape[0]:
+        raise ValueError(f"{path.name}: {len(dates)} timestamps for {stack.shape[0]} days")
+    return dates, stack
+
+
+def land_valid_mask(raw: np.ndarray) -> np.ndarray:
+    """Cells that carry a reading.
+
+    **Zero is a reading, not a gap**, which is the easiest thing to get wrong
+    here: a dry day over Darwin is 0.0 mm and belongs in the table. Only the
+    missing sentinel and NaN are absent.
+    """
+    return np.isfinite(raw) & (raw > LAND_MISSING_FLOOR)
+
+
+def to_temp_counts(celsius: np.ndarray) -> np.ndarray:
+    """degC -> the Int16 counts `land_temp_daily` stores. See `LAND_TEMP_SCALE`."""
+    counts = np.rint(np.asarray(celsius, dtype="float64") / LAND_TEMP_SCALE)
+    if counts.size and (counts.min() < -32768 or counts.max() > 32767):
+        raise ValueError(
+            f"temperature {counts.min() * LAND_TEMP_SCALE:.2f}.."
+            f"{counts.max() * LAND_TEMP_SCALE:.2f} degC does not fit Int16 at "
+            f"{LAND_TEMP_SCALE} degC — the source declares valid_range -90..50"
+        )
+    return counts.astype("int16")
+
+
+def to_precip_counts(mm: np.ndarray) -> np.ndarray:
+    """mm -> the UInt16 counts `land_precip_daily` stores.
+
+    Raises rather than clipping on an overflow, for the reason
+    `shared/render.py` clamps rather than wraps: a silently wrapped 6600 mm would
+    come back as a drizzle, and the extremes are what a rainfall layer is read
+    for. At 0.1 mm the ceiling is 6553.5 mm against a measured global maximum of
+    666.69 mm, so this should never fire — and if it does, it is news.
+    """
+    counts = np.rint(np.asarray(mm, dtype="float64") / LAND_PRECIP_SCALE)
+    if counts.size and (counts.min() < 0 or counts.max() > LAND_PRECIP_MAX_COUNT):
+        raise ValueError(
+            f"precipitation {counts.min() * LAND_PRECIP_SCALE:.1f}.."
+            f"{counts.max() * LAND_PRECIP_SCALE:.1f} mm does not fit UInt16 at "
+            f"{LAND_PRECIP_SCALE} mm"
+        )
+    return counts.astype("uint16")

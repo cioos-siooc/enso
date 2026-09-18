@@ -406,6 +406,31 @@ def subset() -> Subset:
 
 
 @functools.lru_cache(maxsize=1)
+def land_grid() -> GlobalGrid:
+    """The 0.5-degree CPC grid the land tables index.
+
+    A `GlobalGrid` like `global_grid()` and deliberately the same type: the
+    arithmetic is identical, only the resolution and origin differ. What differs
+    is the *source* convention — CPC files are north-up and already 0-360, so the
+    reader flips and does not roll. See `domain.yml`'s `land` block.
+    """
+    return GlobalGrid(**_raw()["land"])
+
+
+def subset_shape(grid: GlobalGrid) -> tuple[int, int]:
+    """``(nlat, nlon)`` the configured box covers on `grid`.
+
+    Derived rather than declared, so the box has one definition. `subset`'s own
+    `nlat`/`nlon` are the answer for `global_grid()` (2500 x 3800) and are kept
+    there because they are load-bearing in the image bounds; this is what gives
+    the same box's shape on any other grid — 250 x 380 on `land_grid()`.
+    """
+    gy0, gy1 = subset().gy_range(grid)
+    gx0, gx1 = subset().gx_range(grid)
+    return gy1 - gy0 + 1, gx1 - gx0 + 1
+
+
+@functools.lru_cache(maxsize=1)
 def variables() -> dict[str, Variable]:
     out = {}
     for name, cfg in _raw()["variables"].items():

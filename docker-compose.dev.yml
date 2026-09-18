@@ -106,6 +106,8 @@ services:
       - OISST_IMAGE_DIR=${OISST_IMAGE_DIR:-/opt/data/images}
       - CRW_CLIM_DIR=${CRW_CLIM_DIR:-/opt/data/climatology}
       - CRW_MHW_DIR=${CRW_MHW_DIR:-/opt/data/MHW}
+      # The NOAA CPC land archive: year files, kept forever (no prune).
+      - CPC_NC_DIR=${CPC_NC_DIR:-/opt/data/land}
       # Override any host-IP values from .env.dev with the compose service name
       - CH_HOST=db-ch
       - CH_PORT=8123

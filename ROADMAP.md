@@ -101,6 +101,25 @@ IRI/CPC probabilistic ENSO forecast, or the NMME plume.
 From GODAS, ORAS5 or Argo gridded products; for example, the 20 °C isotherm depth.
 - **Why:** ENSO starts below the surface, before SST shows it. This is also the only 3D view the science supports (see D2).
 
+### B6. Land temperature and precipitation — **download and ingest are built** (M–L)
+Daily land temperature and rainfall over the same years as the ocean layers, to show what an El Niño does on land: a dry Indonesia and northern Australia, a wet coast in Peru and Ecuador, and a warm winter in western Canada.
+
+**Built (2026-09-18):** the `process/CPC/` package (`python -m CPC.cli`), `domain.yml`'s `land` grid, the land reader in `shared/fields.py`, and `land_temp_daily` / `land_precip_daily` with their status tables. See CLAUDE.md's *The land archive* section for what was measured and why each choice was made. **Nothing is rendered or served yet** — that is the list under *Still to do* below.
+
+- **Source: NOAA CPC Global Unified**, from NOAA PSL. precip, tmax and tmin on a 0.5° grid, one NetCDF **per year**, public domain, no login, ~2 days behind. Over the box it is 250×380 cells, of which 20,878 carry temperature and 22,952 precipitation.
+- **Decisions taken, so they are not relitigated:** both `tmax` and `tmin` are stored with `tmean` as a zero-storage ALIAS; two tables rather than one, because the two products do not share a land mask; every year file is **kept on disk** (~9.5 GB for the whole record), so there is no retention window on this side and history stays re-renderable; the archive starts **1985**, matching CoralTemp, so `/coverage` reports one date range. CPC itself reaches back to **1979**, which would buy the 1982/83 super El Niño the ocean layers cannot show — deliberately left on the table, and it is a backfill plus a presentation decision, not new code.
+- **Rejected sources:** *ERA5-Land* (0.1°, needs a Copernicus account and request queue, ~5 days behind, ~25× the cells). It is the upgrade if 0.5° looks too coarse beside the 0.05° ocean. *CHIRPS* (precip on exactly the CoralTemp grid, but only 50°S–50°N, which loses BC and Alaska, and files are revised ~3 weeks later). *IMERG* (starts 1998/2000).
+- **Still to do:**
+  - A land climatology (1991–2020) and the `anom` counterpart, plus its `domain.yml` `baseline` block. **Cheap here**, unlike the ocean's: every year file stays on disk, so it is computable from the tables or the files at will.
+  - Image rendering and encoding, a land grid tier in `shared/render.py`, and `/image` support.
+  - Region rollups, `/coverage` gating, the API and the frontend toggle.
+- **Watch:**
+  - CPC is built from rain gauges and weather stations. Where stations are sparse (interior New Guinea, Borneo, the Amazon), it is less reliable.
+  - Show anomalies, monthly by default. A daily rainfall anomaly is mostly noise; the ENSO signal is seasonal.
+  - Precip needs its own palette (e.g. BrBG), and probably a percent-of-normal option, since rainfall is skewed.
+  - The box (100°E–70°W) misses the famous links outside the Pacific: India, southern and east Africa, eastern Brazil. Widening for land alone costs little, but then the land layer would reach past the ocean image. That is a UX decision.
+- **Check when built:** DJF 1997/98 and 2015/16 rainfall anomalies should show a dry Indonesia and northern Australia, and a wet Peru, Ecuador and US Gulf coast.
+
 ---
 
 ## C. Coverage

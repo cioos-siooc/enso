@@ -12,7 +12,7 @@
           <img src="/cioospacific-logo.svg" alt="CIOOS Pacific" class="h-6 w-auto md:h-8" >
         </a>
         <div class="min-w-0">
-          <h1 class="truncate text-sm font-semibold leading-tight">Pacific Sea Surface Temperature</h1>
+          <h1 class="truncate text-sm font-semibold leading-tight">Ocean Heat Atlas</h1>
           <!-- The source line is reference, not orientation; a phone header has
                room for the title and the two buttons and nothing else. -->
           <p class="hidden text-xs leading-tight text-muted md:block">
