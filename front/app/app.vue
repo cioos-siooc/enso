@@ -12,7 +12,7 @@
           <img src="/cioospacific-logo.svg" alt="CIOOS Pacific" class="h-8 w-auto" >
         </a>
         <div>
-          <h1 class="text-sm font-semibold leading-tight">Pacific Sea Surface Temperature</h1>
+          <h1 class="text-sm font-semibold leading-tight">Ocean Heat Atlas</h1>
           <p class="text-xs text-muted leading-tight">
             NOAA Coral Reef Watch CoralTemp v3.1 &middot; daily &middot; 0.05&deg;
             <!-- The years come from the variable's own declaration, not from a
