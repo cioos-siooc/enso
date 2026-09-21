@@ -4,8 +4,10 @@ import { useApi } from '~/composables/useApi'
 import type { ColorStop } from '~/utils/colorScale'
 import type { Period } from '~/utils/periods'
 import type { MonthlyRanking } from '~/utils/ranking'
-import { bucketStart } from '~/utils/periods'
+import { bucketEnd, bucketStart } from '~/utils/periods'
 import type { CameraView } from '~/utils/mapView'
+import type { LandCoverage, LandMode, LandSource, LandVariableName } from '~/utils/land'
+import { landLayerName, landUnavailableReason } from '~/utils/land'
 
 /**
  * Turn a failed request into something worth showing the user.
@@ -32,6 +34,14 @@ function requestErrorMessage(error: unknown, subject: string): string {
  * changes how it is coloured, ranged and formatted throughout.
  */
 export type VariableName = 'sst' | 'anom' | 'mhw'
+
+/**
+ * Anything with a raster and a colour scale: an ocean variable or a land
+ * overlay layer. The scale machinery — ranges, presets, stops, persistence —
+ * takes this, because it works the same for both; the chart, stats and
+ * rankings take `VariableName`, because land has none of them.
+ */
+export type LayerName = VariableName | LandVariableName
 
 /**
  * Whether the chart and the numbers panel are reading a clicked cell or a named
@@ -62,6 +72,9 @@ export interface View {
   point?: { lat: number, lon: number }
   /** Swipe compare's second date; `null` turns compare off. */
   compareDate?: string | null
+  /** The land overlay; `null` turns it off. */
+  landLayer?: LandSource | null
+  landMode?: LandMode
   camera?: CameraView
 }
 
@@ -71,6 +84,8 @@ export interface ColorScaleRange { vmin: number, vmax: number }
 export interface DomainMeta {
   subset: { name: string, lat: [number, number], lon: [number, number], shape: [number, number], resolution: number }
   imageBounds: { west: number, south: number, east: number, north: number }
+  /** The land frames' corners: global, just inside -180..180 and 60S..85N, on the ocean frame's pixel grid. */
+  landImageBounds: { west: number, south: number, east: number, north: number }
   variables: Record<string, {
     longName: string
     shortName: string
@@ -80,6 +95,20 @@ export interface DomainMeta {
     vmax: number
     colormap: string | null
     derived: boolean
+    /** `global` for the ocean, `land` for the overlay's six layers. */
+    grid: 'global' | 'land'
+    /** The CPC variable a land layer reads, or null for the ocean. */
+    source: string | null
+    /** The periods this layer exists at. The rainfall ratio is weekly/monthly. */
+    periods: Period[]
+    /**
+     * How to LABEL a value where that differs from the number. `log2_percent`
+     * is the rainfall ratio: stored as log2 so a halving and a doubling are
+     * equidistant, printed as percent of normal. See `utils/land.ts`.
+     */
+    display: 'log2_percent' | null
+    /** What the sentinel grey means on this variable, for the legend. */
+    noValueLabel: string | null
     /**
      * What this variable's value is measured AGAINST, or null where that is not
      * a question — `sst` is an absolute temperature and has none.
@@ -236,6 +265,11 @@ export interface Coverage {
    * second-guesses it.
    */
   mhw: { rows: number, days: number, start: string | null, end: string | null, complete: boolean } | null
+  /**
+   * The land overlay: each product's dates and each layer's readiness. Null when
+   * the land tables do not exist on this server, which disables the control.
+   */
+  land?: LandCoverage | null
 }
 
 /**
@@ -364,7 +398,7 @@ let regionRequestSeq = 0
 const DEFAULT_REGION = 'nino34'
 
 /** localStorage key a variable's display range is remembered under. */
-const scaleKey = (variable: VariableName) => `enso.scale.${variable}`
+const scaleKey = (variable: LayerName) => `enso.scale.${variable}`
 
 /**
  * The step the *control* moves the range in — deliberately not the encoding's.
@@ -393,7 +427,7 @@ export function quantise(value: number, step: number): number {
 function resolveScale(
   domain: DomainMeta | null,
   override: ColorScaleRange | undefined,
-  variable: VariableName,
+  variable: LayerName,
 ): ColorScaleRange {
   if (override) return override
   const meta = domain?.variables?.[variable]
@@ -405,7 +439,7 @@ function resolveScale(
  * stepping over a sentinel where there is one so a user's vmin can never land
  * on the grey no-climatology entry and overwrite it with a scale colour.
  */
-function scaleBounds(domain: DomainMeta | null, variable: VariableName): ColorScaleRange {
+function scaleBounds(domain: DomainMeta | null, variable: LayerName): ColorScaleRange {
   const enc = domain?.variables?.[variable]?.encoding
   if (!enc) return { vmin: 0, vmax: 1 }
   const step = rangeStep(enc)
@@ -423,7 +457,7 @@ function scaleBounds(domain: DomainMeta | null, variable: VariableName): ColorSc
 }
 
 /** The control's step for a variable, or a safe default before /domain lands. */
-function stepFor(domain: DomainMeta | null, variable: VariableName): number {
+function stepFor(domain: DomainMeta | null, variable: LayerName): number {
   const enc = domain?.variables?.[variable]?.encoding
   return enc ? rangeStep(enc) : 0.1
 }
@@ -529,7 +563,7 @@ export const useMainStore = defineStore('main', {
      * the map without refetching a single frame. That is the whole reason the
      * value is packed into the WebP rather than baked in as colour.
      */
-    scales: {} as Partial<Record<VariableName, ColorScaleRange>>,
+    scales: {} as Partial<Record<LayerName, ColorScaleRange>>,
     /**
      * The second map's bucket in swipe compare, or null when compare is off.
      *
@@ -539,6 +573,21 @@ export const useMainStore = defineStore('main', {
      * `period` exactly like `selectedDate`, and re-snapped with it.
      */
     compareDate: null as string | null,
+    /**
+     * The land overlay: which CPC variable, or null for none.
+     *
+     * NOT a fourth value of `variable`. It is drawn over whichever ocean
+     * variable is showing, with its own legend, and the chart, stats and
+     * rankings stay ocean — so El Nino's ocean anomaly and its land response
+     * can be on one map at once. Changing it fetches nothing but the frame.
+     */
+    landLayer: null as LandSource | null,
+    /**
+     * The land layer's own Value | Anomaly choice, independent of the ocean
+     * toggle. Opens on `anomaly`, for the same reason the ocean opens on `anom`:
+     * how far from normal is the question the dashboard exists for.
+     */
+    landMode: 'anomaly' as LandMode,
     /**
      * A camera move someone other than the map asked for — a story step. The
      * map host watches it and flies there. `seq` makes asking for the same
@@ -555,7 +604,7 @@ export const useMainStore = defineStore('main', {
 
   getters: {
     /** The range in force for a variable: the override, else domain.yml's. */
-    scaleFor: state => (variable: VariableName): ColorScaleRange =>
+    scaleFor: state => (variable: LayerName): ColorScaleRange =>
       resolveScale(state.domain, state.scales[variable], variable),
 
     /** The active variable's range. Watch this to repaint. */
@@ -571,7 +620,7 @@ export const useMainStore = defineStore('main', {
      * defined in exactly one place — matplotlib, server-side. Nothing here
      * evaluates a colormap.
      */
-    stopsFor: state => (variable: VariableName): ColorStop[] =>
+    stopsFor: state => (variable: LayerName): ColorStop[] =>
       rescaleStops(
         state.domain?.colorStops?.[variable] ?? [],
         resolveScale(state.domain, state.scales[variable], variable),
@@ -583,6 +632,38 @@ export const useMainStore = defineStore('main', {
       resolveScale(state.domain, state.scales[state.variable], state.variable),
       state.domain?.variables?.[state.variable]?.categorical,
     ),
+
+    /** The land overlay's layer name, or null when the overlay is off. */
+    landVariable: (state): LandVariableName | null =>
+      state.landLayer ? landLayerName(state.landLayer, state.landMode) : null,
+
+    /**
+     * Why the land layer cannot be drawn on a bucket, or null if it can.
+     *
+     * Takes the date so the swipe-compare map can ask about its own. When this
+     * is non-null the map REMOVES the land layer rather than leaving it on its
+     * last frame — see `landUnavailableReason` — and the legend prints it.
+     */
+    landReasonAt: state => (date: string | null): string | null => {
+      if (!state.landLayer) return null
+      const layer = landLayerName(state.landLayer, state.landMode)
+      if (!date) return 'No date selected'
+      return landUnavailableReason(
+        layer,
+        state.domain?.variables?.[layer],
+        state.coverage?.land,
+        state.period,
+        date,
+        bucketEnd(date, state.period),
+      )
+    },
+
+    /** Whether a land choice is on offer at all (for the control's buttons). */
+    landModeReady: state => (source: LandSource, mode: LandMode): boolean => {
+      const land = state.coverage?.land
+      if (!land) return false
+      return land.layers[landLayerName(source, mode)] !== false
+    },
 
     /**
      * Whether a variable can be offered at all, given what is loaded.
@@ -643,7 +724,7 @@ export const useMainStore = defineStore('main', {
       state.scope === 'region' ? state.regionError : state.pointError,
 
     /** Whether a variable is an ordinal class rather than a measurement. */
-    isCategorical: state => (variable: VariableName): boolean =>
+    isCategorical: state => (variable: LayerName): boolean =>
       state.domain?.variables?.[variable]?.categorical ?? false,
 
     /**
@@ -725,7 +806,7 @@ export const useMainStore = defineStore('main', {
      * NOT share a baseline, and three components each fetching their own would
      * be three chances to print the other variable's years.
      */
-    baselineFor: state => (variable: VariableName) =>
+    baselineFor: state => (variable: LayerName) =>
       state.domain?.variables?.[variable]?.baseline ?? null,
 
     /** The baseline of the variable currently on screen. */
@@ -755,7 +836,7 @@ export const useMainStore = defineStore('main', {
      * chart tooltip, the legend title and the ranking rows all used to hard-code
      * the degree sign.
      */
-    unitLabelFor: state => (variable: VariableName): string =>
+    unitLabelFor: state => (variable: LayerName): string =>
       state.domain?.variables?.[variable]?.units === 'degC' ? '\u00B0C' : '',
 
     activeUnitLabel: state =>
@@ -771,7 +852,7 @@ export const useMainStore = defineStore('main', {
      * display range. One without spends all 256 entries on the display range,
      * which is where they are useful, so `sst`'s does follow.
      */
-    colorRangeFor: state => (variable: VariableName): [number, number] => {
+    colorRangeFor: state => (variable: LayerName): [number, number] => {
       const meta = state.domain?.variables?.[variable]
       const enc = meta?.encoding
       if (!enc) return [0, 1]
@@ -790,7 +871,7 @@ export const useMainStore = defineStore('main', {
      * user's vmin can never land on the grey no-climatology entry and overwrite
      * it with a scale colour.
      */
-    scaleBoundsFor: state => (variable: VariableName): ColorScaleRange =>
+    scaleBoundsFor: state => (variable: LayerName): ColorScaleRange =>
       scaleBounds(state.domain, variable),
 
     /**
@@ -801,14 +882,14 @@ export const useMainStore = defineStore('main', {
      * colour stops and `limits` are already served this way to avoid. Empty for
      * a categorical variable.
      */
-    presetsFor: state => (variable: VariableName): Array<{ label: string, vmin: number, vmax: number }> =>
+    presetsFor: state => (variable: LayerName): Array<{ label: string, vmin: number, vmax: number }> =>
       state.domain?.variables?.[variable]?.presets ?? [],
 
     /** The increment the range control moves in. See `rangeStep`. */
-    scaleStepFor: state => (variable: VariableName): number => stepFor(state.domain, variable),
+    scaleStepFor: state => (variable: LayerName): number => stepFor(state.domain, variable),
 
     /** True when the variable is showing something other than domain.yml's range. */
-    scaleIsCustom: state => (variable: VariableName): boolean => state.scales[variable] !== undefined,
+    scaleIsCustom: state => (variable: LayerName): boolean => state.scales[variable] !== undefined,
   },
 
   actions: {
@@ -873,7 +954,7 @@ export const useMainStore = defineStore('main', {
      * All clamping lives here rather than in the control, so a value typed into
      * the number field and one dragged on the slider are constrained the same.
      */
-    setScale(variable: VariableName, vmin: number, vmax: number) {
+    setScale(variable: LayerName, vmin: number, vmax: number) {
       const meta = this.domain?.variables?.[variable]
       const enc = meta?.encoding
       if (!enc || !Number.isFinite(vmin) || !Number.isFinite(vmax)) return
@@ -905,7 +986,7 @@ export const useMainStore = defineStore('main', {
     },
 
     /** Drop the override, back to domain.yml's vmin/vmax. */
-    resetScale(variable: VariableName) {
+    resetScale(variable: LayerName) {
       // Rebuilt rather than `delete`d: a new object is also what Pinia's
       // `activeScale` watchers see as a change.
       this.scales = Object.fromEntries(
@@ -925,7 +1006,7 @@ export const useMainStore = defineStore('main', {
      * written.
      */
     loadScales() {
-      for (const variable of Object.keys(this.domain?.variables ?? {}) as VariableName[]) {
+      for (const variable of Object.keys(this.domain?.variables ?? {}) as LayerName[]) {
         try {
           const raw = localStorage.getItem(scaleKey(variable))
           if (!raw) continue
@@ -1150,6 +1231,10 @@ export const useMainStore = defineStore('main', {
       if (view.compareDate === null) this.compareDate = null
       else if (view.compareDate) this.setCompareDate(view.compareDate)
       else if (this.compareDate) this.setCompareDate(this.compareDate)
+      // Written directly, like `variable`: arriving at a view is not pressing
+      // the land control, so it reports nothing.
+      if (view.landLayer !== undefined) this.landLayer = view.landLayer
+      if (view.landMode) this.landMode = view.landMode
 
       // One selection, one fetch. `track: false` on the point for the same
       // reason the patch skips the actions: this is not a click on the map.
@@ -1184,6 +1269,8 @@ export const useMainStore = defineStore('main', {
         period: this.period,
         date: this.selectedDate ?? undefined,
         compareDate: this.compareDate,
+        landLayer: this.landLayer,
+        landMode: this.landMode,
         ...(this.scope === 'region' && this.activeRegion
           ? { region: this.activeRegion }
           : this.selectedPoint ? { point: { ...this.selectedPoint } } : {}),
@@ -1218,6 +1305,33 @@ export const useMainStore = defineStore('main', {
         // indistinguishable in the numbers.
         return this.selectPoint(lat, lon, { track: false })
       }
+    },
+
+    /**
+     * Turn the land overlay on, switch its variable, or turn it off (null).
+     *
+     * Fetches nothing: the map asks for the frame itself. Reports the resulting
+     * layer rather than the button, so the numbers read as "what was drawn".
+     */
+    setLandLayer(source: LandSource | null) {
+      if (source === this.landLayer) return
+      this.landLayer = source
+      trackEvent('land_layer_changed', {
+        layer: source,
+        mode: this.landMode,
+        variable: source ? landLayerName(source, this.landMode) : null,
+      })
+    },
+
+    /** Switch the land overlay between its values and its departures from normal. */
+    setLandMode(mode: LandMode) {
+      if (mode === this.landMode) return
+      this.landMode = mode
+      trackEvent('land_layer_changed', {
+        layer: this.landLayer,
+        mode,
+        variable: this.landLayer ? landLayerName(this.landLayer, mode) : null,
+      })
     },
 
     /**

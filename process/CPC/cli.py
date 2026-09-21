@@ -3,7 +3,11 @@
     python -m CPC.cli init                                  # schema (land tables)
     python -m CPC.cli fetch    [--year|--start-year|--end-year] [--variable]
     python -m CPC.cli backfill [--year ...] [--product] [--fresh]
-    python -m CPC.cli run      [--recheck-days N]           # the daily job
+    python -m CPC.cli run      [--recheck-days N] [--keep-nc]  # the daily job
+    python -m CPC.cli clim     [--source]                   # 1991-2020 climatology
+    python -m CPC.cli render   [--variable|--period|--start|--end] [--workers N]
+    python -m CPC.cli prune    [--year ...] [--product] [--dry-run]
+    python -m CPC.cli ocean-mask --date YYYY-MM-DD          # rebuild the coastline cut
     python -m CPC.cli scan
     python -m CPC.cli status
 
@@ -13,12 +17,13 @@ in the way that matters most to a CLI: a CPC file is a **year**, not a date. So
 `fetch` takes years, `backfill` walks years, and `run` re-fetches the current
 year's three files and ingests whatever days have appeared in them.
 
-**There is no prune and no render here yet.** The whole land archive from 1985 is
-~9.5 GB for all three variables, so unlike the ~153 GB ocean archive it is kept
-forever — which means land history stays re-ingestable and re-renderable without
-a re-download, and there is no retention window to reason about. Rendering,
-climatology and anomaly are the next step; this package's job stops at a
-populated table.
+**The year files are deleted once used.** Every frame is pre-rendered and the
+API never renders, so a year file is only needed until its days are ingested
+and every frame they feed is in the cache — `prune` checks exactly that before
+deleting (see `CPC/prune.py`). Order on a fresh box: `fetch` -> `backfill` ->
+`clim` -> `render` -> `prune`. `run` prunes what it fetched at the end of every
+run, so the current year is downloaded afresh daily, which it would be anyway:
+CPC rewrites that file in place.
 """
 
 from __future__ import annotations
@@ -29,8 +34,14 @@ import logging
 import sys
 
 from shared.ch import DATABASE, ensure_schema, get_client
+from shared.domain import variables as all_variables
+from shared.fields import land_last_date, land_layer_ready
+from shared.periods import PERIODS, span, start_of
+from shared.render import DEFAULT_WIDTH
 
-from . import config, download, ingest, status as status_mod
+from CRW import imaging
+
+from . import climatology, config, download, ingest, prune as prune_mod, status as status_mod
 
 log = logging.getLogger(__name__)
 
@@ -189,8 +200,13 @@ def cmd_run(args) -> int:
     unlike CoralTemp there is no per-date size or mtime that could reveal it.
     """
     today = dt.date.today()
-    years = sorted({today.year, (today - dt.timedelta(days=args.recheck_days)).year})
     recheck_floor = today - dt.timedelta(days=args.recheck_days)
+    # Every year a re-rendered bucket reads from, not just the recheck window's:
+    # the month containing the floor starts earlier, and a week containing
+    # early January starts in the previous December. Those files may have been
+    # pruned by the last run, so they are fetched again.
+    earliest = min(start_of(recheck_floor, p) for p in PERIODS)
+    years = list(range(earliest.year, today.year + 1))
 
     fetch_args = argparse.Namespace(year=years, variable=None, force=False)
     if cmd_fetch(fetch_args):
@@ -225,6 +241,186 @@ def cmd_run(args) -> int:
             log.info("%s last ingested: %s", tgt.key, last)
     finally:
         client.close()
+
+    # Re-render every bucket the recheck window touches, open or closed. A CPC
+    # revision lands INSIDE a year file, so a week that closed a fortnight ago
+    # can still change — and its cached frame with it. Unconditional writes, the
+    # same rule `imaging.render_date` follows for the ocean's open buckets.
+    for tgt in _targets(args):
+        rendered = render_touched(tgt, recheck_floor)
+        log.info("%s: re-rendered %d land frame(s)", tgt.key, rendered)
+
+    # Delete what this run fetched, through the same check as `prune`: a year
+    # whose frames are not all rendered stays until `CPC.cli render` has run.
+    if not args.keep_nc:
+        client = get_client()
+        try:
+            for tgt in _targets(args):
+                prune_mod.prune(client, tgt, years)
+        finally:
+            client.close()
+    return 0
+
+
+layers_for = prune_mod.layers_for
+
+
+def climatology_ready(layer: str) -> bool:
+    """See `shared.fields.land_layer_ready` — one definition, shared with `/coverage`."""
+    return land_layer_ready(layer)
+
+
+def product_last_date(tgt: ingest.Target) -> dt.date | None:
+    """The last day this product's files ALL hold.
+
+    Temperature needs tmax and tmin both, so it ends at the earlier of the two;
+    and temperature and rainfall do not end on the same day (measured one day
+    apart), which is why this is per product and never shared.
+    """
+    ends = [land_last_date(name) for name in tgt.variables]
+    return None if any(e is None for e in ends) else min(ends)
+
+
+def render_touched(tgt: ingest.Target, since: dt.date, width: int = DEFAULT_WIDTH) -> int:
+    """Rewrite every bucket of `tgt`'s layers containing a day from `since` on."""
+    hi = product_last_date(tgt)
+    if hi is None or hi < since:
+        return 0
+    layers = [name for name in layers_for(tgt) if climatology_ready(name)]
+    skipped = sorted(set(layers_for(tgt)) - set(layers))
+    if skipped:
+        log.warning("no matching climatology for %s; run `CPC.cli clim`", ", ".join(skipped))
+
+    jobs: set[tuple[dt.date, str, str]] = set()
+    day = since
+    while day <= hi:
+        for period in PERIODS:
+            for name in layers:
+                if period in all_variables()[name].periods:
+                    jobs.add((span(day, period)[0], period, name))
+        day += dt.timedelta(days=1)
+
+    for bucket, period, name in sorted(jobs):
+        imaging.render_bucket((bucket, period, name, width))
+    return len(jobs)
+
+
+def cmd_clim(args) -> int:
+    """Build the 1991-2020 climatology for each land source, from the year files.
+
+    Minutes, not hours: 30 year files per source, read once each. Rebuild after
+    editing a layer's `baseline.window_days` — the anomaly reader refuses a file
+    built for a different window rather than serving it under the new label.
+    """
+    sources = args.source or list(config.LAND_VARIABLES)
+    failed = 0
+    for source in sources:
+        try:
+            climatology.build(source)
+        except FileNotFoundError as exc:
+            log.error("%s", exc)
+            failed += 1
+    return 1 if failed else 0
+
+
+def cmd_render(args) -> int:
+    """Render every closed land bucket, in parallel, through the ocean's machinery.
+
+    `CRW.imaging.render_range` is generic — it goes through `bucket_field`,
+    which dispatches land layers to their own reader — so there is no second
+    render loop here. What is land-specific is the RANGE: it is bounded per
+    product, because temperature and rainfall end on different days, and a layer
+    whose climatology is missing or stale is skipped with a warning rather than
+    queued to fail inside a worker.
+    """
+    wanted = set(args.variable or [])
+    periods = tuple(args.period or PERIODS)
+    total = {"rendered": 0, "skipped": 0, "pending": 0, "empty": 0, "bytes": 0, "seconds": 0.0}
+
+    for tgt in (ingest.TEMP_TARGET, ingest.PRECIP_TARGET):
+        layers = [n for n in layers_for(tgt) if not wanted or n in wanted]
+        if not layers:
+            continue
+        stale = [n for n in layers if not climatology_ready(n)]
+        if stale:
+            log.warning("skipping %s: no matching climatology; run `CPC.cli clim`",
+                        ", ".join(stale))
+        layers = [n for n in layers if n not in stale]
+        hi = product_last_date(tgt)
+        if not layers or hi is None:
+            continue
+        lo = max(args.start or config.ARCHIVE_START, config.ARCHIVE_START)
+        hi = min(hi, args.end) if args.end else hi
+        if lo > hi:
+            continue
+        # A year missing mid-range would cache every week and month touching
+        # it as a short mean, and once the neighbouring files are pruned that
+        # frame can no longer be told apart from a good one. So refuse.
+        gaps = [
+            f"{name}.{year}" for year in range(start_of(lo, "weekly").year, hi.year + 1)
+            for name in tgt.variables
+            if year >= config.ARCHIVE_START.year and not config.land_path(name, year).exists()
+        ]
+        if gaps:
+            log.error("%s: year files missing in %s..%s: %s; fetch them first",
+                      tgt.key, lo, hi, ", ".join(gaps))
+            return 1
+
+        def progress(done, n, written, elapsed, key=tgt.key):
+            rate = done / elapsed if elapsed else 0.0
+            eta = (n - done) / rate if rate else 0.0
+            print(f"  {key} {done}/{n}  {rate:.1f}/s  eta {eta / 60:.1f}m  "
+                  f"{written / 1e6:.0f} MB", flush=True)
+
+        print(f"{tgt.key}: {lo} .. {hi} | {','.join(layers)} | {','.join(periods)}")
+        counts = imaging.render_range(
+            lo, hi, variables=tuple(layers), periods=periods, width=args.width,
+            workers=args.workers, force=args.force, limit=args.limit,
+            dry_run=args.dry_run, progress=progress,
+        )
+        for key in total:
+            total[key] += counts.get(key, 0)
+
+    print(f"{total['pending']} to render, {total['skipped']} already cached")
+    if not args.dry_run:
+        print(f"rendered {total['rendered']} image(s), {total['bytes'] / 1e6:.0f} MB "
+              f"in {total['seconds'] / 60:.1f}m"
+              + (f"; {total['empty']} empty" if total["empty"] else ""))
+    return 0
+
+
+def cmd_prune(args) -> int:
+    """Delete year files that are ingested and fully rendered; keep the rest.
+
+    Each kept year is logged with its reason — the first missing day or frame —
+    so the answer to "why is this still here" is the fix to run.
+    """
+    client = get_client()
+    deleted = kept = 0
+    try:
+        for tgt in _targets(args):
+            d, k = prune_mod.prune(client, tgt, _years(args), dry_run=args.dry_run)
+            deleted, kept = deleted + d, kept + k
+    finally:
+        client.close()
+    log.info("prune: %d product-year(s) %s, %d kept",
+             deleted, "deletable" if args.dry_run else "deleted", kept)
+    return 0
+
+
+def cmd_ocean_mask(args) -> int:
+    """Rebuild `shared/masks/coraltemp_ocean.npz`, the coastline land frames are cut to.
+
+    Needs one CoralTemp daily file on disk — any date inside the retention
+    window will do, since CoralTemp's land is constant. Only needed if the box
+    in `domain.yml` moves; the file is committed, because land frames are
+    rendered long after the CoralTemp dailies have been pruned.
+    """
+    from shared.fields import build_ocean_mask, ocean_mask
+
+    path = build_ocean_mask(args.date)
+    ocean_mask.cache_clear()
+    log.info("%s: %d ocean cells from %s", path, int(ocean_mask().sum()), args.date)
     return 0
 
 
@@ -315,7 +511,41 @@ def main(argv: list[str] | None = None) -> int:
         "--recheck-days", type=int, default=14,
         help="re-ingest this trailing window; CPC revises its recent end in place",
     )
+    p_run.add_argument(
+        "--keep-nc", action="store_true",
+        help="keep the year files instead of pruning them at the end",
+    )
     p_run.set_defaults(func=cmd_run)
+
+    p_clim = sub.add_parser("clim", help="build the 1991-2020 land climatology")
+    p_clim.add_argument(
+        "--source", choices=config.LAND_VARIABLES, action="append", help="repeatable"
+    )
+    p_clim.set_defaults(func=cmd_clim)
+
+    land_layers = sorted(n for n, v in all_variables().items() if v.grid == "land")
+    p_rend = sub.add_parser("render", help="render closed land buckets in bulk")
+    p_rend.add_argument("--variable", choices=land_layers, action="append", help="repeatable")
+    p_rend.add_argument("--period", choices=PERIODS, action="append", help="repeatable")
+    p_rend.add_argument("--start", type=_parse_date)
+    p_rend.add_argument("--end", type=_parse_date)
+    p_rend.add_argument("--width", type=int, default=DEFAULT_WIDTH)
+    p_rend.add_argument("--workers", type=int)
+    p_rend.add_argument("--limit", type=int)
+    p_rend.add_argument("--force", action="store_true", help="re-render cached frames")
+    p_rend.add_argument("--dry-run", action="store_true")
+    p_rend.set_defaults(func=cmd_render)
+
+    p_prune = with_years(sub.add_parser(
+        "prune", help="delete year files that are ingested and fully rendered"))
+    p_prune.add_argument("--product", choices=sorted(ingest.TARGETS))
+    p_prune.add_argument("--dry-run", action="store_true")
+    p_prune.set_defaults(func=cmd_prune)
+
+    p_mask = sub.add_parser("ocean-mask", help="rebuild the coastline land frames are cut to")
+    p_mask.add_argument("--date", type=_parse_date, required=True,
+                        help="a CoralTemp date whose daily file is on disk")
+    p_mask.set_defaults(func=cmd_ocean_mask)
 
     sub.add_parser("scan", help="report what is on disk").set_defaults(func=cmd_scan)
 

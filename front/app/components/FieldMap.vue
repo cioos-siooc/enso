@@ -11,7 +11,7 @@
 <script setup lang="ts">
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import { useMainStore, type VariableName } from '~/stores/main'
+import { useMainStore, type DomainMeta, type LayerName } from '~/stores/main'
 import type { ColorStop } from '~/utils/colorScale'
 import { GLOBE_VIEW, type CameraView, type ProjectionName } from '~/utils/mapView'
 
@@ -98,6 +98,23 @@ const REGION_LINE_ID = 'region-box-line'
 const REGION_COLOR = '#05df72'
 
 /**
+ * The land overlay: a second raster, over whichever ocean variable is showing.
+ *
+ * **Where it sits in the stack is not a free choice.** This style's only land
+ * is `country-boundaries`, a FILL, and the ocean raster is inserted below it —
+ * which is what clips the ocean to the coast and keeps `mhw`'s calm-ocean fill
+ * off the continents. The land raster therefore has to go ABOVE that fill or it
+ * is hidden, and below the boundary lines and labels. See `landBeforeId`.
+ *
+ * It does not overhang the sea despite its 0.5-degree cells, because its frames
+ * are cut server-side to CoralTemp's own 0.05-degree coastline — the complement
+ * of the ocean rasters' footprint, measured to overlap them in 0 pixels. So the
+ * two tile exactly, and no ordering trick is needed between them.
+ */
+const LAND_SOURCE_ID = 'land-image'
+const LAND_LAYER_ID = 'land-layer'
+
+/**
  * Whether the style has finished loading and layers may be added.
  *
  * Tracked here rather than asked of Mapbox: `isStyleLoaded()` answers a
@@ -122,8 +139,8 @@ function showMarker(lat: number, lon: number) {
  * Normalising it into -180..180 here would make west > east and collapse the
  * image to nothing.
  */
-function imageCoordinates(offset = 0): [[number, number], [number, number], [number, number], [number, number]] {
-  const b = store.domain!.imageBounds
+function imageCoordinates(offset = 0, bounds?: DomainMeta['imageBounds']): [[number, number], [number, number], [number, number], [number, number]] {
+  const b = bounds ?? store.domain!.imageBounds
   return [
     [b.west + offset, b.north],
     [b.east + offset, b.north],
@@ -155,7 +172,7 @@ function currentUrl(): string | null {
  * both just texel quantisation) — and nearest is visibly cleaner at
  * single-pixel islands, which linear renders as coloured speckle.
  */
-function rasterPaint(name: VariableName): Record<string, unknown> {
+function rasterPaint(name: LayerName): Record<string, unknown> {
   const meta = store.domain!.variables[name]!
   const enc = meta.encoding
   // Both go through the store rather than /domain directly: the displayed range
@@ -286,6 +303,86 @@ function syncBackground() {
     // translucent field would read as a different surface, not as the same map.
     paint: { 'fill-color': color, 'fill-opacity': 0.85, 'fill-antialias': false },
   }, map.getLayer(WEST_LAYER_ID) ? WEST_LAYER_ID : LAYER_ID)
+}
+
+/** The land frame's URL, or null when the overlay is off or cannot be drawn. */
+function landUrl(): string | null {
+  const layer = store.landVariable
+  if (!props.date || !layer || store.landReasonAt(props.date)) return null
+  return api.imageUrl(props.date, store.period, layer)
+}
+
+/**
+ * The first layer ABOVE the style's land fill — where the land raster goes.
+ *
+ * Found by position rather than named, so a label or boundary layer added to
+ * the style later still ends up on top of the land field rather than under it.
+ * Undefined (the top of the stack) if the style has no `country-boundaries`.
+ */
+function landBeforeId(): string | undefined {
+  const layers = map?.getStyle()?.layers ?? []
+  const i = layers.findIndex(l => l.id === 'country-boundaries')
+  if (i < 0) return undefined
+  // Skip our own layers: after the first add, the land raster itself is the
+  // layer above the fill, and inserting "before" it would be a no-op loop.
+  const next = layers.slice(i + 1).find(l => l.id !== LAND_LAYER_ID)
+  return next?.id
+}
+
+function removeLand() {
+  if (!map?.getLayer(LAND_LAYER_ID)) return
+  map.removeLayer(LAND_LAYER_ID)
+  map.removeSource(LAND_SOURCE_ID)
+}
+
+/**
+ * Add, update or REMOVE the land overlay to match the store.
+ *
+ * Removed, never left on its last frame, whenever it cannot be drawn: Mapbox's
+ * image source silently keeps the previous image when a new one 404s, which
+ * here would put last week's rain under this week's date with nothing to say
+ * so. `store.landReasonAt` is what decides, and the legend prints its reason.
+ *
+ * One quad, in both projections: the land frame is global and sits just
+ * inside -180..180 (`landImageBounds`), so unlike the Pacific box it never
+ * crosses the antimeridian and the globe needs no westward copy. It must not:
+ * Mapbox draws a 360-degree image source only in the world copy nearest the
+ * camera, so a frame crossing 180 loses whatever falls outside that copy.
+ */
+function syncLand() {
+  if (!map || !styleReady) return
+  const url = landUrl()
+  const layer = store.landVariable
+  if (!url || !layer) {
+    removeLand()
+    return
+  }
+
+  const paint = rasterPaint(layer)
+  const coordinates = imageCoordinates(0, store.domain!.landImageBounds)
+  const source = map.getSource(LAND_SOURCE_ID) as mapboxgl.ImageSource | undefined
+  if (source) {
+    // Repaint BEFORE swapping the image, as the ocean raster does: the six
+    // layers pack their values differently, so a frame decoded with the
+    // previous layer's mix is nonsense for the flicker it is on screen.
+    for (const [key, value] of Object.entries(paint)) {
+      map.setPaintProperty(LAND_LAYER_ID, key as never, value as never)
+    }
+    source.updateImage({ url, coordinates })
+    return
+  }
+  map.addSource(LAND_SOURCE_ID, { type: 'image', url, coordinates })
+  map.addLayer({ id: LAND_LAYER_ID, type: 'raster', source: LAND_SOURCE_ID, paint }, landBeforeId())
+}
+
+/** A land range change is a repaint and nothing more — see `applyPaint`. */
+function applyLandPaint() {
+  const layer = store.landVariable
+  if (!map || !layer) return
+  if (!map.getLayer(LAND_LAYER_ID)) return
+  for (const [key, value] of Object.entries(rasterPaint(layer))) {
+    map.setPaintProperty(LAND_LAYER_ID, key as never, value as never)
+  }
 }
 
 function addRaster() {
@@ -551,7 +648,7 @@ onMounted(() => {
 
   // The style may already be loaded by the time this runs (a warm style cache),
   // in which case 'load' has fired and would never fire again.
-  const draw = () => { styleReady = true; addRaster(); syncRegionBox() }
+  const draw = () => { styleReady = true; addRaster(); syncLand(); syncRegionBox() }
   if (map.isStyleLoaded()) draw()
   else map.once('load', draw)
 
@@ -595,6 +692,21 @@ watch(() => [props.date, store.period, store.variable], () => {
 // browser already has, for a result identical to setting the paint property.
 watch(() => store.activeScale, applyPaint, { deep: true })
 
+// The land overlay follows its own choice, the date and period it shares with
+// the ocean, and coverage — which is what can make a date undrawable. One
+// watcher: every one of these can flip it between drawn and removed.
+watch(
+  () => [props.date, store.period, store.landVariable, store.coverage?.land],
+  syncLand,
+)
+
+// Its colour range is the land layer's own, independent of the ocean's.
+watch(
+  () => (store.landVariable ? store.scaleFor(store.landVariable) : null),
+  applyLandPaint,
+  { deep: true },
+)
+
 // The box follows the scope and the chosen region together — it is one
 // selection drawn twice, not a layer with a toggle of its own. Flying the camera
 // to it is the host's job (`AnomalyMap.frameRegion`).
@@ -612,6 +724,7 @@ watch(() => store.selectedPoint, (point) => {
 watch(() => props.projection, (name) => {
   map?.setProjection({ name })
   syncWestCopy()
+  syncLand()
 })
 
 onBeforeUnmount(() => {

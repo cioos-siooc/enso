@@ -47,12 +47,16 @@ one cell's record. An arbitrary box has no rollup, so it has no ranking.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 
-from shared.domain import global_grid, quantity, regions, subset, variable
+from shared.domain import global_grid, quantity, regions, subset, variable, variables
+from shared.fields import land_layer_ready
 
 from .clickhouse_helpers import DATABASE, client
 from .periods import Period, bucket_sql
+
+log = logging.getLogger(__name__)
 
 # Queryable variables. `sst` is a stored ALIAS column, `anom` is derived, and
 # `mhw` is stored in its own sparse table.
@@ -642,6 +646,47 @@ def named_region_timeseries(
     return result
 
 
+def land_coverage() -> dict | None:
+    """What the land overlay can draw: each product's dates and each layer's readiness.
+
+    **Guarded, and deliberately.** `/coverage` is on every page load and the
+    frontend gates its variables on it, so a database that has never run
+    `CPC.cli init` must not turn this into a 500 — it returns None and the land
+    control stays disabled, which is the truthful answer.
+
+    Dates come from the status tables. Frames are rendered from the year files
+    rather than from these tables, but nothing is ingested without its file and
+    nothing prunes the files, so the two ranges are the same.
+
+    `layers` is per LAYER, not per source, because that is the question the
+    toggle asks: an absolute layer is always drawable, an anomaly layer only once
+    its climatology exists for the baseline `domain.yml` declares.
+    """
+    try:
+        out: dict = {}
+        for key, table in (("temp", "land_temp_status"), ("precip", "land_precip_status")):
+            n, first, last = client().query(
+                f"SELECT count(), min(date), max(date) FROM {DATABASE}.{table} FINAL "
+                "WHERE status = 'success_ingest'"
+            ).result_rows[0]
+            # Count-guarded for the same reason as `mhw` below: min/max over an
+            # empty Date column is the epoch, not NULL.
+            out[key] = {
+                "days": int(n),
+                "start": str(first) if n else None,
+                "end": str(last) if n else None,
+            }
+    except Exception:  # noqa: BLE001 — see the docstring
+        log.warning("land coverage unavailable", exc_info=True)
+        return None
+    out["layers"] = {
+        name: land_layer_ready(name)
+        for name, v in variables().items()
+        if v.grid == "land"
+    }
+    return out
+
+
 def coverage() -> dict:
     """The ingested date range and row count."""
     row = client().query(
@@ -650,7 +695,7 @@ def coverage() -> dict:
     if not row[0]:
         return {
             "rows": 0, "start": None, "end": None, "days": 0,
-            "climatology": None, "mhw": None,
+            "climatology": None, "mhw": None, "land": land_coverage(),
         }
     days = client().query(
         f"SELECT uniqExact(date) FROM {DATABASE}.ingest_status FINAL "
@@ -699,6 +744,11 @@ def coverage() -> dict:
         # Anomaly is unavailable until all 366 keys are loaded; the frontend
         # uses this to decide whether to offer the variable at all.
         "climatology": {"keys": int(clim_keys), "complete": int(clim_keys) == 366},
+        # The land overlay's own range and per-layer readiness, or null when
+        # the land tables do not exist. Separate from everything above because
+        # the land archive publishes on its own schedule — ~2 days behind, and
+        # temperature and rainfall a day apart from each other.
+        "land": land_coverage(),
     }
 
 

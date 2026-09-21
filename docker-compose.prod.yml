@@ -100,6 +100,9 @@ services:
       - OISST_IMAGE_DIR=${OISST_IMAGE_DIR:-/opt/data/images}
       - CRW_CLIM_DIR=${CRW_CLIM_DIR:-/opt/data/climatology}
       - CRW_MHW_DIR=${CRW_MHW_DIR:-/opt/data/MHW}
+      # The land year files and their climatology. The API renders a land
+      # bucket on demand from them — they are never pruned, so any bucket can be.
+      - CPC_NC_DIR=${CPC_NC_DIR:-/opt/data/land}
       - CH_HOST=${CH_HOST:-db-ch}
       - CH_PORT=${CH_PORT:-8123}
       - CH_USER=${CH_USER:-default}

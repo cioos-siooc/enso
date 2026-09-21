@@ -191,12 +191,53 @@ class Variable:
     short_name: str
     units: str
     precision: int
-    scale_factor: float
-    add_offset: float
-    fill_value: int
     vmin: float
     vmax: float
     encoding: Encoding
+    # How CoralTemp's own NetCDF packs the value. Meaningful for the ocean
+    # variables, which read that file; a land layer reads CPC's float32 and has
+    # nothing to declare here, so these are optional rather than filled with
+    # numbers that describe no file.
+    scale_factor: float = 1.0
+    add_offset: float = 0.0
+    fill_value: int | None = None
+    # Which grid this variable's raster is built on: `global` (CoralTemp,
+    # 0.05 degree) or `land` (NOAA CPC, 0.5 degree). Both render to the same
+    # image bounds — see `render.bounds()` — so this decides which reader
+    # `shared.buckets` uses, not where the image lands.
+    grid: str = "global"
+    # For a land layer, WHAT IT IS MADE OF, declared here rather than coded in
+    # `shared.buckets`: the CPC variable it reads (`tmax`, `tmin`, `precip`)
+    # and how a bucket is turned into the value drawn —
+    #
+    #   none        the mean over the bucket's days
+    #   difference  the mean of (value - climatology) over those days
+    #   log2_ratio  log2(mean(value) / mean(climatology)) over those days
+    #
+    # One declaration, so there is no second name -> source table to drift.
+    source: str | None = None
+    transform: str = "none"
+    # The bucket lengths this layer exists at. The rainfall ratio is weekly and
+    # monthly only: a daily rainfall anomaly is noise, where a daily temperature
+    # anomaly (a heatwave day) is not.
+    periods: tuple[str, ...] = ("daily", "weekly", "monthly")
+    # `nearest` draws each source cell as a flat block. Land uses it because a
+    # 0.5-degree cell is ~55 km and blending between centres would draw
+    # gradients the gauge analysis never resolved. `categorical` implies it.
+    resampling: str = "bilinear"
+    # Below this climatological value a `log2_ratio` means nothing — one 0.5 mm
+    # shower over a 0.05 mm/day normal reads as 1000% — so those cells draw the
+    # sentinel grey instead. Measured: 7% of the box's land in January.
+    min_normal: float | None = None
+    # How the frontend should LABEL a value, where that differs from the number
+    # itself. `log2_percent` is the rainfall ratio: stored and ranged as log2 so
+    # a halving and a doubling sit equidistant from normal, printed as percent
+    # (-1 -> 50%, 0 -> 100%, +1 -> 200%) so nobody has to read a logarithm.
+    display: str | None = None
+    # What the sentinel grey MEANS on this variable, for the legend. It is the
+    # same colour for two different reasons: ocean with no climatology (the ice
+    # fringe) and land too dry for a ratio.
+    no_value_label: str | None = None
     # Exactly one of these two carries the palette. `colormap` names a
     # matplotlib colormap sampled server-side; `colors` lists the classes of a
     # categorical variable explicitly, because `mhw`'s five are NOAA's own and
@@ -417,6 +458,19 @@ def land_grid() -> GlobalGrid:
     return GlobalGrid(**_raw()["land"])
 
 
+def land_shape() -> tuple[int, int]:
+    """`(nlat, nlon)` of every land array: the whole CPC grid, 360 x 720."""
+    grid = land_grid()
+    return grid.nlat, grid.nlon
+
+
+@functools.lru_cache(maxsize=1)
+def land_image() -> dict:
+    """`{south, north}` of the land frames — see `domain.yml`'s `land_image`."""
+    block = _raw()["land_image"]
+    return {k: float(block[k]) for k in ("south", "north")}
+
+
 def subset_shape(grid: GlobalGrid) -> tuple[int, int]:
     """``(nlat, nlon)`` the configured box covers on `grid`.
 
@@ -439,6 +493,8 @@ def variables() -> dict[str, Variable]:
         enc["channels"] = tuple(enc["channels"])
         if cfg.get("limits") is not None:
             cfg["limits"] = tuple(cfg["limits"])
+        if cfg.get("periods") is not None:
+            cfg["periods"] = tuple(cfg["periods"])
         cfg["colors"] = tuple(Category(**c) for c in cfg.get("colors", ()))
         cfg["presets"] = tuple(Preset(**p) for p in cfg.get("presets", ()))
         if cfg.get("baseline") is not None:
@@ -448,7 +504,55 @@ def variables() -> dict[str, Variable]:
         out[name] = Variable(name=name, encoding=Encoding(**enc), **cfg)
         _check_presets(out[name])
         _check_baseline(out[name])
+        _check_layer(out[name])
     return out
+
+
+_GRIDS = ("global", "land")
+_TRANSFORMS = ("none", "difference", "log2_ratio")
+_LAND_SOURCES = ("tmax", "tmin", "precip")
+_PERIODS = ("daily", "weekly", "monthly")
+
+
+def _check_layer(v: Variable) -> None:
+    """Reject a layer declaration `shared.buckets` could not honour.
+
+    Each of these would otherwise fail far from here — a misspelt transform as
+    an empty frame, a land layer with no source as a KeyError inside a render
+    worker, a period typo as a variable that never renders at one period and
+    never says why.
+    """
+    if v.grid not in _GRIDS:
+        raise ValueError(f"{v.name}: grid {v.grid!r} is not one of {_GRIDS}")
+    if v.transform not in _TRANSFORMS:
+        raise ValueError(f"{v.name}: transform {v.transform!r} is not one of {_TRANSFORMS}")
+    bad = [p for p in v.periods if p not in _PERIODS]
+    if bad or not v.periods:
+        raise ValueError(f"{v.name}: periods {v.periods} must be a non-empty subset of {_PERIODS}")
+    if v.resampling not in ("nearest", "bilinear"):
+        raise ValueError(f"{v.name}: resampling {v.resampling!r} is not nearest or bilinear")
+    if v.grid == "land":
+        if v.source not in _LAND_SOURCES:
+            raise ValueError(
+                f"{v.name}: a land layer needs a source in {_LAND_SOURCES}, got {v.source!r}"
+            )
+        if v.transform != "none" and v.baseline is None:
+            # An anomaly with no declared baseline is a departure from nothing
+            # the UI can name — and the climatology reader checks its file
+            # against exactly this block.
+            raise ValueError(f"{v.name}: transform {v.transform!r} needs a baseline block")
+        if v.transform == "log2_ratio" and v.min_normal is None:
+            raise ValueError(
+                f"{v.name}: a log2_ratio needs min_normal, or every desert cell "
+                "divides by a normal of ~0"
+            )
+        if v.transform == "log2_ratio" and v.encoding.sentinel is None:
+            raise ValueError(
+                f"{v.name}: a log2_ratio needs an encoding sentinel for its "
+                "too-dry-for-a-ratio cells"
+            )
+    elif v.source is not None or v.transform != "none":
+        raise ValueError(f"{v.name}: source/transform are land-only declarations")
 
 
 def _check_presets(v: Variable) -> None:

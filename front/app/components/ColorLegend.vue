@@ -1,14 +1,27 @@
 <template>
   <div
-    v-if="stops.length"
+    v-if="stops.length || reason"
     class="rounded-lg border border-default bg-elevated/90 px-3 py-2 shadow-lg backdrop-blur"
   >
+    <!--
+      A land layer that cannot be drawn on this bucket says why, in the legend's
+      own place. The map REMOVES the layer rather than leaving it on its last
+      frame (Mapbox keeps the previous image on a 404), and a layer that vanishes
+      without a word reads as a bug.
+    -->
+    <div v-if="reason" class="w-48">
+      <span class="text-[11px] font-medium text-muted">{{ title }}</span>
+      <p class="mt-1 text-[11px] leading-snug text-muted">
+        {{ reason }}
+      </p>
+    </div>
+
     <!--
       A categorical key has no range to edit, so its title is a plain label. The
       continuous case moves the title inside the popover trigger instead, so the
       whole block — title, Customize chip, bar and ticks — is one hit target.
     -->
-    <div v-if="categorical" class="mb-1 flex items-center gap-1.5">
+    <div v-else-if="categorical" class="mb-1 flex items-center gap-1.5">
       <span class="text-[11px] font-medium text-muted">{{ title }}</span>
     </div>
 
@@ -19,7 +32,7 @@
       values, so the popover, the slider and the tick row are all absent rather
       than disabled.
     -->
-    <div v-if="categorical" class="flex w-48 flex-col gap-0.5">
+    <div v-if="!reason && categorical" class="flex w-48 flex-col gap-0.5">
       <!--
         The class the raster cannot carry, and therefore the one the key has to.
         `mhw`'s WebP holds land, ice AND heatwave-free ocean at alpha 0 alike, so
@@ -53,7 +66,7 @@
       </div>
     </div>
 
-    <UPopover v-else :content="{ side: 'top', align: 'center' }">
+    <UPopover v-else-if="!reason" :content="{ side: 'top', align: 'center' }">
       <!--
         A real button, not the bar with a click handler: this is the only way to
         reach the range control, so it has to be focusable and it has to say what
@@ -98,7 +111,7 @@
               size="xs"
               variant="subtle"
               color="neutral"
-              @click="store.resetScale(store.variable)"
+              @click="store.resetScale(name)"
             />
           </div>
 
@@ -132,6 +145,12 @@
             no frame is refetched and no cached image is invalidated. That is
             what makes a slider — which fires on every drag frame — affordable.
           -->
+          <!--
+            The slider moves the range in the layer's OWN units — log2 for the
+            rainfall ratio, so a halving and a doubling are the same drag. It
+            shows no numbers, so there is nothing to convert; the fields below
+            and every tick do.
+          -->
           <USlider
             :model-value="[scale.vmin, scale.vmax]"
             :min="bounds.vmin"
@@ -145,27 +164,27 @@
 
           <div class="flex items-center gap-2">
             <UInput
-              :model-value="scale.vmin"
+              :model-value="toField(scale.vmin)"
               type="number"
               size="xs"
               class="w-full"
-              :step="step"
-              :min="bounds.vmin"
-              :max="bounds.vmax"
-              aria-label="Range minimum"
-              @update:model-value="commit($event, scale.vmax)"
+              :step="fieldStep"
+              :min="toField(bounds.vmin)"
+              :max="toField(bounds.vmax)"
+              :aria-label="`Range minimum${percent ? ' (% of normal)' : ''}`"
+              @update:model-value="commit(fromField($event), scale.vmax)"
             />
             <span class="text-xs text-muted">to</span>
             <UInput
-              :model-value="scale.vmax"
+              :model-value="toField(scale.vmax)"
               type="number"
               size="xs"
               class="w-full"
-              :step="step"
-              :min="bounds.vmin"
-              :max="bounds.vmax"
-              aria-label="Range maximum"
-              @update:model-value="commit(scale.vmin, $event)"
+              :step="fieldStep"
+              :min="toField(bounds.vmin)"
+              :max="toField(bounds.vmax)"
+              :aria-label="`Range maximum${percent ? ' (% of normal)' : ''}`"
+              @update:model-value="commit(scale.vmin, fromField($event))"
             />
           </div>
 
@@ -178,38 +197,62 @@
     </UPopover>
 
     <!--
-      Only the anomaly has a third state. SST is defined on every ocean cell in
-      the box, but the 1991-2020 climatology stops at the seasonal ice edge, so
-      about 3% of the ocean has a temperature and no anomaly. Those cells are
-      flat grey on the map, which needs saying — otherwise they read as land.
+      The third state: a value exists but no meaningful departure from normal
+      does, drawn flat grey. Two variables have one, for different reasons — the
+      ocean anomaly at the seasonal ice edge, which has no climatology, and the
+      rainfall ratio where the normal is too small to divide by — so the label is
+      `domain.yml`'s, not written here. Without it the grey reads as land.
     -->
     <div
-      v-if="store.variable === 'anom' && store.domain?.noClimColor"
+      v-if="!reason && meta?.encoding?.sentinel != null && meta?.noValueLabel && store.domain?.noClimColor"
       class="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted"
     >
       <span
-        class="h-2.5 w-2.5 rounded-sm border border-default"
+        class="h-2.5 w-2.5 shrink-0 rounded-sm border border-default"
         :style="{ background: store.domain.noClimColor }"
       />
-      <span>no climatology</span>
+      <span>{{ meta.noValueLabel }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { trackEvent } from '~/composables/useAnalytics'
-import { quantise, useMainStore } from '~/stores/main'
+import { quantise, useMainStore, type LayerName } from '~/stores/main'
+import { formatLog2Percent, parseLog2Percent } from '~/utils/land'
+
+/**
+ * The legend for ONE layer. Defaults to the ocean variable on screen; the land
+ * overlay mounts a second instance with its own layer, so the two scales —
+ * which cannot honestly share one legend (ocean anomaly saturates at +/-3, land
+ * at +/-8) — sit side by side and are each re-ranged independently.
+ */
+const props = defineProps<{
+  variable?: LayerName
+  /** Shown instead of the ramp when the layer cannot be drawn on this bucket. */
+  reason?: string | null
+  /** A prefix for the title, e.g. "Land", to tell two legends apart. */
+  label?: string
+}>()
 
 const store = useMainStore()
 
+/** The layer this legend describes. */
+const name = computed<LayerName>(() => props.variable ?? store.variable)
+
 /**
- * The active variable's stops, spread over the range in force — sst is
- * sequential, anom diverging. The colours are the server's; only the value each
- * one sits at follows the user's range.
+ * The layer's stops, spread over the range in force. The colours are the
+ * server's; only the value each one sits at follows the user's range.
  */
-const stops = computed(() => store.activeStops)
-const meta = computed(() => store.domain?.variables?.[store.variable])
-const categorical = computed(() => store.activeIsCategorical)
+const stops = computed(() => store.stopsFor(name.value))
+const meta = computed(() => store.domain?.variables?.[name.value])
+const categorical = computed(() => store.isCategorical(name.value))
+/**
+ * `log2_percent`: the rainfall ratio, ranged in log2 and printed as percent of
+ * normal. Everything a person reads — ticks, the number fields, the limits line
+ * — goes through `formatTick` / `toField`; the stored range never changes unit.
+ */
+const percent = computed(() => meta.value?.display === 'log2_percent')
 /**
  * What the map paints under the raster for this variable, where it paints
  * anything — `mhw`'s no-heatwave blue, NOAA's own. Read from `/domain` rather
@@ -218,9 +261,9 @@ const categorical = computed(() => store.activeIsCategorical)
  */
 const backgroundColor = computed(() => meta.value?.backgroundColor ?? null)
 
-const scale = computed(() => store.activeScale)
-const bounds = computed(() => store.scaleBoundsFor(store.variable))
-const isCustom = computed(() => store.scaleIsCustom(store.variable))
+const scale = computed(() => store.scaleFor(name.value))
+const bounds = computed(() => store.scaleBoundsFor(name.value))
+const isCustom = computed(() => store.scaleIsCustom(name.value))
 /** domain.yml's range — what Reset returns to. */
 const defaults = computed(() => ({ vmin: meta.value?.vmin ?? 0, vmax: meta.value?.vmax ?? 1 }))
 /**
@@ -228,15 +271,29 @@ const defaults = computed(() => ({ vmin: meta.value?.vmin ?? 0, vmax: meta.value
  * slider and both number fields share it, so a value typed in can never sit off
  * the slider's grid and get silently snapped when the popover re-renders.
  */
-const step = computed(() => store.scaleStepFor(store.variable))
+const step = computed(() => store.scaleStepFor(name.value))
+
+/** The number fields' own step: whole percent for the ratio, else the range's. */
+const fieldStep = computed(() => (percent.value ? 1 : step.value))
+
+/** A range value as the number field shows it. */
+function toField(value: number): number {
+  return percent.value ? Math.round(100 * 2 ** value) : value
+}
+
+/** A number field's value back into the layer's own units. */
+function fromField(value: unknown): number {
+  return percent.value ? parseLog2Percent(String(value)) : Number(value)
+}
 
 const title = computed(() => {
   const v = meta.value
   if (!v) return ''
   // The degree sign belongs to a temperature, not to a category. `mhw` reads
-  // "MHW (category)"; the old expression produced "(°category)".
-  const unit = store.unitLabelFor(store.variable) || v.units
-  return `${v.shortName} (${unit})`
+  // "MHW (category)"; the old expression produced "(°category)". The ratio's
+  // number is log2 but what anybody reads is percent of normal.
+  const unit = percent.value ? '% of normal' : (store.unitLabelFor(name.value) || v.units)
+  return `${props.label ? `${props.label} · ` : ''}${v.shortName} (${unit})`
 })
 
 /**
@@ -278,7 +335,7 @@ const chips = computed(() => {
     quantise(a, step.value) === quantise(b, step.value)
   return [
     { label: 'Default', ...defaults.value, reset: true, active: !custom },
-    ...store.presetsFor(store.variable).map(preset => ({
+    ...store.presetsFor(name.value).map(preset => ({
       ...preset,
       reset: false,
       active: custom && same(vmin, preset.vmin) && same(vmax, preset.vmax),
@@ -291,14 +348,14 @@ function applyChip(chip: { label?: string, vmin: number, vmax: number, reset: bo
   // name is the question the presets were added to answer, and a bare pair of
   // bounds cannot distinguish a chip from a drag that landed on the same place.
   trackEvent('color_range_changed', {
-    variable: store.variable,
+    variable: name.value,
     source: chip.reset ? 'default' : 'preset',
     preset: chip.label,
     vmin: chip.vmin,
     vmax: chip.vmax,
   })
-  if (chip.reset) store.resetScale(store.variable)
-  else store.setScale(store.variable, chip.vmin, chip.vmax)
+  if (chip.reset) store.resetScale(name.value)
+  else store.setScale(name.value, chip.vmin, chip.vmax)
 }
 
 /**
@@ -315,14 +372,14 @@ function trackRange(source: 'slider' | 'field') {
   clearTimeout(rangeTimer)
   rangeTimer = setTimeout(() => {
     const { vmin, vmax } = scale.value
-    trackEvent('color_range_changed', { variable: store.variable, source, vmin, vmax })
+    trackEvent('color_range_changed', { variable: name.value, source, vmin, vmax })
   }, 1000)
 }
 onBeforeUnmount(() => clearTimeout(rangeTimer))
 
 /** All clamping lives in the store, so slider and keyboard agree exactly. */
 function commit(vmin: unknown, vmax: unknown, source: 'slider' | 'field' = 'field') {
-  store.setScale(store.variable, Number(vmin), Number(vmax))
+  store.setScale(name.value, Number(vmin), Number(vmax))
   trackRange(source)
 }
 
@@ -332,12 +389,14 @@ function onSlide(value: number | number[] | undefined) {
 
 /**
  * A signed `+` only makes sense on a scale centred at zero. SST runs -2..32,
- * where "+17" would be noise; the anomaly runs -3..+3, where the sign is the
- * whole point.
+ * where "+17" would be noise; an anomaly runs -3..+3, where the sign is the
+ * whole point. "Is a departure" is read off the baseline's statistic rather
+ * than the variable's name, so the land anomalies get it with no list to edit.
  */
 function formatTick(tick: number): string {
+  if (percent.value) return formatLog2Percent(tick)
   const rounded = Math.round(tick * 10) / 10
-  const signed = store.variable === 'anom' && rounded > 0
+  const signed = meta.value?.baseline?.statistic === 'mean' && rounded > 0
   return `${signed ? '+' : ''}${rounded}`
 }
 

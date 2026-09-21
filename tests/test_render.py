@@ -95,3 +95,14 @@ def test_categorical_resample_invents_no_class():
 
     codes, alpha = _decode(render.encode(field, WIDTH, "mhw"), "mhw")
     assert set(np.unique(codes[alpha == 255])) <= {2, 4}
+
+
+def test_bleed_matches_the_rolled_neighbour_sum():
+    """`_neighbour_sum` is an optimisation of four wrapping `np.roll`s, nothing more."""
+    import numpy as np
+
+    from shared.render import _neighbour_sum
+
+    a = np.random.default_rng(1).integers(0, 65535, (37, 53)).astype("int32")
+    rolled = sum(np.roll(a, s, (0, 1)) for s in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+    assert np.array_equal(_neighbour_sum(a), rolled)

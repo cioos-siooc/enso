@@ -57,11 +57,11 @@ subset:
 # `sst_daily`, an entirely different meaning. Nothing joins a land table to an
 # ocean one, and nothing should.
 #
-# The Pacific box is NOT redeclared here. `subset` above is the one definition of
-# what is ingested, and it resolves against this grid to gy 60..309 (250 rows)
-# and gx 200..579 (380 cols) — 95,000 cells, of which ~20,878 carry temperature
-# and ~22,952 precipitation. A second nlat/nlon pair would be a second definition
-# of the box that could drift from the first.
+# LAND IS GLOBAL; the Pacific `subset` above is the OCEAN's box and does not
+# apply here. The land tables and the land climatology hold the whole grid —
+# 259,200 cells, of which ~62,881 carry temperature (55S-83N) and ~93,000
+# precipitation (Antarctica included) on a given day. Only the land IMAGE is
+# cropped, by `land_image` below.
 #
 # TWO ORIENTATION FACTS, and they are NOT the ocean's:
 #
@@ -81,6 +81,29 @@ land:
   lon0: 0.25
   nlat: 360  # gy in [0, 359]
   nlon: 720  # gx in [0, 719]
+
+# What the land frames cover: every longitude, 60S to 85N. Rain over Antarctica
+# stays in the database; Mercator stretches it past usefulness and nothing about
+# ENSO is read there, so it is not drawn.
+#
+# The frame is NOT an independent raster: it is the OCEAN frame's own pixel
+# grid (same pixel width in degrees, same Mercator row pitch, same south edge)
+# carried round to -180..180, so the coastline cut can keep land and ocean from
+# overlapping. `render.land_canvas()` computes the edges, which fall on that
+# grid a fraction of a pixel inside +-180 and 85N.
+#
+# It stops at +-180 rather than extending the ocean frame across the dateline
+# because Mapbox draws a 360-degree image source only in the world copy nearest
+# the camera (measured, flat projection): a frame spanning ~-30..330 showed no
+# Americas with the camera on Asia, and explicit copies at +-360 did not help.
+# The cost is that 360 degrees is not a whole number of the ocean's pixels, so
+# east of the dateline the two grids are offset by a fixed fraction of a pixel.
+# There the cut drops a land pixel that touches ANY ocean pixel, leaving at
+# most a one-pixel strip of basemap land along the Americas' Pacific coast —
+# a coastline, never an overlap.
+land_image:
+  south: -60
+  north: 85
 
 variables:
   sst:
@@ -162,6 +185,9 @@ variables:
     # rather than transparent, which would read as land, or as a scale colour,
     # which would read as zero.
     derived: true
+    # What the sentinel grey means HERE. The rainfall ratio uses the same grey for
+    # a different reason, so the legend reads this rather than assuming.
+    no_value_label: No climatology (seasonal ice edge)
     # One byte at 0.1 degC, so byte 1..255 spans -12.7..+12.7 and byte 0 is the
     # no-climatology sentinel. Measured over 60 days spread across the archive
     # plus the strong ENSO peaks, the anomaly reaches -10.22..+14.05 degC, so
@@ -305,6 +331,243 @@ variables:
           title: Longer and more frequent marine heatwaves over the past century
           source: Nature Communications 9, 1324
           url: https://doi.org/10.1038/s41467-018-03732-9
+
+  # --- The land layers: NOAA CPC Global Unified, on the `land` grid ----------
+  #
+  # A MAP OVERLAY, not a fourth variable of the toggle. The frontend's ocean
+  # toggle is a hard-coded list (`TimeControl.vue`), so declaring these here
+  # adds nothing to it; they are drawn by their own control, over whichever ocean
+  # variable is showing, and the chart, stats and rankings stay ocean.
+  #
+  # All six render to the SAME image bounds as the ocean: `render.bounds()`
+  # returns cell edges, and both grids' edges are exactly -60..65N, 100..290E.
+  # Where land and ocean rasters meet, the land raster's 0.5-degree blocks are
+  # coarser than the coastline — see FieldMap.vue for which one wins.
+  #
+  # What each layer is MADE of is declared (`source`, `transform`), not coded:
+  # `shared.buckets` reads these and has no name table of its own.
+  #
+  # Buckets, decided and measured (see ROADMAP.md B6):
+  #   * tmax/tmin: the MEAN of the dailies ("average daily high"), which is
+  #     what a normal is — never the max, which would compare a weekly extreme
+  #     against a mean.
+  #   * precip: mean mm/DAY, not a total, so one legend serves daily, weekly and
+  #     monthly exactly as `mhw`'s does. A ratio of means is a ratio of totals,
+  #     so the anomaly layer is unaffected by the choice.
+  #
+  # `resampling: nearest` on all six: a 0.5-degree cell is ~55 km, and blending
+  # between cell centres would draw gradients the gauge analysis never resolved.
+  # Land history is on disk forever, so this is cheap to revisit.
+  land_tmax:
+    long_name: Daily maximum land temperature
+    short_name: Tmax
+    units: degC
+    precision: 1
+    grid: land
+    source: tmax
+    resampling: nearest
+    vmin: -20.0
+    vmax: 40.0
+    colormap: turbo
+    presets:
+      - {label: Tropics, vmin: 20.0, vmax: 40.0}
+      - {label: Cold, vmin: -40.0, vmax: 10.0}
+    # The source declares valid_range -90..50; the box's measured extremes are
+    # about -55..48. -60..55 clears both without spending the control on the
+    # encoding's arithmetic headroom.
+    limits: [-60.0, 55.0]
+    # Two bytes at 0.01 degC. The frame is ~22 KB either way (the 0.5-degree
+    # source upsamples into flat blocks), so a second byte costs nothing and the
+    # stored precision survives the trip.
+    encoding:
+      channels: [G, B]
+      scale: 0.01
+      offset: -100.0
+  land_tmin:
+    long_name: Daily minimum land temperature
+    short_name: Tmin
+    units: degC
+    precision: 1
+    grid: land
+    source: tmin
+    resampling: nearest
+    vmin: -30.0
+    vmax: 30.0
+    colormap: turbo
+    presets:
+      - {label: Tropics, vmin: 10.0, vmax: 30.0}
+      - {label: Cold, vmin: -50.0, vmax: 0.0}
+    limits: [-60.0, 55.0]
+    encoding:
+      channels: [G, B]
+      scale: 0.01
+      offset: -100.0
+  land_precip:
+    long_name: Daily land precipitation
+    short_name: Rain
+    # A RATE, not a total, and the same unit at every period: a weekly frame is
+    # the mean daily rainfall over that week. The frontend can label the total
+    # (x days in the bucket); the raster carries one scale.
+    units: mm/day
+    precision: 1
+    grid: land
+    source: precip
+    resampling: nearest
+    vmin: 0.0
+    vmax: 20.0
+    colormap: YlGnBu
+    # Rainfall is heavily skewed — measured, 58% of the box's land is dry on a
+    # typical day while a wet-season cell passes 30 mm/day as a monthly mean —
+    # so the bands are the answer to that rather than a log scale on the raw
+    # value, which the ratio layer already is.
+    presets:
+      - {label: Arid, vmin: 0.0, vmax: 2.0}
+      - {label: Monsoon, vmin: 0.0, vmax: 50.0}
+    limits: [0.0, 100.0]
+    # Two bytes at 0.01 mm/day, 0..655.35. A single day can exceed that
+    # somewhere on Earth (666.7 mm measured globally) and is CLAMPED, never
+    # wrapped — see `render.encode`. Box maximum measured in 2015: 494.
+    encoding:
+      channels: [G, B]
+      scale: 0.01
+      offset: 0.0
+  land_tmax_anom:
+    long_name: Daily maximum land temperature anomaly
+    short_name: Tmax anomaly
+    units: degC
+    precision: 1
+    grid: land
+    source: tmax
+    transform: difference
+    resampling: nearest
+    # WIDER THAN THE OCEAN'S +/-3, deliberately. Land is far more variable:
+    # measured, the within-month day-to-day spread of tmax is ~5 degC north of
+    # 45N (p99 ~10) against an ocean anomaly that saturates at +/-3 for the
+    # whole field. The two cannot share a legend, which is why the land layer
+    # has its own.
+    vmin: -8.0
+    vmax: 8.0
+    colormap: RdBu_r
+    presets:
+      - {label: Fine, vmin: -3.0, vmax: 3.0}
+      - {label: Wide, vmin: -15.0, vmax: 15.0}
+    limits: [-25.0, 25.0]
+    # Two bytes, not the ocean anomaly's one: one byte at 0.1 degC tops out at
+    # +/-12.7, uncomfortably close to real continental winter anomalies.
+    encoding:
+      channels: [G, B]
+      scale: 0.01
+      offset: -327.68
+    baseline:
+      period: '1991-2020'
+      statistic: mean
+      # SMOOTHED over the day of year, unlike the ocean's window-1 climatology.
+      # SST is smooth enough for a raw per-day mean; land tmax is not — a
+      # 30-year mean per calendar day carries ~5 degC of daily spread over
+      # sqrt(30), which would flicker into every daily anomaly frame. 15 days
+      # cuts that several-fold and biases the seasonal peak by well under 0.1.
+      window_days: 15
+      label: the 1991-2020 mean for the time of year
+      computed_by: here
+      note: >-
+        Each day is compared with the 1991-2020 average of the daily maximum
+        temperature around that time of year — a 15-day window centred on the
+        calendar day — computed in this project from NOAA CPC Global Unified.
+        Weekly and monthly frames average the daily departures. Land varies far
+        more than the ocean, so this layer has its own, wider colour scale.
+  land_tmin_anom:
+    long_name: Daily minimum land temperature anomaly
+    short_name: Tmin anomaly
+    units: degC
+    precision: 1
+    grid: land
+    source: tmin
+    transform: difference
+    resampling: nearest
+    vmin: -8.0
+    vmax: 8.0
+    colormap: RdBu_r
+    presets:
+      - {label: Fine, vmin: -3.0, vmax: 3.0}
+      - {label: Wide, vmin: -15.0, vmax: 15.0}
+    limits: [-25.0, 25.0]
+    encoding:
+      channels: [G, B]
+      scale: 0.01
+      offset: -327.68
+    baseline:
+      period: '1991-2020'
+      statistic: mean
+      window_days: 15
+      label: the 1991-2020 mean for the time of year
+      computed_by: here
+      note: >-
+        Each day is compared with the 1991-2020 average of the daily minimum
+        temperature around that time of year — a 15-day window centred on the
+        calendar day — computed in this project from NOAA CPC Global Unified.
+        A warm El Nino winter in western Canada shows up most clearly here, in
+        the nights.
+  land_precip_ratio:
+    long_name: Land precipitation relative to normal
+    short_name: Rain vs normal
+    # The NUMBER is log2(actual / normal); `display` below is what the legend
+    # prints. Stored as a log so a halving (-1) and a doubling (+1) sit the same
+    # distance from normal (0). Measured, linear percent-of-normal puts every
+    # possible drought into 0..100% while wet runs past 700%, which would make
+    # the dry half — what El Nino does to Indonesia and Australia — the
+    # unreadable one.
+    units: log2 ratio
+    display: log2_percent
+    precision: 2
+    grid: land
+    source: precip
+    transform: log2_ratio
+    resampling: nearest
+    # WEEKLY AND MONTHLY ONLY. A daily rainfall anomaly is noise: most days are
+    # dry most places, so a daily ratio is mostly 0% or a huge multiple.
+    periods: [weekly, monthly]
+    # A normal below this makes the ratio meaningless — one 0.5 mm shower over a
+    # 0.05 mm/day normal would read as 1000%. Measured: 7% of the box's land in
+    # January. Those cells draw the sentinel grey, the same third state the ocean
+    # anomaly uses for its ice fringe and for the same reason: there is a value,
+    # but no meaningful departure from normal.
+    min_normal: 0.1
+    no_value_label: Too dry for a ratio (normal under 0.1 mm/day)
+    # 25% .. 400% of normal.
+    vmin: -2.0
+    vmax: 2.0
+    # Brown for dry, teal for wet — the convention for rainfall anomalies, and
+    # visibly not the temperature layers' red/blue.
+    colormap: BrBG
+    presets:
+      - {label: Narrow, vmin: -1.0, vmax: 1.0}
+      - {label: Wide, vmin: -3.0, vmax: 3.0}
+    limits: [-4.0, 4.0]
+    # One byte at 1/32 of a doubling, code 0 the too-dry sentinel. Code 128 is
+    # exactly 0 (normal); 1..255 spans -3.97..+3.97, i.e. 6%..1570% of normal.
+    # A bone-dry bucket is floored at 2^-4 before encoding rather than sent to
+    # log2(0) = -inf, so it lands on the driest colour rather than wrapping.
+    encoding:
+      channels: [R]
+      scale: 0.03125
+      offset: -4.0
+      sentinel: 0
+    baseline:
+      period: '1991-2020'
+      statistic: mean
+      # A 7-day window, not 15: this layer is only drawn weekly and monthly,
+      # where averaging over the bucket already smooths the normal. 7 steadies
+      # the weekly normal and blurs a month's by only +/-3 days, so a sharp
+      # monsoon onset keeps its month.
+      window_days: 7
+      label: the 1991-2020 mean for the time of year
+      computed_by: here
+      note: >-
+        Rainfall over the week or month as a share of the 1991-2020 average for
+        the same days of the year, computed in this project from NOAA CPC
+        Global Unified. 100% is normal, 50% half the usual rain, 200% double.
+        Cells that normally get almost no rain at that time of year are shown
+        grey, because a ratio there is meaningless.
 
 # Named boxes for area-mean indices. Bounds are inclusive cell-centre ranges in
 # degrees_east (0-360) / degrees_north, and all of them fit inside `subset`.

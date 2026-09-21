@@ -6,7 +6,10 @@ that comes straight from the source: **CPC ships one NetCDF per year**, so the
 loop walks time indices inside a file rather than files. The file is opened once
 per year by `shared.fields.read_land_year` and the days are sliced out of the
 resulting stack; opening it per date would be ~365 opens of the same 80 MB HDF5
-file to read a 250x380 slice out of each.
+file.
+
+**The whole globe, not the Pacific box.** `gy`/`gx` are the CPC grid's own
+indices, and every valid cell of it is stored.
 
 The grid conventions — CPC is north-up and already 0-360, so it is flipped and
 NOT rolled — are applied by `shared/fields.py`, not here, and verified there
@@ -28,7 +31,6 @@ from pathlib import Path
 
 import numpy as np
 from shared.ch import DATABASE, STATUS_FAILED, STATUS_SUCCESS
-from shared.domain import land_grid, subset
 from shared.fields import (
     land_path,
     land_valid_mask,
@@ -45,12 +47,6 @@ TEMP_COLUMNS = ["date", "gy", "gx", "tmax_raw", "tmin_raw"]
 PRECIP_COLUMNS = ["date", "gy", "gx", "precip_raw"]
 
 
-def _box_origin() -> tuple[int, int]:
-    """`(gy0, gx0)` of the box on the LAND grid — 60, 200 as configured."""
-    grid = land_grid()
-    return subset().gy_range(grid)[0], subset().gx_range(grid)[0]
-
-
 def read_temp_day(stacks: dict[str, np.ndarray], i: int) -> tuple[np.ndarray, ...]:
     """`(gy, gx, tmax_raw, tmin_raw)` for one time index of a temperature year.
 
@@ -58,7 +54,6 @@ def read_temp_day(stacks: dict[str, np.ndarray], i: int) -> tuple[np.ndarray, ..
     minimum has no `tmean`, and storing it with a sentinel minimum would put a
     fabricated number behind an ALIAS that looks computed.
     """
-    gy0, gx0 = _box_origin()
     tmax, tmin = stacks["tmax"][i], stacks["tmin"][i]
 
     vmax, vmin = land_valid_mask(tmax), land_valid_mask(tmin)
@@ -76,8 +71,8 @@ def read_temp_day(stacks: dict[str, np.ndarray], i: int) -> tuple[np.ndarray, ..
 
     iy, ix = np.nonzero(both)
     return (
-        (iy + gy0).astype("uint16"),
-        (ix + gx0).astype("uint16"),
+        iy.astype("uint16"),
+        ix.astype("uint16"),
         to_temp_counts(tmax[iy, ix]),
         to_temp_counts(tmin[iy, ix]),
     )
@@ -90,12 +85,11 @@ def read_precip_day(stacks: dict[str, np.ndarray], i: int) -> tuple[np.ndarray, 
     rain — and dropping the dry cells would make a missing row mean either "dry"
     or "outside the gauge analysis", which nothing downstream could tell apart.
     """
-    gy0, gx0 = _box_origin()
     precip = stacks["precip"][i]
     iy, ix = np.nonzero(land_valid_mask(precip))
     return (
-        (iy + gy0).astype("uint16"),
-        (ix + gx0).astype("uint16"),
+        iy.astype("uint16"),
+        ix.astype("uint16"),
         to_precip_counts(precip[iy, ix]),
     )
 

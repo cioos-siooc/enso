@@ -2,8 +2,8 @@
 
 Timeseries are read live from ClickHouse. **Imagery is not**: map frames are
 rendered by `process` from the daily NetCDF and served from the cache here, so
-`/image` 404s on a bucket it has neither cached nor a source file for. See
-`modules/render.py` for why that is deliberate rather than a limitation.
+`/image` 404s on a bucket `process` has not rendered — the API never renders.
+See `modules/render.py` for why.
 
 Blocking work runs in the default thread pool via FastAPI's sync endpoints
 rather than blocking the event loop.
@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from shared.domain import global_grid, quantities, regions, subset, variable, variables
+from shared.domain import variable as variable_meta  # `variable` is a query param name in /image
 
 from modules import render, state
 from modules.freshness import data_freshness
@@ -41,6 +42,17 @@ from modules.timeseries import (
 # A Literal so FastAPI rejects an unknown name with a 422 before it reaches the
 # query builder, and documents the choice in /docs.
 Variable = Literal["sst", "anom", "mhw"]
+
+# What `/image` can draw: the ocean variables and the six land overlay layers.
+# A SEPARATE Literal, deliberately — the land layers have no timeseries,
+# ranking or region path, so widening `Variable` itself would let
+# `/timeseries?variable=land_tmax` through validation to code that cannot serve
+# it. This keeps that a 422.
+ImageVariable = Literal[
+    "sst", "anom", "mhw",
+    "land_tmax", "land_tmin", "land_precip",
+    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio",
+]
 
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 
@@ -190,6 +202,11 @@ def domain() -> dict:
             "resolution": global_grid().resolution,
         },
         "imageBounds": render.bounds(),
+        # The land frames are global, so they have corners of their own. They
+        # carry the ocean frame's pixel grid round the globe
+        # (`render.land_canvas`), so the edges fall on that grid: a fraction of
+        # a pixel inside -180..180, 60S..~85N.
+        "landImageBounds": render.land_bounds(),
         "variables": {
             name: {
                 "longName": v.long_name,
@@ -208,6 +225,23 @@ def domain() -> dict:
                 ],
                 # `anom` is computed as sst - climatology, not stored.
                 "derived": v.derived,
+                # `global` for the ocean, `land` for the overlay layers — which
+                # control a layer belongs to, and which corners its image takes:
+                # `imageBounds` or `landImageBounds`.
+                "grid": v.grid,
+                # The CPC variable a land layer reads, or null for the ocean.
+                "source": v.source,
+                # The periods this layer exists at. The rainfall ratio is weekly
+                # and monthly only, and `/image` 400s on any other.
+                "periods": list(v.periods),
+                # How to LABEL a value where that differs from the number:
+                # `log2_percent` is the rainfall ratio, stored as log2 so a
+                # halving and a doubling are equidistant, printed as percent.
+                "display": v.display,
+                # What the sentinel grey means on this variable — ocean with no
+                # climatology, or land too dry for a ratio. Same colour, two
+                # different statements, so the legend reads it from here.
+                "noValueLabel": v.no_value_label,
                 # WHAT THIS VARIABLE IS MEASURED AGAINST, or null where that is
                 # not a question (`sst` is an absolute temperature).
                 #
@@ -314,7 +348,10 @@ def domain() -> dict:
         # mapping rather than a second one — a consumer looks up whichever key
         # the series named, and the two namespaces do not collide.
         "colorStops": {
-            **{name: render.colormap_stops(name) for name in VARIABLES},
+            # Every declared variable, the land layers included — iterated from
+            # `domain.yml` rather than the ocean's timeseries tuple, which would
+            # leave the land legends with no stops to draw.
+            **{name: render.colormap_stops(name) for name in variables()},
             **{name: render.quantity_stops(name) for name in quantities()},
         },
         "defaultVariable": "sst",
@@ -608,9 +645,8 @@ def monthly_ranking_endpoint(request: RankingRequest, http_request: Request):
 def image(
     date: dt.date,
     width: int = Query(render.DEFAULT_WIDTH, ge=180, le=8192),
-    nocache: bool = False,
     period: Period = "daily",
-    variable: Variable = "sst",
+    variable: ImageVariable = "sst",
 ) -> Response:
     """One bucket's field as a Web-Mercator WebP, for a Mapbox image source.
 
@@ -622,25 +658,33 @@ def image(
     **This does not render from the database.** `process` produces every frame
     from the daily NetCDF, and `sst_daily` carries no `by_date` projection, so
     rebuilding an old bucket here would be a partition scan over billions of
-    rows. A cache miss with no NetCDF left on disk is a 404 — deliberately, so
-    a missing frame is a fast error rather than a hung request. Re-rendering
-    history means re-downloading the range and running `CRW.cli render`.
+    rows, and it does not render from NetCDF either: a cache miss is a 404,
+    so a missing frame is a fast error rather than a hung request. Re-rendering
+    history means re-downloading the range and running `CRW.cli render` or
+    `CPC.cli render`.
 
     There is no tile pyramid; the Pacific box is one image, and a pyramid can be
     added behind the same URL shape later.
     """
+    # A layer that does not exist at this period is a request error, not a
+    # missing frame: the rainfall ratio is weekly and monthly only, because a
+    # daily rainfall anomaly is noise. A 404 would read as "not rendered yet".
+    declared = variable_meta(variable).periods
+    if period not in declared:
+        raise HTTPException(
+            400,
+            f"{variable} is drawn at {', '.join(declared)} periods only, not {period}",
+        )
     payload = render.render(
         date,
         width=width,
-        use_cache=not nocache,
         period=period,
         variable_name=variable,
     )
     if payload is None:
         raise HTTPException(
             404,
-            f"no cached {variable} image for {date} ({period}, w{width}) and no "
-            "NetCDF on disk to render one from",
+            f"no {variable} image rendered for {date} ({period}, w{width})",
         )
     return Response(
         content=payload,

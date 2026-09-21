@@ -255,6 +255,21 @@
               &mdash; daily heatwave category, Moderate through Beyond extreme,
               against a 1985&ndash;2012 90th-percentile climatology.
             </li>
+            <!-- The land overlay's source. A gauge-and-station analysis, so it is
+                 least reliable where stations are sparse — interior New Guinea,
+                 Borneo, the Amazon — which is worth a reader knowing before they
+                 read a dry patch there as El Nino. -->
+            <li>
+              <ULink
+                to="https://psl.noaa.gov/data/gridded/data.cpc.globalprecip.html"
+                target="_blank"
+                class="text-primary"
+              >NOAA CPC Global Unified</ULink>
+              &mdash; daily land temperature and rainfall at 0.5&deg;, from weather
+              stations and rain gauges, for the Land overlay. Its anomalies are
+              against a 1991&ndash;2020 normal computed here. Least reliable where
+              stations are sparse, such as interior New Guinea and Borneo.
+            </li>
             <li v-if="store.coverage">
               Ingested here: {{ store.coverage.start }} &ndash; {{ store.coverage.end }}.
             </li>

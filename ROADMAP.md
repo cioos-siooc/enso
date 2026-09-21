@@ -69,6 +69,12 @@ v2.0's swipe compare is date-only. Allowing anomaly | MHW on the same week needs
 - **Why:** arbitrary areas without editing `domain.yml`.
 - **Watch:** `/regionTimeseries` already does a live box and takes 3–12 s. A drawn polygon needs an async job with progress, or a coarser grid. There is no rollup to lean on.
 
+### A10. Multiple point / region selection (M)
+Select several cells or named regions at once and chart their series together, so different locations can be compared on one chart.
+- **Why:** compare places without flipping back and forth, e.g. Niño 3.4 against the Blob's cell, or two coastal cells.
+- **Builds on:** `/timeseries` and `/region/{key}` as they are, one request per selection. Named regions are rollup reads and cheap; points are primary-key reads.
+- **Open:** max 2 or more depends on the implementation. The stats and ranking dock currently describe one selection, and the map draws one pin or one box. A point and a region mix a category with an extent under `mhw`, so mixed selections need the `quantity` rule applied per series.
+
 ---
 
 ## B. More data
@@ -101,23 +107,39 @@ IRI/CPC probabilistic ENSO forecast, or the NMME plume.
 From GODAS, ORAS5 or Argo gridded products; for example, the 20 °C isotherm depth.
 - **Why:** ENSO starts below the surface, before SST shows it. This is also the only 3D view the science supports (see D2).
 
-### B6. Land temperature and precipitation — **download and ingest are built** (M–L)
+### B6. Land temperature and precipitation — **built as a map overlay** (M–L)
 Daily land temperature and rainfall over the same years as the ocean layers, to show what an El Niño does on land: a dry Indonesia and northern Australia, a wet coast in Peru and Ecuador, and a warm winter in western Canada.
 
-**Built (2026-09-18):** the `process/CPC/` package (`python -m CPC.cli`), `domain.yml`'s `land` grid, the land reader in `shared/fields.py`, and `land_temp_daily` / `land_precip_daily` with their status tables. See CLAUDE.md's *The land archive* section for what was measured and why each choice was made. **Nothing is rendered or served yet** — that is the list under *Still to do* below.
+**Built (2026-09-18):** download and ingest (`process/CPC/`, `land_temp_daily`, `land_precip_daily`), then the 1991–2020 land climatology, six map layers served by `/image`, and a **map overlay** in the frontend with its own control and legend, drawn over whichever ocean variable is showing. See CLAUDE.md's *The land archive* and *The land overlay* sections. The chart, stats and rankings stay ocean: clicking land for a timeseries is the next step, under *Still to do*.
 
-- **Source: NOAA CPC Global Unified**, from NOAA PSL. precip, tmax and tmin on a 0.5° grid, one NetCDF **per year**, public domain, no login, ~2 days behind. Over the box it is 250×380 cells, of which 20,878 carry temperature and 22,952 precipitation.
-- **Decisions taken, so they are not relitigated:** both `tmax` and `tmin` are stored with `tmean` as a zero-storage ALIAS; two tables rather than one, because the two products do not share a land mask; every year file is **kept on disk** (~9.5 GB for the whole record), so there is no retention window on this side and history stays re-renderable; the archive starts **1985**, matching CoralTemp, so `/coverage` reports one date range. CPC itself reaches back to **1979**, which would buy the 1982/83 super El Niño the ocean layers cannot show — deliberately left on the table, and it is a backfill plus a presentation decision, not new code.
+- **Source: NOAA CPC Global Unified**, from NOAA PSL. precip, tmax and tmin on a 0.5° grid, one NetCDF **per year**, public domain, no login, ~2 days behind. **Global since 2026-09-18** (the whole 360×720 grid in the tables and climatology; frames 60°S–85°N): ~62,900 cells a day carry temperature and ~93,000 precipitation. Over the Pacific box it was 250×380 cells, 20,878 and 22,952.
+- **Decisions taken, so they are not relitigated:** both `tmax` and `tmin` are stored with `tmean` as a zero-storage ALIAS; two tables rather than one, because the two products do not share a land mask; every frame is **pre-rendered and the year files are deleted once ingested and rendered** (`CPC.cli prune`, checked per product-year; the API never renders), so re-rendering history or rebuilding the climatology means re-fetching (~9.5 GB); the archive starts **1985**, matching CoralTemp, so `/coverage` reports one date range. CPC itself reaches back to **1979**, which would buy the 1982/83 super El Niño the ocean layers cannot show — deliberately left on the table, and it is a backfill plus a presentation decision, not new code.
 - **Rejected sources:** *ERA5-Land* (0.1°, needs a Copernicus account and request queue, ~5 days behind, ~25× the cells). It is the upgrade if 0.5° looks too coarse beside the 0.05° ocean. *CHIRPS* (precip on exactly the CoralTemp grid, but only 50°S–50°N, which loses BC and Alaska, and files are revised ~3 weeks later). *IMERG* (starts 1998/2000).
 - **Still to do:**
-  - A land climatology (1991–2020) and the `anom` counterpart, plus its `domain.yml` `baseline` block. **Cheap here**, unlike the ocean's: every year file stays on disk, so it is computable from the tables or the files at will.
-  - Image rendering and encoding, a land grid tier in `shared/render.py`, and `/image` support.
-  - Region rollups, `/coverage` gating, the API and the frontend toggle.
+  - **Clicking land for a chart.** Land `/timeseries` and `/monthlyRanking`, a `land_clim` ClickHouse table (the climatology exists as files; the API's anomaly queries will want it in the database, computed from the same files so there is one normal), region rollups for land, and the store/chart work to plot a land cell. The overlay model means the chart would need to know which surface was clicked.
+  - **SPI** as an alternative rain anomaly: WMO standard, bounded ±3, works in the arid cells that are grey today. A gamma fit per cell per calendar month, monthly and longer only, and a named method to cite.
+  - **The 1979 extension** (the 1982/83 super El Niño): a `fetch` + `backfill` + `render` plus a decision on how the map presents land years with no ocean under them.
+  - **A compact two-legend layout on a phone.** With the overlay on, the ocean and land legends stack and cover about half of a 390 px map.
+- **Map layers, decided with the user (2026-09-18)** — measured first, so these are not to be relitigated:
+  - **Six layers.** Absolute `tmax`, `tmin`, `precip` and anomaly `tmax`, `tmin` at daily/weekly/monthly; the **precip anomaly at weekly and monthly only**, since a daily rainfall anomaly is noise while a daily temperature anomaly (a heatwave day) is not. `tmean` gets no layer — it stays an ALIAS.
+  - **Precip anomaly is `log2(actual / normal)`, labelled as percent** (25/50/100/200/400). Measured, the absolute departure's middle 50% is −17…+12 mm/month with a tail to 7,812 mm, so no one scale works; linear percent-of-normal squeezes every drought into 0–100% while wet runs past 700%, which makes the dry half — what El Niño does to Indonesia and Australia — the unreadable one. The log puts ×2 and ÷2 equidistant from normal.
+  - **Cells with a normal under 0.1 mm/day draw flat grey** — 7% of the Pacific box's land in January (much more globally: the Sahara and Arabia in their dry season), where one 0.5 mm shower reads as 500%. This reuses `render.NO_CLIM_RGBA`, the ocean's ice-fringe third state, and means the same thing: a value exists, a meaningful anomaly does not.
+  - **A precip bucket is mean mm/day, not a total**, so one legend serves all three periods, as MHW's already does. The ratio layer is unaffected (a ratio of means is a ratio of totals). A monthly total is a UI label, not a second raster.
+  - **`tmax`/`tmin` buckets are the mean of the dailies** ("average daily high"), which is what a normal is — never the max of `tmax`, which would compare a weekly extreme against a mean.
+  - **The precip normal is a per-MMDD normal smoothed over a 7-day window, averaged over the bucket's days** — corrected during the build. The note here used to say "per month and per week-of-year", but a windowed daily normal smooths away the per-day noise just as well, serves Monday-anchored weeks (which a week-of-year table cannot), and keeps one table shape for all three sources. A month's normal is blurred by only ±3 days, so a monsoon onset keeps its month. Temperature uses 15 days.
+  - **Temperature anomaly needs two bytes and a wider range than the ocean's.** Within-month day-to-day spread of `tmax` is ~5 °C north of 45°N (p99 ~10 °C) against the ocean anomaly's ±3 display range; the ocean `anom`'s one byte at 0.1 °C tops out at ±12.7, uncomfortably close to real continental winter anomalies. Default display ≈ ±8, with presets.
+  - **SPI is the follow-up, not the first version.** The WMO standard, bounded ±3, works in arid cells and would retire the grey state — but it is a gamma fit per cell per month per timescale, valid monthly and longer only, and a named method to cite.
+- **What the build found in existing code:**
+  - `to_mercator()` took its row spacing from `subset().nlat`, the OCEAN grid's 2500, which is wrong for a 250-row land field. It now derives spacing from the field's shape against the image edges; the ocean output is byte-identical.
+  - **Land has its own image bounds** (`landImageBounds`), since going global. The land frame is the ocean frame's pixel grid carried round to just inside ±180°, so the no-overlap cut still works pixel for pixel (exactly west of the dateline; east of it the grids are offset by a sub-pixel and the cut leaves at most a one-pixel basemap strip). It stops at ±180 because **Mapbox draws a 360°-wide image source only in the world copy nearest the camera**: a ~−30…330° frame lost the Americas with the camera on Asia, and explicit ±360 copies did not help.
+  - **Layer order cannot keep land off the sea.** The style's only land is `country-boundaries`, a fill; the land raster must sit above it to be seen, where its 0.5° blocks would overhang every coast. Fixed by cutting land frames to CoralTemp's own coastline at render time (a committed ocean mask, global since the land went global, 116 KB): measured 0 overlapping pixels against the ocean rasters under `sst` and `mhw`.
+  - **Concurrent NetCDF reads deadlocked the API** when the API still rendered land frames on demand and swipe compare asked for two at once; the API is cache-only now. All reads now take one process-wide lock; see CLAUDE.md's gotchas.
+  - A land frame is **~120 KB (rain) to ~190 KB (temperature)** globally, 3,880 × 2,747 px; it was 27–56 KB over the Pacific box (the estimate here said 22). Encoding ~0.5–2 s. Two legends side by side, never one: ±3 and ±8 cannot share a scale.
 - **Watch:**
   - CPC is built from rain gauges and weather stations. Where stations are sparse (interior New Guinea, Borneo, the Amazon), it is less reliable.
   - Show anomalies, monthly by default. A daily rainfall anomaly is mostly noise; the ENSO signal is seasonal.
   - Precip needs its own palette (e.g. BrBG), and probably a percent-of-normal option, since rainfall is skewed.
-  - The box (100°E–70°W) misses the famous links outside the Pacific: India, southern and east Africa, eastern Brazil. Widening for land alone costs little, but then the land layer would reach past the ocean image. That is a UX decision.
+  - ~~The box (100°E–70°W) misses the famous links outside the Pacific~~ — done: land is global, so India, southern and east Africa and eastern Brazil are on the map, with land reaching past the ocean image by design.
 - **Check when built:** DJF 1997/98 and 2015/16 rainfall anomalies should show a dry Indonesia and northern Australia, and a wet Peru, Ecuador and US Gulf coast.
 
 ---

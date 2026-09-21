@@ -18,6 +18,7 @@
  * step through a hundred playback frames instead of leaving the site.
  */
 import { useMainStore, type VariableName } from '~/stores/main'
+import { LAND_SOURCES, type LandMode, type LandSource } from '~/utils/land'
 import { PERIODS, type Period } from '~/utils/periods'
 import { findStory } from '~/stories'
 import { useStory } from '~/composables/useStory'
@@ -31,6 +32,9 @@ const KEYS = {
   point: 'at',
   /** Swipe compare's second date; absent when compare is off. */
   compare: 'c',
+  /** The land overlay (`tmax` | `tmin` | `precip`) and its mode; absent when off. */
+  land: 'land',
+  landMode: 'lm',
   /** A guided story and its 1-based step. */
   story: 'story',
   step: 'step',
@@ -84,6 +88,8 @@ export function useUrlState() {
     const region = first(q[KEYS.region])
     const point = first(q[KEYS.point])
     const compare = first(q[KEYS.compare])
+    const land = first(q[KEYS.land]) as LandSource | null
+    const landMode = first(q[KEYS.landMode]) as LandMode | null
 
     await store.applyView({
       variable: variable && VARIABLES.includes(variable) ? variable : undefined,
@@ -92,6 +98,10 @@ export function useUrlState() {
       region: region ?? undefined,
       point: point ? parsePoint(point) ?? undefined : undefined,
       compareDate: compare && ISO_DATE.test(compare) ? compare : undefined,
+      // Unknown values are dropped rather than trusted, like the variable: a
+      // hand-edited link must not put the store into a state no button reaches.
+      landLayer: land && LAND_SOURCES.includes(land) ? land : undefined,
+      landMode: landMode === 'value' || landMode === 'anomaly' ? landMode : undefined,
     })
   }
 
@@ -110,6 +120,10 @@ export function useUrlState() {
     }
     if (store.selectedDate) q[KEYS.date] = store.selectedDate
     if (store.compareDate) q[KEYS.compare] = store.compareDate
+    if (store.landLayer) {
+      q[KEYS.land] = store.landLayer
+      q[KEYS.landMode] = store.landMode
+    }
     if (store.scope === 'region') {
       if (store.activeRegion) q[KEYS.region] = store.activeRegion
     }
@@ -139,6 +153,7 @@ export function useUrlState() {
     // `flush: 'post'` keeps it off the critical path of the frame.
     watch(
       () => [store.variable, store.period, store.selectedDate, store.compareDate, store.scope,
+             store.landLayer, store.landMode,
              store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon,
              story.active.value?.key, story.step.value],
       sync,

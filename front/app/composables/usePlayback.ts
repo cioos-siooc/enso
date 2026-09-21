@@ -98,6 +98,23 @@ export function usePlayback() {
     return stepped
   }
 
+  /**
+   * Every frame a bucket needs on screen: the ocean's, plus the land overlay's
+   * when it is on and drawable for that bucket.
+   *
+   * The land frame is awaited like the ocean one, not merely warmed. Mapbox's
+   * image source keeps its previous image until the new one decodes, so a land
+   * frame that lags would show last bucket's rain under this bucket's date for
+   * the length of the lag — the same stutter waiting on readiness exists to
+   * prevent for the ocean.
+   */
+  function frameUrls(date: string): string[] {
+    const urls = [api.imageUrl(date, store.period, store.variable)]
+    const land = store.landVariable
+    if (land && !store.landReasonAt(date)) urls.push(api.imageUrl(date, store.period, land))
+    return urls
+  }
+
   function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
   }
@@ -109,7 +126,7 @@ export function usePlayback() {
       const target = next(store.selectedDate)
       if (!target) break
 
-      await ready(api.imageUrl(target, store.period, store.variable))
+      await Promise.all(frameUrls(target).map(ready))
       if (!playing.value || mine !== run) return
 
       store.setDate(target)
@@ -121,7 +138,7 @@ export function usePlayback() {
       for (let i = 0; i < aheadCount; i++) {
         ahead = next(ahead)
         if (!ahead) break
-        warm(api.imageUrl(ahead, store.period, store.variable))
+        for (const url of frameUrls(ahead)) warm(url)
       }
 
       // fps is read per frame, so the slider takes effect on the next one.
