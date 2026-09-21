@@ -446,48 +446,68 @@ def _process_date(client, http, date, *, force, keep_nc, width) -> str:
     return "unpublished"
 
 
+def run_targets(client, *, date, recheck_days, max_days) -> list[dt.date]:
+    """The dates one `run` covers, sorted and unique.
+
+    Shared with `CRW.flows.daily_run`, so the scheduled run and the CLI cannot
+    disagree about which dates a run is responsible for.
+    """
+    if date:
+        return [date]
+
+    yesterday = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    # The EARLIER of the two archives' last ingested day, so a date that
+    # is SST-done but still MHW-pending — which happens whenever a run
+    # lands in the ~90 minutes between the two publications — is revisited
+    # on the next run instead of being stranded behind the SST watermark.
+    # Revisiting a complete date costs two HEAD requests and nothing else.
+    watermarks = [
+        w for w in (
+            status_mod.last_ingested(client, target.status_table)
+            for _name, _product, target in PRODUCTS
+        ) if w
+    ]
+    last = min(watermarks) if len(watermarks) == len(PRODUCTS) else None
+    # From the day after the last ingested through yesterday — one code
+    # path covering normal daily operation, a missed cron run, and the
+    # tail of a bulk download that has outrun the ingest.
+    start = (last + dt.timedelta(days=1)) if last else yesterday
+    targets = []
+    day = min(start, yesterday)
+    while day <= yesterday:
+        targets.append(day)
+        day += dt.timedelta(days=1)
+    if max_days:
+        targets = targets[:max_days]
+
+    # Then re-check the recent tail for in-place revisions.
+    recheck = [
+        yesterday - dt.timedelta(days=i)
+        for i in range(1, recheck_days + 1)
+    ]
+    targets.extend(d for d in recheck if d not in targets and (not last or d <= last))
+    return sorted(set(targets))
+
+
+def run_summary(outcomes: dict[str, int], n_targets: int) -> str:
+    return (
+        "run: " + ", ".join(f"{n} {word}" for word, n in sorted(outcomes.items()))
+        + f" (of {n_targets} target date(s))"
+    )
+
+
 def cmd_run(args) -> int:
     ensure_schema()
 
     with get_client() as client, download.new_client() as http:
-        if args.date:
-            targets = [args.date]
-        else:
-            yesterday = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
-            # The EARLIER of the two archives' last ingested day, so a date that
-            # is SST-done but still MHW-pending — which happens whenever a run
-            # lands in the ~90 minutes between the two publications — is revisited
-            # on the next run instead of being stranded behind the SST watermark.
-            # Revisiting a complete date costs two HEAD requests and nothing else.
-            watermarks = [
-                w for w in (
-                    status_mod.last_ingested(client, target.status_table)
-                    for _name, _product, target in PRODUCTS
-                ) if w
-            ]
-            last = min(watermarks) if len(watermarks) == len(PRODUCTS) else None
-            # From the day after the last ingested through yesterday — one code
-            # path covering normal daily operation, a missed cron run, and the
-            # tail of a bulk download that has outrun the ingest.
-            start = (last + dt.timedelta(days=1)) if last else yesterday
-            targets = []
-            day = min(start, yesterday)
-            while day <= yesterday:
-                targets.append(day)
-                day += dt.timedelta(days=1)
-            if args.max_days:
-                targets = targets[: args.max_days]
-
-            # Then re-check the recent tail for in-place revisions.
-            recheck = [
-                yesterday - dt.timedelta(days=i)
-                for i in range(1, args.recheck_days + 1)
-            ]
-            targets.extend(d for d in recheck if d not in targets and (not last or d <= last))
+        targets = run_targets(
+            client, date=args.date, recheck_days=args.recheck_days,
+            max_days=args.max_days,
+        )
 
         outcomes: dict[str, int] = {}
         failed = 0
-        for date in sorted(set(targets)):
+        for date in targets:
             try:
                 outcome = _process_date(
                     client, http, date, force=args.force, keep_nc=args.keep_nc,
@@ -499,10 +519,7 @@ def cmd_run(args) -> int:
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
             failed += outcome == "failed"
 
-    print(
-        "run: " + ", ".join(f"{n} {word}" for word, n in sorted(outcomes.items()))
-        + f" (of {len(set(targets))} target date(s))"
-    )
+    print(run_summary(outcomes, len(targets)))
     return 1 if failed else 0
 
 

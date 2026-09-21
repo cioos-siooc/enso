@@ -24,12 +24,17 @@
 #        docker compose -f docker-compose.prod.yml --env-file .env.prod \
 #          run --rm process python -m CRW.cli run
 #
-#      That is also the shape a cron entry wants. Add `--no-deps` for `render`,
+#      The daily `run` itself is scheduled by `scheduler` (6). Add `--no-deps` for `render`,
 #      which reads NetCDF off disk and touches neither ClickHouse nor the
 #      network; `backfill`, `rollup` and `run` all need db-ch up.
 #   5. A `maintenance` service, also behind a profile, which takes over front's
 #      and api's published ports while they are stopped. See its own comment
 #      below for why a migration needs the site down rather than merely slow.
+#   6. `prefect` + `scheduler` run the daily `run` on a schedule, with a
+#      run-history UI on PREFECT_PORT behind basic auth. Neither is behind a
+#      profile: `scheduler` is the pipeline image serving CRW/flows.py, and it
+#      shares its `image:` with `process` — so `up -d --build` now rebuilds the
+#      pipeline too, which it used to skip.
 #
 # One deploy prerequisite compose will not tell you about: create DATA_DIR,
 # CH_DATA_DIR and CH_LOG_DIR on the host and chown them to UID:GID FIRST.
@@ -38,6 +43,41 @@
 # UID and gets an empty read-only mount, `process` cannot write at all.
 
 name: enso-prod
+
+# The pipeline image, shared by `process` (the CLI) and `scheduler` (the same
+# code served as a Prefect flow). One definition, so the two cannot drift, and
+# one image name, so a build of either is a build of both.
+x-process-env: &process-env
+  HDF5_USE_FILE_LOCKING: "FALSE"
+  UV_CACHE_DIR: /tmp/uv-cache
+  OISST_NC_DIR: ${OISST_NC_DIR:-/opt/data/sst}
+  OISST_IMAGE_DIR: ${OISST_IMAGE_DIR:-/opt/data/images}
+  CRW_CLIM_DIR: ${CRW_CLIM_DIR:-/opt/data/climatology}
+  CRW_MHW_DIR: ${CRW_MHW_DIR:-/opt/data/MHW}
+  # Hard-coded to the service name, overriding any host-IP value in
+  # .env.prod — same reason as dev.
+  CH_HOST: db-ch
+  CH_PORT: 8123
+  CH_USER: ${CH_USER:-default}
+  CH_PASSWORD: ${CH_PASSWORD:-${CLICKHOUSE_PASSWORD:-}}
+  CH_DATABASE: ${CH_DATABASE:-enso}
+
+x-process: &process
+  build:
+    context: .
+    dockerfile: process/Dockerfile
+  image: enso-prod-process
+  user: "${UID:-1000}:${GID:-1000}"
+  env_file:
+    - .env.prod
+  environment: *process-env
+  volumes:
+    # Writable, unlike api's: this is the only service that downloads NetCDF,
+    # writes the image cache and prunes the retention window.
+    - ${DATA_DIR:-./data}:/opt/data
+  depends_on:
+    db-ch:
+      condition: service_healthy
 
 services:
   front:
@@ -187,6 +227,8 @@ services:
   # flight. Wrong and plausible is worse than down, every time.
   #
   #   docker compose -f docker-compose.prod.yml --env-file .env.prod stop front api
+  #   # ...and `scheduler` too, for anything that touches the database: a
+  #   # scheduled `run` would ingest into partitions a migration is moving.
   #   docker compose -f docker-compose.prod.yml --env-file .env.prod \
   #     --profile maintenance up -d maintenance
   #   ... do the work ...
@@ -217,35 +259,72 @@ services:
     restart: unless-stopped
 
   process:
-    build:
-      context: .
-      dockerfile: process/Dockerfile
+    <<: *process
     # Behind a profile so `up -d` does not start it; it is a CLI, not a service.
     profiles: ["tools"]
-    user: "${UID:-1000}:${GID:-1000}"
-    env_file:
-      - .env.prod
-    environment:
-      - HDF5_USE_FILE_LOCKING=FALSE
-      - UV_CACHE_DIR=/tmp/uv-cache
-      - OISST_NC_DIR=${OISST_NC_DIR:-/opt/data/sst}
-      - OISST_IMAGE_DIR=${OISST_IMAGE_DIR:-/opt/data/images}
-      - CRW_CLIM_DIR=${CRW_CLIM_DIR:-/opt/data/climatology}
-      - CRW_MHW_DIR=${CRW_MHW_DIR:-/opt/data/MHW}
-      # Hard-coded to the service name, overriding any host-IP value in
-      # .env.prod — same reason as dev.
-      - CH_HOST=db-ch
-      - CH_PORT=8123
-      - CH_USER=${CH_USER:-default}
-      - CH_PASSWORD=${CH_PASSWORD:-${CLICKHOUSE_PASSWORD:-}}
-      - CH_DATABASE=${CH_DATABASE:-enso}
-    volumes:
-      # Writable, unlike api's: this is the only service that downloads NetCDF,
-      # writes the image cache and prunes the retention window.
-      - ${DATA_DIR:-./data}:/opt/data
     # `sleep infinity` so `up --profile tools -d` gives an `exec`-able container
     # for a long backfill; the `run --rm` form above ignores it.
     command: ["sleep", "infinity"]
+
+  # --- Prefect: a schedule and a run-history UI for the daily `run` ---------
+  # Self-hosted on SQLite: one flow a day needs no Postgres. Published like
+  # front and api, for the host's TLS proxy to put a hostname on — basic auth
+  # over plain HTTP sends the password in the clear, so do not expose the raw
+  # port.
+  prefect:
+    image: prefecthq/prefect:${PREFECT_IMAGE_TAG:-3.8.6-python3.13}
+    # Must match the `prefect==` pin in process/pyproject.toml.
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["prefect", "server", "start", "--host", "0.0.0.0"]
+    ports:
+      - "${PREFECT_PORT:-9025}:4200"
+    volumes:
+      # SQLite database + server state. Create and chown to UID:GID first, like
+      # DATA_DIR — Docker creates a missing bind source as root.
+      - ${PREFECT_DIR:-./prefect}:/var/lib/prefect
+    environment:
+      # Not /opt/prefect: the image keeps its entrypoint.sh there, and a mount
+      # over it leaves tini exec-ing a file that no longer exists.
+      PREFECT_HOME: /var/lib/prefect
+      # The server copies its UI bundle out of site-packages on start, which
+      # is root-owned; running as UID, it has to go somewhere writable or the
+      # UI is simply not served.
+      PREFECT_UI_STATIC_DIRECTORY: /var/lib/prefect/ui
+      # Required: the UI can trigger runs, and it is published.
+      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?set PREFECT_AUTH_STRING (user:password) in .env.prod}
+      # What the BROWSER calls. Without it the UI points at 0.0.0.0:4200.
+      PREFECT_UI_API_URL: ${PREFECT_PUBLIC_URL:?set PREFECT_PUBLIC_URL to the UI's public origin}/api
+      PREFECT_SERVER_ANALYTICS_ENABLED: "false"
+    healthcheck:
+      # /api/health is exempt from the auth string.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    restart: unless-stopped
+
+  # The same image as `process`, serving CRW/flows.py instead of idling. Stopping
+  # it pauses the schedule; starting it re-applies RUN_SCHEDULE_PAUSED — so the
+  # UI's pause toggle lasts only until the next restart, and `stop scheduler` is
+  # the pause that holds.
+  scheduler:
+    <<: *process
+    command: ["python", "-m", "CRW.flows"]
+    environment:
+      <<: *process-env
+      PREFECT_API_URL: http://prefect:4200/api
+      PREFECT_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?set PREFECT_AUTH_STRING (user:password) in .env.prod}
+      PREFECT_LOGGING_EXTRA_LOGGERS: CRW,shared
+      # The container runs as the host UID, which has no home directory here, so
+      # the default ~/.prefect would be /.prefect and unwritable.
+      PREFECT_HOME: /tmp/prefect
+      RUN_CRON: ${RUN_CRON:-30 16 * * *}
+      RUN_SCHEDULE_PAUSED: ${RUN_SCHEDULE_PAUSED:-false}
+      RUN_KEEP_NC: ${RUN_KEEP_NC:-false}
     depends_on:
       db-ch:
         condition: service_healthy
+      prefect:
+        condition: service_healthy
+    restart: unless-stopped

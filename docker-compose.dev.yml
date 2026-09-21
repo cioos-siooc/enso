@@ -1,3 +1,36 @@
+# The pipeline image, shared by `process` (the CLI) and `scheduler` (the same
+# code served as a Prefect flow). One definition, so the two cannot drift, and
+# one image name, so a build of either is a build of both.
+x-process-env: &process-env
+  HDF5_USE_FILE_LOCKING: "FALSE"
+  OISST_NC_DIR: ${OISST_NC_DIR:-/opt/data/sst}
+  OISST_IMAGE_DIR: ${OISST_IMAGE_DIR:-/opt/data/images}
+  CRW_CLIM_DIR: ${CRW_CLIM_DIR:-/opt/data/climatology}
+  CRW_MHW_DIR: ${CRW_MHW_DIR:-/opt/data/MHW}
+  # Override any host-IP values from .env.dev with the compose service name
+  CH_HOST: db-ch
+  CH_PORT: 8123
+  CH_USER: ${CH_USER:-default}
+  CH_PASSWORD: ""
+  CH_DATABASE: ${CH_DATABASE:-enso}
+
+x-process: &process
+  build:
+    context: .
+    dockerfile: process/Dockerfile
+  image: enso-process
+  user: "${UID:-1000}:${GID:-1000}"
+  env_file:
+    - .env.dev
+  environment: *process-env
+  volumes:
+    - ./process:/app
+    - ./shared:/app/shared
+    - ./data:/opt/data
+  depends_on:
+    db-ch:
+      condition: service_healthy
+
 services:
   front:
     build:
@@ -93,29 +126,66 @@ services:
       retries: 20
     restart: unless-stopped
 
-  process:
-    build:
-      context: .
-      dockerfile: process/Dockerfile
+  process: *process
+
+  # --- Prefect: a schedule and a run-history UI for the daily `run` ---------
+  # Behind a profile in dev, and the schedule opens paused with keep_nc on: a
+  # dev `run` without --keep-nc prunes ./data/sst and ./data/MHW back to the
+  # open week. Start with:
+  #   docker compose -f docker-compose.dev.yml --env-file .env.dev \
+  #     --profile prefect up -d prefect scheduler
+  prefect:
+    image: prefecthq/prefect:${PREFECT_IMAGE_TAG:-3.8.6-python3.13}
+    profiles: ["prefect"]
     user: "${UID:-1000}:${GID:-1000}"
-    env_file:
-      - .env.dev
-    environment:
-      - HDF5_USE_FILE_LOCKING=FALSE
-      - OISST_NC_DIR=${OISST_NC_DIR:-/opt/data/sst}
-      - OISST_IMAGE_DIR=${OISST_IMAGE_DIR:-/opt/data/images}
-      - CRW_CLIM_DIR=${CRW_CLIM_DIR:-/opt/data/climatology}
-      - CRW_MHW_DIR=${CRW_MHW_DIR:-/opt/data/MHW}
-      # Override any host-IP values from .env.dev with the compose service name
-      - CH_HOST=db-ch
-      - CH_PORT=8123
-      - CH_USER=${CH_USER:-default}
-      - CH_PASSWORD=
-      - CH_DATABASE=${CH_DATABASE:-enso}
+    command: ["prefect", "server", "start", "--host", "0.0.0.0"]
+    ports:
+      - "${PREFECT_PORT:-9025}:4200"
     volumes:
-      - ./process:/app
-      - ./shared:/app/shared
-      - ./data:/opt/data
+      # SQLite database + server state. Create and chown to UID:GID first, or
+      # Docker creates it as root and the server cannot write its database.
+      - ./prefect:/var/lib/prefect
+    environment:
+      # Not /opt/prefect: the image keeps its entrypoint.sh there, and a mount
+      # over it leaves tini exec-ing a file that no longer exists.
+      PREFECT_HOME: /var/lib/prefect
+      # The server copies its UI bundle out of site-packages on start, which
+      # is root-owned; running as UID, it has to go somewhere writable or the
+      # UI is simply not served.
+      PREFECT_UI_STATIC_DIRECTORY: /var/lib/prefect/ui
+      # Never blank: Prefect treats an empty string as a password of "" rather
+      # than as "no auth", and every client call then 401s. Dev defaults to
+      # admin:admin, which also keeps dev on the same code path as prod.
+      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_AUTH_STRING:-admin:admin}
+      # What the BROWSER calls. Without it the UI points at 0.0.0.0:4200.
+      PREFECT_UI_API_URL: ${PREFECT_PUBLIC_URL:-http://localhost:9025}/api
+      PREFECT_SERVER_ANALYTICS_ENABLED: "false"
+    healthcheck:
+      # /api/health is exempt from the auth string.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  scheduler:
+    <<: *process
+    profiles: ["prefect"]
+    command: ["python", "-m", "CRW.flows"]
+    environment:
+      <<: *process-env
+      PREFECT_API_URL: http://prefect:4200/api
+      PREFECT_API_AUTH_STRING: ${PREFECT_AUTH_STRING:-admin:admin}
+      PREFECT_LOGGING_EXTRA_LOGGERS: CRW,shared
+      # The container runs as the host UID, which has no home directory here, so
+      # the default ~/.prefect would be /.prefect and unwritable.
+      PREFECT_HOME: /tmp/prefect
+      RUN_CRON: ${RUN_CRON:-30 16 * * *}
+      RUN_SCHEDULE_PAUSED: ${RUN_SCHEDULE_PAUSED:-true}
+      RUN_KEEP_NC: ${RUN_KEEP_NC:-true}
     depends_on:
       db-ch:
         condition: service_healthy
+      prefect:
+        condition: service_healthy
+    restart: unless-stopped
