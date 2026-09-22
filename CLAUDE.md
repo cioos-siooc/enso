@@ -887,6 +887,15 @@ that is SST-done but MHW-pending — which happens whenever a run lands in the ~
 between the two publications — is picked up on the next run rather than stranded behind
 the SST watermark.
 
+**The API serves nothing past the last date both archives have landed for**
+(`timeseries.data_through()`), and `/coverage`'s `end` is that date, with the SST table's own
+edge in `sstEnd`. An SST-only date is not visibly incomplete: the sparse LEFT JOIN reads it
+as category 0 everywhere, and `run` has already rolled it into `region_daily` with an
+`mhw_area_frac` of 0 — which the ribbon printed as "0% of the Pacific". `_date_filter()`
+clamps every series, `_ranked_periods()` every ranking, and `/state` both of its rollup
+reads. Only while `mhw.complete`; a half-backfilled MHW archive would otherwise pin the whole
+dashboard to wherever the backfill had reached.
+
 #### The retention window
 
 A weekly frame is the mean over seven days, but `run` deletes each `.nc` after ingesting
@@ -945,7 +954,7 @@ FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is n
 |---|---|
 | `GET /health` | liveness + ClickHouse reachability |
 | `GET /domain` | grid extent, image bounds, variable metadata, per-variable colour stops and `encoding` (mix, ranges, `limits`), `noClimColor`, region list |
-| `GET /coverage` | ingested date range, row count, climatology completeness, MHW archive range and completeness |
+| `GET /coverage` | served date range (`end` = last date both archives have), row count, climatology completeness, MHW archive range and completeness |
 | `GET /state` | the header ribbon's two findings: ENSO phase from Nino 3.4, and basin marine-heatwave extent against the date's normal |
 | `GET /variables` | variable list, with `derived` on `anom` |
 | `POST /timeseries` | `{lat, lon, start?, end?, period?, variable?}` → record at the nearest cell |

@@ -27,7 +27,7 @@ import datetime as dt
 from shared.domain import regions, variable
 
 from .clickhouse_helpers import DATABASE, client
-from .timeseries import _MHW_EXTENT_SCALE, MMDD_SQL
+from .timeseries import _MHW_EXTENT_SCALE, MMDD_SQL, data_through
 
 # The region whose anomaly defines the ENSO state. Nino 3.4 is the box the ONI is
 # computed over and the one this repo is named for.
@@ -80,6 +80,18 @@ NORMAL_WINDOW_DAYS = 7
 BASELINE = variable("anom").baseline.period
 
 
+def _through_params(key: str, column: str = "date") -> tuple[str, dict]:
+    """The `data_through()` bound both rollup reads take, as SQL and params.
+
+    Without it the ribbon reads a date `run` has rolled up from SST alone, whose
+    `mhw_area_frac` is a 0 standing in for a file that has not landed yet.
+    """
+    through = data_through()
+    if through is None:
+        return "", {"key": key}
+    return f" AND {column} <= %(through)s", {"key": key, "through": through}
+
+
 def _monthly_nino34() -> list[tuple[dt.date, float, int]]:
     """(month, mean anomaly, days) for Nino 3.4, over the whole archive.
 
@@ -90,6 +102,7 @@ def _monthly_nino34() -> list[tuple[dt.date, float, int]]:
     calendar spans — a month straddling the ice edge's seasonal move must still
     subtract the climatology that matches each day.
     """
+    bound, params = _through_params(ENSO_REGION, "d.date")
     return [
         (month, float(value), int(n))
         for month, value, n in client().query(
@@ -101,10 +114,10 @@ def _monthly_nino34() -> list[tuple[dt.date, float, int]]:
             INNER JOIN {DATABASE}.region_clim AS c FINAL
                 ON c.region = d.region
                AND c.mmdd = {MMDD_SQL.format(d="d.date")}
-            WHERE d.region = %(key)s AND isFinite(d.mean_sst_clim)
+            WHERE d.region = %(key)s AND isFinite(d.mean_sst_clim){bound}
             GROUP BY month ORDER BY month
             """,
-            parameters={"key": ENSO_REGION},
+            parameters=params,
         ).result_rows
     ]
 
@@ -230,16 +243,17 @@ def enso_state() -> dict | None:
 
 def _basin_extent_rows() -> list[tuple[dt.date, float]]:
     """(date, extent %) for the whole box, straight from the `pacific` rollup."""
+    bound, params = _through_params(BASIN_REGION)
     return [
         (date, float(value))
         for date, value in client().query(
             f"""
             SELECT date, mhw_area_frac * {_MHW_EXTENT_SCALE}
             FROM {DATABASE}.region_daily FINAL
-            WHERE region = %(key)s AND isFinite(mhw_area_frac)
+            WHERE region = %(key)s AND isFinite(mhw_area_frac){bound}
             ORDER BY date
             """,
-            parameters={"key": BASIN_REGION},
+            parameters=params,
         ).result_rows
     ]
 
