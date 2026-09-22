@@ -29,6 +29,13 @@
   </UButton>
 
   <UModal v-model:open="open" :title="title" :fullscreen="narrow" :ui="{ content: 'max-w-2xl' }">
+    <template #title>
+      <span class="flex items-center gap-2">
+        {{ title }}
+        <UBadge v-if="tab === 'about'" variant="outline" color="neutral" size="lg" class="font-medium text-highlighted">Version {{ version }}</UBadge>
+      </span>
+    </template>
+
     <template #body>
       <div v-if="tab === 'guide'" class="space-y-5 text-sm">
         <p class="text-muted">
@@ -359,8 +366,7 @@
         </section>
 
         <p class="text-xs text-dimmed">
-          Version {{ version }}. Anonymous usage analytics only &mdash; no accounts,
-          no personal data.
+          Anonymous usage analytics only &mdash; no accounts, no personal data.
         </p>
       </div>
     </template>

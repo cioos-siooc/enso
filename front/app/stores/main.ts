@@ -248,7 +248,13 @@ export interface Coverage {
   rows: number
   days: number
   start: string | null
+  /**
+   * The last date every archive has landed for, not the SST table's edge — the
+   * API serves nothing past it, so nothing here should offer a date past it.
+   */
   end: string | null
+  /** The SST table's own last day; ahead of `end` while MHW is still to land. */
+  sstEnd: string | null
   /** Anomaly is unavailable until all 366 climatology keys are loaded. */
   climatology: { keys: number, complete: boolean } | null
   /**

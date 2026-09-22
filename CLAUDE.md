@@ -24,7 +24,9 @@ ports you'll actually hit:
 | `front` | Nuxt 4 frontend | 9020 |
 | `api` | FastAPI backend | 9021 |
 | `db-ch` | ClickHouse | 9023 (HTTP), 9024 (native) |
-| `process` | NetCDF → ClickHouse ingest + image rendering | — |
+| `process` | NetCDF → ClickHouse ingest + image rendering (the CLI) | — |
+| `prefect` | Prefect server: the daily `run`'s schedule and run-history UI | 9025 |
+| `scheduler` | the `process` image serving `CRW/flows.py` to `prefect` | — |
 
 Ports are deliberately offset from the ocean-acidification-dashboard's 9010–9014 so both
 stacks can run at once.
@@ -43,7 +45,7 @@ api 4000) and can recreate dependent services on the wrong ports.
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 `docker-compose.prod.yml` carries its own header comment explaining every divergence from
-the dev file; `.env.prod.example` is the template. The six that matter:
+the dev file; `.env.prod.example` is the template. The seven that matter:
 
 - **`name: enso-prod`.** Both compose files would otherwise take the project name `enso`
   from the directory and clobber each other's containers, network and volumes.
@@ -95,13 +97,17 @@ the dev file; `.env.prod.example` is the template. The six that matter:
     --profile maintenance down maintenance
   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
   ```
-- **`process` sits behind the `tools` profile**, so `up -d` starts three services and not a
-  fourth idling on `sleep infinity`. Drive it the same way as dev, which is also the shape
-  a cron entry wants:
+- **`process` sits behind the `tools` profile**, so `up -d` does not start a container
+  idling on `sleep infinity`. Drive it the same way as dev:
   ```bash
   docker compose -f docker-compose.prod.yml --env-file .env.prod \
     run --rm process python -m CRW.cli run
   ```
+- **`prefect` + `scheduler` run the daily `run` on a schedule**, with its history in a
+  browser at `PREFECT_PUBLIC_URL` — see "Prefect" under the process pipeline. Both start
+  with a plain `up -d`. Prod **requires** `PREFECT_AUTH_STRING` (the UI can trigger runs)
+  and `PREFECT_PUBLIC_URL`; create and `chown` `PREFECT_DIR` like `DATA_DIR`. The port is
+  published for the host's TLS proxy — basic auth over plain HTTP is a cleartext password.
 
 `api` runs without `--reload` (it would watch source that is no longer mounted) on
 `--workers ${API_WORKERS:-4}` — separate *processes*, so the per-thread ClickHouse client
@@ -1139,9 +1145,9 @@ through ClickHouse, so it needs `db-ch` up — unlike `render`, which is the com
 flag exists for. Without it compose starts `db-ch` and waits on its healthcheck; with it
 you get `Connection refused` on `db-ch:8123` and nothing else to go on.
 
-**Rebuild `process` first, with `--profile tools`.** `up -d --build` skips it — see the
-gotcha below — so a migration run against a freshly deployed server will fail with
-argparse's `invalid choice: 'repartition'` until `--profile tools build process` has run.
+**Stop `scheduler` first**, alongside `front` and `api`. A scheduled `run` would ingest into
+the partitions the migration is moving, and the UI's pause toggle does not survive a
+container restart — see "Prefect" below.
 
 **Run it detached** — `run -d --name ...`, then `docker logs -f`. A `docker compose run`
 container **outlives the client that started it**, so a terminal closing does not stop the
@@ -1182,6 +1188,15 @@ that is SST-done but MHW-pending — which happens whenever a run lands in the ~
 between the two publications — is picked up on the next run rather than stranded behind
 the SST watermark.
 
+**The API serves nothing past the last date both archives have landed for**
+(`timeseries.data_through()`), and `/coverage`'s `end` is that date, with the SST table's own
+edge in `sstEnd`. An SST-only date is not visibly incomplete: the sparse LEFT JOIN reads it
+as category 0 everywhere, and `run` has already rolled it into `region_daily` with an
+`mhw_area_frac` of 0 — which the ribbon printed as "0% of the Pacific". `_date_filter()`
+clamps every series, `_ranked_periods()` every ranking, and `/state` both of its rollup
+reads. Only while `mhw.complete`; a half-backfilled MHW archive would otherwise pin the whole
+dashboard to wherever the backfill had reached.
+
 #### The retention window
 
 A weekly frame is the mean over seven days, but `run` deletes each `.nc` after ingesting
@@ -1192,6 +1207,46 @@ frame is a max over the same span of days and needs its own files kept for exact
 and at ~640 KB a file the second window costs ~24 MB. Losing that window does not corrupt anything, but
 it freezes weekly and monthly frames at whatever was last rendered.
 
+#### Prefect: the schedule and the run history
+
+**`run` is scheduled by a self-hosted Prefect server, and it adds nothing else.**
+`CRW/flows.py` wraps `cli.run_targets()` (which dates a run covers) and `cli._process_date()`
+(what happens to one) unchanged, so the scheduled run and `python -m CRW.cli run` are the
+same job. It is the only module that imports Prefect, and the CLI never imports it.
+Prefect 3.8.6 and SQLite, not Postgres, for one flow a day. **The client pin in
+`pyproject.toml` and `PREFECT_IMAGE_TAG` must move together.**
+
+```bash
+docker compose -f docker-compose.dev.yml --env-file .env.dev \
+  --profile prefect up -d prefect scheduler          # dev: http://localhost:9025, admin:admin
+```
+
+- **What the UI shows**: flow `daily-run`, deployment `daily`, one flow run per firing and
+  **one task run per date**, named after the date. Each date's task ends in a state named
+  for its outcome: `Ingested`, `Skipped`, `Unpublished` or `Failed`. So on a normal day the
+  thirty recheck dates show as `Skipped` and the one new date as `Ingested`. The flow ends
+  `Failed` if any date did, with `cli.run_summary()`'s line as its message. The pipeline's
+  own log lines (`CRW.*`, `shared.*`) appear in each task's log tab.
+- **An ad-hoc run** is *Run → Custom run* on the deployment: `date` for one day, `force`,
+  `keep_nc`, `recheck_days`, `max_days`. `width` is deliberately absent: a cached frame at
+  any other width is a 404 and a blank map.
+- **Schedule** `RUN_CRON`, default `30 16 * * *` UTC, after both products have published.
+  `limit=1`, so two runs never overlap. **No retries**, because `run` is a range and the
+  next firing is the retry.
+- **Dev opens paused with `keep_nc` on** (`RUN_SCHEDULE_PAUSED`, `RUN_KEEP_NC`). A dev run
+  that prunes deletes the local archive back to the open week. Prod defaults to live and
+  pruning, so **leave `RUN_KEEP_NC=true` until `render --variable mhw` has finished.**
+
+Verified in dev, through the API the UI reads:
+
+- A run for 2026-09-20 ingested both products, rendered 9 frames and rolled up nine
+  regions. The task ended `Ingested`, and all 25 log lines (download, ingest, imaging,
+  regions) reached the run.
+- With the NetCDF directory unwritable, the date's task failed with the traceback and the
+  flow ended `Failed`, reading `run: 1 failed`.
+- Requests without the auth string get a 401, and `/api/health` answers without it.
+- `CRW.cli run --date 2026-09-20` still works, with `prefect` never imported.
+
 ### API (`api/`)
 
 FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is not.**
@@ -1201,7 +1256,7 @@ FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is n
 | `GET /health` | liveness + ClickHouse reachability, plus each archive's last ingested date and lag (never fails over staleness) |
 | `GET /health/data` | 503 once either archive is more than `STALE_AFTER_DAYS` (default 3) behind — for an external monitor |
 | `GET /domain` | grid extent, image bounds, variable metadata, per-variable colour stops and `encoding` (mix, ranges, `limits`), `noClimColor`, region list |
-| `GET /coverage` | ingested date range, row count, climatology completeness, MHW archive range and completeness |
+| `GET /coverage` | served date range (`end` = last date both archives have), row count, climatology completeness, MHW archive range and completeness |
 | `GET /state` | the header ribbon's two findings: ENSO phase from Nino 3.4, and basin marine-heatwave extent against the date's normal |
 | `GET /variables` | variable list, with `derived` on `anom` |
 | `POST /timeseries` | `{lat, lon, start?, end?, period?, variable?}` → record at the nearest cell |
@@ -2149,29 +2204,43 @@ over 17.6 B rows from per-part metadata in 6 ms. Not verified on prod.
   `ensure_schema()` is `CREATE TABLE IF NOT EXISTS`, so a changed `PARTITION BY` applies to
   a fresh deploy and is silently inert on the one that matters. `CRW.cli repartition` is
   the migration; `shared.ch.is_repartitioned()` is what answers "is this server on the new
-  key". Pause the cron for the duration — `run`'s ingest and the migration would otherwise
-  contend for the same partitions.
-- **`up -d --build` does NOT rebuild `process`, and nothing says so.** It is behind the
-  `tools` profile, and compose skips services outside the active profiles when building —
-  verified: a bare `config --services` on the prod file lists `api`, `db-ch` and `front`
-  only, and `process` appears solely under `--profile tools`. So a deploy that rebuilds the
-  API and the frontend leaves the **pipeline image on whatever code it was last built
-  with**, and `docker compose run` reuses that image rather than rebuilding it. A deploy is
-  therefore two commands, not one:
-
-  ```bash
-  docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-  docker compose -f docker-compose.prod.yml --env-file .env.prod --profile tools build process
-  ```
-
-  **The loud symptom is the lucky one**: a new subcommand fails with argparse's
-  `invalid choice: 'repartition'`, which is unmistakable. The quiet one is what to worry
-  about — a *changed* code path in `ingest.py`, `download.py` or `shared/` keeps running the
-  old version under cron, silently, for as long as nobody rebuilds. `shared/` is baked into
-  both images and mounted into neither in prod, so `api` can be on new code while `process`
-  is on old, which is exactly the drift that directory exists to prevent. Check with
-  `docker compose ... run --rm --no-deps process python -c "import CRW, pathlib; print(pathlib.Path(CRW.__file__).stat().st_mtime)"`,
-  or just rebuild — it is cached and cheap when nothing changed.
+  key". Stop `scheduler` for the duration — `run`'s ingest and the migration would
+  otherwise contend for the same partitions.
+- **`process` and `scheduler` share one `image:` name, and that is what gets `process`
+  rebuilt.** `process` is behind the `tools` profile, and compose skips services outside
+  the active profiles when building — so before `scheduler` existed, `up -d --build` left
+  the pipeline image on whatever code it was last built with, `api` could be on new
+  `shared/` while `process` was on old, and a new subcommand failed with argparse's
+  `invalid choice`. `scheduler` is not behind a profile and builds the same image
+  (`enso-prod-process`), so one `up -d --build` now covers both — verified with
+  `--dry-run`. **Give them different `image:` names, or put `scheduler` behind a profile,
+  and that silent drift comes back.**
+- **Pausing in the Prefect UI is undone by the next restart.** `serve()` applies
+  `RUN_SCHEDULE_PAUSED` every time it starts, and pauses the schedule when it stops.
+  Verified: unpause in the UI, `stop scheduler`, and the deployment reads paused. Unpause
+  again, `start scheduler`, and it is paused again. A host reboot restarts the
+  container too. **To hold the pipeline, `stop scheduler`.** That is the only pause that
+  lasts.
+- **`PREFECT_AUTH_STRING` must never be blank.** Prefect treats an empty string as a
+  password of `""`, not as "no auth": the server enables auth, the client sends no header,
+  and every call 401s — the scheduler dies on start registering its deployment. Dev
+  defaults to `admin:admin` for that reason.
+- **Three Prefect container details, each found by it failing:**
+  - The server's state mounts at `/var/lib/prefect`, **not `/opt/prefect`**. The image
+    keeps its `entrypoint.sh` in `/opt/prefect`, so a mount there leaves tini with no file
+    to run.
+  - Run as `UID`, the server cannot copy its UI bundle out of root-owned site-packages.
+    `PREFECT_UI_STATIC_DIRECTORY` must point somewhere writable, or the API comes up and the
+    UI is simply not served.
+  - `flows.py` cannot use `from __future__ import annotations`. Prefect builds a pydantic
+    model from the flow's signature, and a string `dt.date` fails every run at parameter
+    validation.
+- **`PREFECT_LOGGING_EXTRA_LOGGERS` attaches a handler but sets no level**, so `CRW.*` would
+  inherit the root's WARNING and every INFO line would be dropped before reaching the UI.
+  `daily_run` sets them to INFO itself.
+- **`PREFECT_UI_API_URL` is what the browser calls**, and left unset it defaults to
+  `http://0.0.0.0:4200/api` — the UI loads and then fails every request. It is
+  `PREFECT_PUBLIC_URL` + `/api`.
 - **`CH_IMAGE_TAG` must be >= the version that wrote `CH_DATA_DIR`.** ClickHouse has no
   downgrade path. Dev runs `clickhouse-server:latest`, so a data directory copied from a
   dev box to prod carries whatever major was current — 26.5.1.882 for the first copy —
@@ -2591,5 +2660,5 @@ Verified on v2.0 (Chromium, per the recipe above; desktop 1440×900 and phone 39
 - **Not verified:** that each new analytics event fires exactly once. Dev runs with no
   PostHog key, so `trackEvent` is a no-op and the events were read from code, not observed.
 
-Not built yet: a cron entry for `run`. Ideas deliberately deferred, with their costs and
+Ideas deliberately deferred, with their costs and
 constraints, are in [ROADMAP.md](ROADMAP.md) — read it before proposing a feature.

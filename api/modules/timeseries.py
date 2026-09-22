@@ -138,8 +138,68 @@ def _require_inside(lat: float, lon: float) -> None:
         )
 
 
+def _mhw_complete(sst_days: int, mhw_days: int) -> bool:
+    """Whether the MHW archive covers the SST record, give or take its lag.
+
+    A day's tolerance, because MHW is published about 90 minutes after
+    CoralTemp and a run landing between the two leaves a one-day gap that is
+    not a hole.
+    """
+    return mhw_days > 0 and mhw_days >= sst_days - 1
+
+
+def _archive_state() -> dict:
+    """Both archives' ingested-day counts and last days, off the status tables.
+
+    `both_last` is the last date **both** archives have landed for — the edge of
+    what the dashboard serves; see `data_through`. `maxOrNull`, because a plain
+    `max()` over an empty set is the epoch rather than NULL.
+    """
+    ok = "status = 'success_ingest'"
+    sst_days, sst_last, mhw_days, both_last = client().query(
+        f"""
+        SELECT
+            (SELECT uniqExact(date) FROM {DATABASE}.ingest_status FINAL WHERE {ok}),
+            (SELECT maxOrNull(date) FROM {DATABASE}.ingest_status FINAL WHERE {ok}),
+            (SELECT uniqExact(date) FROM {DATABASE}.mhw_status FINAL WHERE {ok}),
+            (SELECT maxOrNull(date) FROM {DATABASE}.ingest_status FINAL
+             WHERE {ok} AND date IN (
+                 SELECT date FROM {DATABASE}.mhw_status FINAL WHERE {ok}))
+        """
+    ).result_rows[0]
+    return {
+        "sst_days": int(sst_days),
+        "sst_last": sst_last,
+        "mhw_days": int(mhw_days),
+        "both_last": both_last,
+    }
+
+
+def data_through() -> dt.date | None:
+    """The last date the dashboard serves: the last one *every* archive has.
+
+    **CoralTemp lands about 90 minutes before the MHW category**, so a `run` in
+    that window leaves a date with SST and no MHW. Nothing about that date looks
+    missing: `mhw_daily` is sparse, so the LEFT JOIN reads every cell as
+    category 0, and `run` has already rolled the date up into `region_daily`
+    with an `mhw_area_frac` of 0 — which the header ribbon printed as "0% of the
+    Pacific". So every series, ranking and `/state` stops here, and `/coverage`
+    reports it as `end`, until the MHW file lands and the next run fills it in.
+
+    Only while the MHW archive is complete. A half-backfilled one is not offered
+    by the frontend at all, and clamping to it would pin the whole dashboard to
+    wherever the backfill had got to.
+    """
+    s = _archive_state()
+    return s["both_last"] if _mhw_complete(s["sst_days"], s["mhw_days"]) else s["sst_last"]
+
+
 def _date_filter(start: dt.date | None, end: dt.date | None, alias: str = "") -> tuple[str, dict]:
+    """`start`/`end` as SQL, with `end` never past `data_through()`."""
     prefix = f"{alias}." if alias else ""
+    through = data_through()
+    if through is not None and (end is None or end > through):
+        end = through
     clauses, params = [], {}
     if start is not None:
         clauses.append(f"{prefix}date >= %(start)s")
@@ -688,33 +748,35 @@ def land_coverage() -> dict | None:
 
 
 def coverage() -> dict:
-    """The ingested date range and row count."""
+    """The ingested date range and row count.
+
+    `end` is `data_through()`, not the SST table's last day: the frontend bounds
+    its date controls and opens on it, so a date only one archive has reached is
+    never on screen. `sstEnd` is the table's own edge.
+    """
     row = client().query(
         f"SELECT count(), min(date), max(date) FROM {DATABASE}.sst_daily"
     ).result_rows[0]
     if not row[0]:
         return {
-            "rows": 0, "start": None, "end": None, "days": 0,
+            "rows": 0, "start": None, "end": None, "sstEnd": None, "days": 0,
             "climatology": None, "mhw": None, "land": land_coverage(),
         }
-    days = client().query(
-        f"SELECT uniqExact(date) FROM {DATABASE}.ingest_status FINAL "
-        "WHERE status = 'success_ingest'"
-    ).result_rows[0][0]
+    archives = _archive_state()
+    days, mhw_days = archives["sst_days"], archives["mhw_days"]
+    complete = _mhw_complete(days, mhw_days)
+    through = archives["both_last"] if complete else archives["sst_last"]
     clim_keys = client().query(
         f"SELECT uniqExact(mmdd) FROM {DATABASE}.sst_clim"
     ).result_rows[0][0]
     mhw = client().query(
         f"SELECT count(), min(date), max(date) FROM {DATABASE}.mhw_daily"
     ).result_rows[0]
-    mhw_days = client().query(
-        f"SELECT uniqExact(date) FROM {DATABASE}.mhw_status FINAL "
-        "WHERE status = 'success_ingest'"
-    ).result_rows[0][0]
     return {
         "rows": int(row[0]),
         "start": str(row[1]),
-        "end": str(row[2]),
+        "end": str(through or row[2]),
+        "sstEnd": str(row[2]),
         "days": int(days),
         # The MHW archive is ingested separately and lands about 90 minutes later,
         # so it gets its own range rather than being assumed to match.
@@ -727,9 +789,7 @@ def coverage() -> dict:
         # confident **category 0** for every missing year, and a monthly ranking
         # then ranks 40 fabricated zeroes below one real month. There is no value
         # that could signal the difference, so the frontend must not offer the
-        # variable until the archive covers the SST record. A day's tolerance,
-        # because MHW is published about 90 minutes after CoralTemp and a run
-        # landing between the two leaves a one-day gap that is not a hole.
+        # variable until the archive covers the SST record (`_mhw_complete`).
         #
         # Guarded on the count, not on a null date: ClickHouse's min/max over an
         # empty Date column return the epoch, not NULL, so an un-ingested MHW
@@ -739,7 +799,7 @@ def coverage() -> dict:
             "days": int(mhw_days),
             "start": str(mhw[1]) if mhw[0] else None,
             "end": str(mhw[2]) if mhw[0] else None,
-            "complete": bool(mhw[0]) and int(mhw_days) >= int(days) - 1,
+            "complete": bool(mhw[0]) and complete,
         },
         # Anomaly is unavailable until all 366 keys are loaded; the frontend
         # uses this to decide whether to offer the variable at all.
@@ -758,11 +818,11 @@ def _month_end(day: dt.date) -> dt.date:
 
 
 def _archive_edges() -> tuple[dt.date, dt.date] | None:
-    """First and last day present in `sst_daily`, or None on an empty table."""
+    """First day in `sst_daily` and `data_through()`, or None on an empty table."""
     lo, hi = client().query(
         f"SELECT min(date), max(date) FROM {DATABASE}.sst_daily"
     ).result_rows[0]
-    return None if lo is None else (lo, hi)
+    return None if lo is None else (lo, data_through() or hi)
 
 
 def _partial_months(lo: dt.date, hi: dt.date) -> set[tuple[int, int]]:
@@ -852,11 +912,12 @@ def _ranked_periods(source: str, params: dict) -> dict:
         FROM (
             SELECT toMonth(date) AS month, toYear(date) AS year, value
             FROM ({source})
+            WHERE date <= %(through)s
         )
         GROUP BY GROUPING SETS ((month, year), (year))
         ORDER BY month, rank
         """,
-        parameters=params,
+        parameters=params | {"through": edges[1]},
     ).result_rows
 
     for month, year, mean_value, sd, n, rank in rows:

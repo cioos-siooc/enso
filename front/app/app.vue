@@ -27,7 +27,6 @@
         <!-- <UBadge v-if="store.coverage" variant="subtle" color="neutral">
           {{ store.coverage.start }} &ndash; {{ store.coverage.end }}
         </UBadge> -->
-        <UBadge variant="subtle" color="neutral" class="hidden sm:inline-flex">v{{ version }}</UBadge>
         <StoryPicker />
         <AboutDialog />
       </header>
@@ -47,7 +46,6 @@
 import { useMainStore } from '~/stores/main'
 
 const store = useMainStore()
-const version = useRuntimeConfig().public.version
 
 await store.loadMetadata()
 </script>
