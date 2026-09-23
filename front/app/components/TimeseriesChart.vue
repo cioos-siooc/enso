@@ -9,6 +9,8 @@
   -->
   <div class="relative flex size-full flex-col">
     <TimeControl class="shrink-0" />
+    <!-- The host's row naming what is plotted, when that needs saying (two points). -->
+    <slot />
 
     <div
       v-if="!hasData"
@@ -50,6 +52,7 @@ import * as echarts from 'echarts'
 import type { Series } from '~/stores/main'
 import { NO_CLASS_COLOR, type ColorStop } from '~/utils/colorScale'
 import { wholeClasses } from '~/utils/stats'
+import { PIN_COLORS } from '~/utils/points'
 
 const props = defineProps<{
   series: Series | null
@@ -93,7 +96,17 @@ const props = defineProps<{
    * normal line adds. Only visible where there are two lines to tell apart.
    */
   label?: string
+  /**
+   * Point B's series, drawn beside `series` (point A). While it is set, the
+   * lines are coloured by WHICH point — the pins' own colours — rather than by
+   * value: two lines on one value ramp are the same colours wherever they
+   * agree, which is exactly where telling them apart matters. The normal line
+   * is dropped too; it belongs to A alone and would be a third line to decode.
+   */
+  secondSeries?: Series | null
 }>()
+
+const twoPoints = computed(() => (props.secondSeries?.dates.length ?? 0) > 0)
 
 const seriesName = computed(() => props.label ?? 'Value')
 
@@ -190,7 +203,7 @@ function markLine(): echarts.SeriesOption['markLine'] {
  */
 function visualMap(): echarts.EChartsOption['visualMap'] {
   const stops = props.stops ?? []
-  if (stops.length < 2) return undefined
+  if (stops.length < 2 || twoPoints.value) return undefined
   if (props.categorical) {
     // Piecewise, for the same reason the map's ramp is a `step`: there is no
     // colour between two classes because there is no value between them. A
@@ -282,7 +295,7 @@ const normals = computed(() => props.series?.climatology ?? null)
 
 function normalSeries(): echarts.SeriesOption[] {
   const clim = normals.value
-  if (!clim?.some(v => v != null)) return []
+  if (twoPoints.value || !clim?.some(v => v != null)) return []
   return [{
     type: 'line',
     name: normalName.value,
@@ -301,6 +314,22 @@ function normalSeries(): echarts.SeriesOption[] {
     // Behind the data line where they cross, which is most of the year.
     z: 1,
     silent: true,
+  }]
+}
+
+/** Point B, in its pin's colour. Never carries the markLines — A's line does. */
+function secondLine(): echarts.SeriesOption[] {
+  const second = props.secondSeries
+  if (!twoPoints.value || !second) return []
+  return [{
+    type: 'line',
+    name: `B · ${seriesName.value}`,
+    data: second.dates.map((date, i) => [date, second.values[i]]),
+    showSymbol: false,
+    large: true,
+    lineStyle: { width: 1, color: PIN_COLORS.b },
+    itemStyle: { color: PIN_COLORS.b },
+    z: 2,
   }]
 }
 
@@ -374,7 +403,7 @@ function option(): echarts.EChartsOption {
     series: [
       {
         type: 'line',
-        name: seriesName.value,
+        name: twoPoints.value ? `A · ${seriesName.value}` : seriesName.value,
         data: points,
         showSymbol: false,
         large: true,
@@ -382,11 +411,16 @@ function option(): echarts.EChartsOption {
         // to it, so the fallback colour is only set when there is no ramp to
         // apply — otherwise the line draws flat cyan and silently ignores the
         // scale.
-        lineStyle: ramp ? { width: 1 } : { width: 1, color: '#38bdf8' },
+        lineStyle: twoPoints.value
+          ? { width: 1, color: PIN_COLORS.a }
+          : ramp ? { width: 1 } : { width: 1, color: '#38bdf8' },
+        // The tooltip's marker, which otherwise takes ECharts' palette.
+        ...(twoPoints.value ? { itemStyle: { color: PIN_COLORS.a } } : {}),
         markLine: markLine(),
         z: 2,
       },
       ...normal,
+      ...secondLine(),
     ],
   }
 }
@@ -449,7 +483,7 @@ watch(container, (el, previous) => {
   if (hasData.value) nextTick(render)
 })
 
-watch(() => props.series, () => {
+watch(() => [props.series, props.secondSeries], () => {
   if (!hasData.value) {
     chart?.dispose()
     chart = null

@@ -30,6 +30,8 @@ const KEYS = {
   date: 'd',
   region: 'r',
   point: 'at',
+  /** The second pin, in point scope only. */
+  point2: 'at2',
   /** Swipe compare's second date; absent when compare is off. */
   compare: 'c',
   /** The land overlay (`tmax` | `tmin` | `precip`) and its mode; absent when off. */
@@ -87,6 +89,7 @@ export function useUrlState() {
     const date = first(q[KEYS.date])
     const region = first(q[KEYS.region])
     const point = first(q[KEYS.point])
+    const point2 = first(q[KEYS.point2])
     const compare = first(q[KEYS.compare])
     const land = first(q[KEYS.land]) as LandSource | null
     const landMode = first(q[KEYS.landMode]) as LandMode | null
@@ -97,6 +100,7 @@ export function useUrlState() {
       date: date ?? undefined,
       region: region ?? undefined,
       point: point ? parsePoint(point) ?? undefined : undefined,
+      point2: point2 ? parsePoint(point2) ?? undefined : undefined,
       compareDate: compare && ISO_DATE.test(compare) ? compare : undefined,
       // Unknown values are dropped rather than trusted, like the variable: a
       // hand-edited link must not put the store into a state no button reaches.
@@ -132,6 +136,10 @@ export function useUrlState() {
       // grid cell rather than on whatever pixel happened to be under the cursor,
       // and the two round to the same place anyway.
       q[KEYS.point] = formatPoint(store.pointSeries.cell)
+      // The resolved cell once it has one, the click until then — the same
+      // reason as A's, and a B that failed to load still names where it was.
+      const b = store.secondSeries?.cell ?? store.secondPoint
+      if (b) q[KEYS.point2] = formatPoint(b)
     }
     return q
   }
@@ -155,6 +163,7 @@ export function useUrlState() {
       () => [store.variable, store.period, store.selectedDate, store.compareDate, store.scope,
              store.landLayer, store.landMode,
              store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon,
+             store.secondPoint, store.secondSeries?.cell?.lat, store.secondSeries?.cell?.lon,
              story.active.value?.key, story.step.value],
       sync,
       { flush: 'post' },

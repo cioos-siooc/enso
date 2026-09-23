@@ -319,10 +319,14 @@ const periodWord = computed(() => ({ daily: 'daily', weekly: 'weekly', monthly: 
 function exportSeries() {
   const series = store.activeSeries
   if (!series?.dates.length) return
+  // B only once it has loaded; a file must not name a cell it has no column for.
+  const second = store.activeSecondSeries?.dates.length ? store.activeSecondSeries : null
+  const pointSlug = (s: typeof series) => (s.cell ? cellSlug(s.cell) : 'point')
   const subject = store.scope === 'region'
     ? slug(store.activeRegionMeta?.label ?? store.activeRegion ?? 'region')
-    : series.cell ? cellSlug(series.cell) : 'point'
-  const span = `${series.dates[0]}_${series.dates[series.dates.length - 1]}`
+    : second ? `${pointSlug(series)}_vs_${pointSlug(second)}` : pointSlug(series)
+  const dates = [...series.dates, ...(second?.dates ?? [])].sort()
+  const span = `${dates[0]}_${dates[dates.length - 1]}`
   // Worth knowing precisely because it is the feature least visible in the UI —
   // one ghost icon — and the one whose removal nobody would notice until
   // somebody complained.
@@ -333,6 +337,7 @@ function exportSeries() {
     period: store.period,
     scope: store.scope,
     rows: series.dates.length,
+    points: second ? 2 : 1,
   })
   downloadCsv(
     `${store.activeQuantity ?? store.variable}_${store.period}_${subject}_${span}.csv`,
@@ -345,6 +350,7 @@ function exportSeries() {
       period: store.period,
       unit: store.seriesUnitLabel,
       precision: store.seriesPrecision,
+      second,
     }),
   )
 }

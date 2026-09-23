@@ -73,6 +73,7 @@ v2.0's swipe compare is date-only. Allowing anomaly | MHW on the same week needs
 Select several cells or named regions at once and chart their series together, so different locations can be compared on one chart.
 - **Why:** compare places without flipping back and forth, e.g. Niño 3.4 against the Blob's cell, or two coastal cells.
 - **Builds on:** `/timeseries` and `/region/{key}` as they are, one request per selection. Named regions are rollup reads and cheap; points are primary-key reads.
+- **Partly built (2026-09-23):** two *points* — pin B, chart-only, the dock stays on A (see CLAUDE.md, "Two-point selection"). Still open: regions, more than two, and mixed point/region selections.
 - **Open:** max 2 or more depends on the implementation. The stats and ranking dock currently describe one selection, and the map draws one pin or one box. A point and a region mix a category with an extent under `mhw`, so mixed selections need the `quantity` rule applied per series.
 
 ---

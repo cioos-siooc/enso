@@ -91,6 +91,7 @@
         <div class="relative min-h-0 grow">
           <TimeseriesChart
             :series="store.activeSeries"
+            :second-series="store.activeSecondSeries"
             :loading="store.activeSeriesLoading"
             :empty-message="emptyPointMessage"
             :error="!!store.activeError"
@@ -104,7 +105,9 @@
             :label="variableLabel"
             @select="store.setDate($event)"
             @select-compare="setCompareFromChart"
-          />
+          >
+            <PointPair />
+          </TimeseriesChart>
         </div>
         <BaselineNote class="mt-1 shrink-0" />
       </div>
@@ -160,6 +163,7 @@ import { useMainStore } from '~/stores/main'
 import { useUrlState } from '~/composables/useUrlState'
 import { useStory } from '~/composables/useStory'
 import { trackEvent } from '~/composables/useAnalytics'
+import { formatCell } from '~/utils/points'
 
 const store = useMainStore()
 
@@ -245,20 +249,8 @@ function setCompareFromChart(date: string) {
   })
 }
 
-/**
- * A cell as hemispheres, not signed degrees.
- *
- * Cells come back on the 0-360 convention the database stores, so most of this
- * box's longitudes are above 180 and have to be unwrapped for display. Printing
- * the signed result as "°E" gave `-168.125°E`, which is a compass direction
- * contradicting its own sign.
- */
-function formatCell(cell: { lat: number, lon: number } | undefined): string {
-  if (!cell) return ''
-  const lon = ((cell.lon + 180) % 360) - 180
-  return `${Math.abs(cell.lat).toFixed(2)}°${cell.lat < 0 ? 'S' : 'N'}, `
-    + `${Math.abs(lon).toFixed(2)}°${lon < 0 ? 'W' : 'E'}`
-}
+/** With B on the chart, the dock says it is describing A. */
+const pinPrefix = computed(() => (store.activeSecondPoint ? 'A · ' : ''))
 
 /**
  * What the panel is describing, said in the panel's own header.
@@ -269,7 +261,7 @@ function formatCell(cell: { lat: number, lon: number } | undefined): string {
  */
 const subjectTitle = computed(() => (store.scope === 'region'
   ? store.activeRegionMeta?.label ?? 'Region'
-  : formatCell(store.pointSeries?.cell) || 'No cell selected'))
+  : pinPrefix.value + (formatCell(store.pointSeries?.cell) || 'No cell selected')))
 
 const subjectSubtitle = computed(() => (store.scope === 'region'
   ? 'Area mean over the region'

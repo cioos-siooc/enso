@@ -1622,6 +1622,32 @@ URL is parsed into a `View` and handed over, so a link and a story step cannot d
 how a view is entered. Two more keys: `c=YYYY-MM-DD` is swipe compare's second date, and
 `story=<key>&step=<n>` opens a story at a step, whose own view wins over every other key.
 
+#### Two-point selection
+
+**A second pin, B, plotted beside A on the chart, and nothing else.** The dock's stats and
+ranking stay on A, whose heading reads `A · <cell>` while B exists, so no second ranking is
+fetched. B is dropped by the map's `Add point` button (arms the next click, crosshair cursor,
+Esc disarms; the phone path) or by **Alt-click** — Shift-drag is Mapbox's box zoom and
+Ctrl-click is a right click on a Mac. It is removed from its pin's popup, the map button, or
+the × in `PointPair.vue`'s chip row under the time bar.
+
+- **Store:** `secondPoint`/`secondSeries`, fetched by `refreshSecondPoint()`, which is a
+  no-op when `secondKey` (`variable|period|lat|lon`) is current. `selectPoint`, `setScope`
+  and `applyView` call it, so every refetch of A refreshes B. A B failure lands in
+  `secondError` and never touches A's state; a land cell's empty series says so there.
+- **Point scope only.** `activeSecondPoint`/`activeSecondSeries` are null in region scope,
+  which hides the pin and the line; B is kept and returns with point scope.
+- **The chart colours by point, not value, while B is drawn.** Two lines on one value ramp
+  are the same colour wherever they agree. The visualMap and the normal line are dropped;
+  A and B take `utils/points.ts`'s `PIN_COLORS` (green, violet — not amber `MAP` or sky
+  `CMP`), and the chip row is the legend. The pins carry an `A`/`B` letter, A's only while B
+  exists.
+- **A click on a pin or popup is ignored by the map's click handler.** Both sit inside the
+  canvas container, so without that check opening B's popup also moved A there.
+- URL key `at2=`; `View.point2` (`null` removes, absent leaves alone). The series CSV gains
+  `<column>_a,<column>_b`, joined on bucket start, named `<A>_vs_<B>`. Events:
+  `point_added` (`source: button | alt`), `point_removed`.
+
 #### Swipe compare
 
 **Only the date differs between the two halves.** Variable, period, colour range, scope and
@@ -2150,7 +2176,7 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
 `baseline_note_opened` (`variable`),
 `about_opened`, `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
-`compare_toggled` (`on`), `compare_date_changed` (1 s trailing debounce, like the colour
+`compare_toggled` (`on`), `point_added` (`source`), `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
 range), `story_started` (`fromLink`), `story_step` (`direction`), `story_exited`
 (`step`, `of`, `completed`). `playback_started` now carries `until` for a story's bounded run.
 Server-side:

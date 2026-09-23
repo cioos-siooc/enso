@@ -76,6 +76,7 @@
       </UFieldGroup>
 
       <ScopeControl />
+      <SecondPointControl />
       <LandControl />
     </div>
 

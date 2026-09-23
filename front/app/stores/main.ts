@@ -70,6 +70,8 @@ export interface View {
   /** A named region key. Wins over `point`. */
   region?: string
   point?: { lat: number, lon: number }
+  /** The second pin; `null` removes it, absent leaves it alone. */
+  point2?: { lat: number, lon: number } | null
   /** Swipe compare's second date; `null` turns compare off. */
   compareDate?: string | null
   /** The land overlay; `null` turns it off. */
@@ -396,6 +398,9 @@ const DEFAULT_POINT = { lat: 48, lon: -128 }
  */
 let regionRequestSeq = 0
 
+/** Which second-point request is the current one. Same job as `regionRequestSeq`. */
+let secondRequestSeq = 0
+
 /**
  * Region the app opens on. Nino 3.4 is the index the repo is named for, and it
  * is the one number this dashboard exists to show — so it is what the numbers
@@ -562,6 +567,23 @@ export const useMainStore = defineStore('main', {
      */
     pointError: null as string | null,
     /**
+     * The second pin, B, or null when only one cell is selected.
+     *
+     * Chart-only: B gets a series and nothing else. The stats and the ranking
+     * stay on A, so the dock keeps describing one selection and no second
+     * ranking is fetched. Kept through a trip to region scope, where it is
+     * hidden, and shown again on the way back.
+     */
+    secondPoint: null as { lat: number, lon: number } | null,
+    secondSeries: null as Series | null,
+    /** `variable|period|lat|lon` the current `secondSeries` was fetched for. */
+    secondKey: null as string | null,
+    loadingSecond: false,
+    /** B's own failure or out-of-box message. Never A's: B failing leaves A alone. */
+    secondError: null as string | null,
+    /** Whether the next map click drops B rather than moving A. */
+    addingPoint: false,
+    /**
      * Per-variable display range override; absent means domain.yml's vmin/vmax.
      *
      * The images carry data, not colour — Mapbox applies the ramp itself — so
@@ -708,6 +730,14 @@ export const useMainStore = defineStore('main', {
 
     activeSeriesLoading: state =>
       state.scope === 'region' ? state.loadingRegion : state.loadingPoint,
+
+    /** B's pin, when the map should draw it: point scope only. */
+    activeSecondPoint: (state): { lat: number, lon: number } | null =>
+      state.scope === 'point' ? state.secondPoint : null,
+
+    /** B's series, when the chart should draw it: point scope only. */
+    activeSecondSeries: (state): Series | null =>
+      state.scope === 'point' && state.secondPoint ? state.secondSeries : null,
 
     /**
      * The ranking the panel draws, for whichever scope is active.
@@ -1156,7 +1186,12 @@ export const useMainStore = defineStore('main', {
       if (scope === this.scope) return
       trackEvent('scope_changed', { scope, from: this.scope })
       this.scope = scope
+      // An armed "Add point" has no button in region scope to disarm it from.
+      if (scope === 'region') this.addingPoint = false
       if (scope === 'region' && !this.regionSeries) return this.loadRegionSeries()
+      // B may have been left behind by a variable or period change made in
+      // region scope; a no-op when it is current.
+      if (scope === 'point') void this.refreshSecondPoint()
       if (scope === 'point' && !this.pointSeries && this.selectedPoint) {
         const { lat, lon } = this.selectedPoint
         // The scope change is already reported; the cell it returns to was
@@ -1241,6 +1276,9 @@ export const useMainStore = defineStore('main', {
       // the land control, so it reports nothing.
       if (view.landLayer !== undefined) this.landLayer = view.landLayer
       if (view.landMode) this.landMode = view.landMode
+      // Before the selection below, which refreshes B alongside A.
+      if (view.point2 === null) this.clearSecondPoint()
+      else if (view.point2) this.secondPoint = { ...view.point2 }
 
       // One selection, one fetch. `track: false` on the point for the same
       // reason the patch skips the actions: this is not a click on the map.
@@ -1264,6 +1302,9 @@ export const useMainStore = defineStore('main', {
         }
       }
 
+      // A view that names B but leaves A alone reaches no `selectPoint` above.
+      if (this.scope === 'point') void this.refreshSecondPoint()
+
       if (view.camera) this.requestCamera(view.camera)
     },
 
@@ -1280,6 +1321,7 @@ export const useMainStore = defineStore('main', {
         ...(this.scope === 'region' && this.activeRegion
           ? { region: this.activeRegion }
           : this.selectedPoint ? { point: { ...this.selectedPoint } } : {}),
+        point2: this.secondPoint ? { ...this.secondPoint } : null,
       }
     },
 
@@ -1409,6 +1451,9 @@ export const useMainStore = defineStore('main', {
       this.loadingPoint = true
       try {
         const api = useApi()
+        // B rides along: every refetch of A (variable, period, a link) is one
+        // B needs too, and a no-op for B when it is already current.
+        void this.refreshSecondPoint()
         const [series, ranking] = await Promise.all([
           api.post<Series>('/timeseries', { lat, lon, period: this.period, variable: this.variable }),
           sameCell
@@ -1441,6 +1486,86 @@ export const useMainStore = defineStore('main', {
       }
       finally {
         this.loadingPoint = false
+      }
+    },
+
+    /** Arm or disarm "the next map click drops B". */
+    setAddingPoint(on: boolean) {
+      this.addingPoint = on
+    },
+
+    /**
+     * Drop (or move) the second pin and load its series.
+     *
+     * A gesture on the map, so it moves the app into point scope the way a
+     * click for A does — B is only ever drawn there.
+     */
+    async selectSecondPoint(lat: number, lon: number, { source = 'button' }: { source?: 'button' | 'alt' } = {}) {
+      this.addingPoint = false
+      trackEvent('point_added', { lat, lon, variable: this.variable, source })
+      this.secondPoint = { lat, lon }
+      if (this.scope !== 'point') await this.setScope('point')
+      await this.refreshSecondPoint()
+    },
+
+    /** Remove the second pin. The chart goes back to one line, coloured by value. */
+    removeSecondPoint() {
+      if (!this.secondPoint) return
+      trackEvent('point_removed', { variable: this.variable })
+      this.clearSecondPoint()
+    },
+
+    /** Forget B without reporting it — a view that has no B, not a gesture. */
+    clearSecondPoint() {
+      secondRequestSeq++
+      this.secondPoint = null
+      this.secondSeries = null
+      this.secondKey = null
+      this.secondError = null
+      this.loadingSecond = false
+      this.addingPoint = false
+    },
+
+    /**
+     * Fetch B's series when it is missing or for another variable, period or
+     * cell than the one on screen; otherwise nothing.
+     *
+     * Only the series: the dock stays on A, so B needs no ranking. A failure
+     * lands in `secondError` and never touches A's state — one bad pin must not
+     * blank the chart the other is still drawing.
+     */
+    async refreshSecondPoint() {
+      const point = this.secondPoint
+      if (!point) return
+      const key = `${this.variable}|${this.period}|${point.lat}|${point.lon}`
+      if (key === this.secondKey && (this.secondSeries || this.loadingSecond)) return
+      const seq = ++secondRequestSeq
+      this.secondKey = key
+      this.secondError = null
+      this.loadingSecond = true
+      try {
+        const series = await useApi().post<Series>('/timeseries', {
+          lat: point.lat, lon: point.lon, period: this.period, variable: this.variable,
+        })
+        if (seq !== secondRequestSeq) return
+        this.secondSeries = series
+        // A land cell answers with an empty series, which would otherwise draw
+        // nothing and say nothing — B's chip would name a place with no line.
+        if (!series.dates.length) this.secondError = 'No ocean record at point B'
+      }
+      catch (error: unknown) {
+        if (seq !== secondRequestSeq) return
+        const body = (error as { response?: { data?: { error?: { code?: string }, detail?: string } } }).response?.data
+        if (body?.error?.code !== 'outside_domain') console.error('[enso] /timeseries failed for point B', error)
+        this.secondSeries = null
+        // Cleared so the next refresh retries rather than trusting the key.
+        this.secondKey = null
+        this.secondError = body?.error?.code === 'outside_domain'
+          ? 'Point B is outside the ingested domain'
+          : requestErrorMessage(error, 'point B')
+      }
+      finally {
+        if (seq === secondRequestSeq) this.loadingSecond = false
       }
     },
   },

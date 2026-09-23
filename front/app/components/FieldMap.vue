@@ -14,6 +14,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import { useMainStore, type DomainMeta, type LayerName } from '~/stores/main'
 import type { ColorStop } from '~/utils/colorScale'
 import { GLOBE_VIEW, type CameraView, type ProjectionName } from '~/utils/mapView'
+import { PIN_COLORS } from '~/utils/points'
 
 /**
  * One Mapbox map drawing the field for one date.
@@ -47,6 +48,7 @@ const token = useRuntimeConfig().public.mapboxToken
 const container = ref<HTMLElement | null>(null)
 let map: mapboxgl.Map | null = null
 let marker: mapboxgl.Marker | null = null
+let markerB: mapboxgl.Marker | null = null
 let resize: ResizeObserver | null = null
 
 const SOURCE_ID = 'field-image'
@@ -123,11 +125,71 @@ const LAND_LAYER_ID = 'land-layer'
  */
 let styleReady = false
 
+/**
+ * A letter in the white dot of Mapbox's default pin.
+ *
+ * Colour alone is not enough to tell A from B — not for everyone, and not on a
+ * phone in sunlight — so each pin also says which it is. A's letter is shown
+ * only while B exists: with one pin there is nothing to tell it apart from.
+ */
+function pinLetter(pin: mapboxgl.Marker, letter: string): HTMLSpanElement {
+  const span = document.createElement('span')
+  span.textContent = letter
+  span.style.cssText = 'position:absolute;left:0;top:8px;width:27px;height:11px;'
+    + 'line-height:11px;text-align:center;font:700 9px/11px system-ui,sans-serif;'
+    + 'color:#0f172a;pointer-events:none'
+  pin.getElement().appendChild(span)
+  return span
+}
+
+let letterA: HTMLSpanElement | null = null
+
 /** Move (or create) the pin marking the selected cell. */
 function showMarker(lat: number, lon: number) {
   if (!map) return
-  marker ??= new mapboxgl.Marker({ color: '#05df72' })
+  if (!marker) {
+    marker = new mapboxgl.Marker({ color: PIN_COLORS.a })
+    letterA = pinLetter(marker, 'A')
+    syncLetterA()
+  }
   marker.setLngLat([lon, lat]).addTo(map)
+}
+
+function syncLetterA() {
+  if (letterA) letterA.style.display = store.activeSecondPoint ? '' : 'none'
+}
+
+/**
+ * Pin B, and the way to remove it.
+ *
+ * Removal is a popup on the pin rather than a click on the pin itself: a pin is
+ * a small target beside the one you are about to click for A, and removing a
+ * selection by brushing it is too easy. The chip under the time bar is the
+ * other path, and the one a phone reaches first.
+ */
+function syncMarkerB() {
+  const point = store.activeSecondPoint
+  if (!map || !point) {
+    markerB?.remove()
+    syncLetterA()
+    return
+  }
+  if (!markerB) {
+    markerB = new mapboxgl.Marker({ color: PIN_COLORS.b })
+    pinLetter(markerB, 'B')
+    markerB.getElement().title = 'Point B — click for options'
+    const body = document.createElement('button')
+    body.type = 'button'
+    body.textContent = 'Remove point B'
+    body.style.cssText = 'font:500 12px system-ui,sans-serif;color:#0f172a;cursor:pointer'
+    body.addEventListener('click', () => {
+      markerB?.getPopup()?.remove()
+      store.removeSecondPoint()
+    })
+    markerB.setPopup(new mapboxgl.Popup({ offset: 36, closeButton: false }).setDOMContent(body))
+  }
+  markerB.setLngLat([point.lon, point.lat]).addTo(map)
+  syncLetterA()
 }
 
 /**
@@ -653,14 +715,28 @@ onMounted(() => {
   else map.once('load', draw)
 
   map.on('click', (event) => {
+    // Pins and their popups sit inside the canvas container, so a click on one
+    // arrives here too. Without this, opening B's popup would also move A there.
+    const target = event.originalEvent.target as HTMLElement | null
+    if (target?.closest?.('.mapboxgl-marker, .mapboxgl-popup')) return
     const { lat, lng } = event.lngLat
-    store.selectPoint(Number(lat.toFixed(4)), Number(lng.toFixed(4)))
+    const at = [Number(lat.toFixed(4)), Number(lng.toFixed(4))] as const
+    // Alt, not Shift: Shift-drag is Mapbox's box zoom, and Ctrl-click is a
+    // right click on a Mac. The button is the path that works on a phone.
+    const alt = event.originalEvent.altKey
+    if (alt || store.addingPoint) {
+      store.selectSecondPoint(at[0], at[1], { source: alt ? 'alt' : 'button' })
+      return
+    }
+    store.selectPoint(at[0], at[1])
     showMarker(lat, lng)
   })
 
   // The store opens on a default cell, so the pin has to be there before the
   // first click or the chart would be describing an unmarked point.
   if (store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
+  syncMarkerB()
+  syncCursor()
 
   emit('ready', map)
 })
@@ -719,6 +795,16 @@ watch(() => store.selectedPoint, (point) => {
   if (point) showMarker(point.lat, point.lon)
 })
 
+// B the same way, and it also follows the scope: hidden in region scope, where
+// the chart is not drawing it, and back on return.
+watch(() => store.activeSecondPoint, syncMarkerB)
+
+/** A crosshair while the next click is armed to drop B. */
+function syncCursor() {
+  if (map) map.getCanvas().style.cursor = store.addingPoint ? 'crosshair' : ''
+}
+watch(() => store.addingPoint, syncCursor)
+
 // Changing projection re-seats the westward copy, which exists only on the
 // globe. Re-framing afterwards is the host's decision.
 watch(() => props.projection, (name) => {
@@ -734,6 +820,7 @@ onBeforeUnmount(() => {
   resize?.disconnect()
   resize = null
   marker?.remove()
+  markerB?.remove()
   map?.remove()
   map = null
 })

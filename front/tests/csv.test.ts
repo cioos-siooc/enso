@@ -34,6 +34,16 @@ describe('seriesCsv', () => {
     )
   })
 
+  it('joins a second point on the bucket start, one column per point', () => {
+    const b = { dates: ['2024-05-13', '2024-05-20'], values: [1.5, -0.25], period: 'weekly' } as unknown as Series
+    expect(seriesCsv(series, { variable: 'anom', period: 'weekly', unit: '°C', precision: 2, second: b })).toBe(
+      'start_date,end_date,anom_degC_a,anom_degC_b\r\n'
+      + '2024-05-06,2024-05-12,0.20,\r\n'
+      + '2024-05-13,2024-05-19,,1.50\r\n'
+      + '2024-05-20,2024-05-26,,-0.25\r\n',
+    )
+  })
+
   it('names the quantity over the variable', () => {
     const extent = { ...series, quantity: 'mhw_extent' } as Series
     expect(seriesCsv(extent, { variable: 'mhw', period: 'weekly', unit: '%', precision: 1 }))
