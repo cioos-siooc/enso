@@ -448,8 +448,9 @@ NetCDF.
 
 **A map overlay, not a fourth ocean variable.** It is drawn over whichever ocean variable
 is showing, with its own legend, so El Niño's ocean anomaly and its land response are on one
-map. The chart, stats and rankings stay ocean. Land has no timeseries yet, and
-`/timeseries?variable=land_*` 422s by design (`/image` has its own `ImageVariable` Literal).
+map. The stats and rankings stay ocean. **The chart does not**: with the overlay on, a pin
+on land plots the overlay's layer at that cell from `POST /landTimeseries` (see below).
+`/timeseries?variable=land_*` still 422s by design (`LandVariable` is its own Literal).
 
 | layer | source | bucket | encoding | periods |
 |---|---|---|---|---|
@@ -575,8 +576,32 @@ no-overlap rule geometrically, column by column.
   on 24 workers (with the global re-ingest running for the first hour and a half). For the
   Pacific box it was 27–56 KB a frame.
 
-**Not built yet on the land side:** clicking land for a chart (land `/timeseries`, a
-`land_clim` table, rollups), SPI, the 1979 extension, and a more compact two-legend layout on a
+##### Charting a land cell
+
+**`POST /landTimeseries`** (`api/modules/land.py`) takes the overlay's layer name and
+returns a point series on the **land** grid. Three things about it:
+
+- **"Land" is CoralTemp's land at 0.05°**, via `global_ocean_mask()`, not "a CPC cell with
+  data". A click on drawn sea answers 200 with no values and `surface: "ocean"`, even where
+  a 0.5° block overhangs it. So a click's ocean and land series partition it: exactly one
+  has values, and the frontend fetches both and plots whichever came back.
+- **A bucket is `_land_bucket`'s, cell for cell** (mean, mean of differences, log2 of the
+  ratio of means with the floor and the `min_normal` null), reduced in Python because the
+  normal lives in the `.clim.nc` file, not ClickHouse. Verified against `bucket_field` on
+  four layer/period cases, equal to the layer's precision. `read_land_clim_cell` reads one
+  column of the file; it is chunked a day per chunk, so a cold cell is ~0.9 s and the API
+  caches 512 cells per worker.
+- **An undeclared period or an unbuilt climatology is a 400** with the reason in `detail`;
+  the store's `landChartReason` says the same without the request.
+
+In the store, `landPins.{a,b}` hold each pin's land series, refreshed by `refreshLand()`
+from every path that refreshes the ocean ones plus the land control. `TimeseriesChart`
+draws land on a **right-hand y-axis** (`Land °C`, `Land mm/day`, `Land % of normal`),
+ocean on the left, and only the right one when every line is land. One line is coloured by
+its own layer's ramp; two are coloured by pin, as before.
+
+**Not built yet on the land side:** land stats cards and rankings, a `land_clim` table,
+region rollups, SPI, the 1979 extension, and a more compact two-legend layout on a
 phone, where the pair covers about half the map. See ROADMAP.md B6.
 
 #### Two baselines, and they are not reconcilable
@@ -1260,6 +1285,7 @@ FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is n
 | `GET /state` | the header ribbon's two findings: ENSO phase from Nino 3.4, and basin marine-heatwave extent against the date's normal |
 | `GET /variables` | variable list, with `derived` on `anom` |
 | `POST /timeseries` | `{lat, lon, start?, end?, period?, variable?}` → record at the nearest cell |
+| `POST /landTimeseries` | `{lat, lon, start?, end?, period?, variable: land_*}` → the land overlay layer at the nearest CPC cell; empty on CoralTemp ocean |
 | `POST /regionTimeseries` | `{lat: [a,b], lon: [a,b], ...}` → area-mean over an arbitrary box |
 | `GET /region/{key}` | same, for a named `domain.yml` region, using `region_clim` |
 | `GET /region/{key}/geometry` | a polygon region's outline as GeoJSON; 404 for a plain box |
@@ -2180,7 +2206,7 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 range), `story_started` (`fromLink`), `story_step` (`direction`), `story_exited`
 (`step`, `of`, `completed`). `playback_started` now carries `until` for a story's bounded run.
 Server-side:
-`point_queried` (including the out-of-domain 400 — where people click outside the box is
+`land_point_queried` (`surface`, `buckets`), `point_queried` (including the out-of-domain 400 — where people click outside the box is
 the argument for widening it, which costs only a `domain.yml` edit), `point_ranking_queried`,
 `region_queried`, `region_box_queried`, `region_ranking_queried`.
 

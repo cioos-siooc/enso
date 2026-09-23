@@ -52,7 +52,8 @@ import * as echarts from 'echarts'
 import type { Series } from '~/stores/main'
 import { NO_CLASS_COLOR, type ColorStop } from '~/utils/colorScale'
 import { wholeClasses } from '~/utils/stats'
-import { PIN_COLORS } from '~/utils/points'
+import { PIN_COLORS, type PinKey } from '~/utils/points'
+import { formatLog2Percent } from '~/utils/land'
 
 const props = defineProps<{
   series: Series | null
@@ -104,9 +105,57 @@ const props = defineProps<{
    * is dropped too; it belongs to A alone and would be a third line to decode.
    */
   secondSeries?: Series | null
+  /**
+   * Each pin's land-overlay series, when the overlay is on and the pin is on
+   * land. Drawn against a RIGHT-hand axis of its own: land and ocean never share
+   * a scale (a land anomaly runs ±8 against the ocean's ±3; rain is mm/day), so
+   * one axis would flatten whichever is smaller. With no ocean line at all the
+   * right axis is the only one.
+   */
+  landSeries?: Series | null
+  secondLandSeries?: Series | null
+  /** The land layer's stops over its displayed range — its own map legend's. */
+  landStops?: ColorStop[]
+  landUnit?: string
+  landLabel?: string
+  /** The rainfall ratio: stored as log2, printed as percent of normal. */
+  landLog2Percent?: boolean
+  /** A dashed zero on the land axis — an anomaly's normal, or the ratio's 100%. */
+  landZeroLine?: boolean
 }>()
 
-const twoPoints = computed(() => (props.secondSeries?.dates.length ?? 0) > 0)
+type Surface = 'ocean' | 'land'
+interface Line { pin: PinKey, surface: Surface, series: Series }
+
+/**
+ * Every line there is data for, A before B and ocean before land.
+ *
+ * At most one per pin in practice: the ocean series is empty on CoralTemp's
+ * land and the land one is empty on its ocean, so a click is answered by
+ * exactly the surface it hit.
+ */
+const lines = computed<Line[]>(() => {
+  const out: Line[] = []
+  const add = (pin: PinKey, surface: Surface, series: Series | null | undefined) => {
+    if (series?.dates.length) out.push({ pin, surface, series })
+  }
+  add('a', 'ocean', props.series)
+  add('a', 'land', props.landSeries)
+  add('b', 'ocean', props.secondSeries)
+  add('b', 'land', props.secondLandSeries)
+  return out
+})
+
+/** The line the markers, the click snapping and the value ramp belong to. */
+const primary = computed(() => lines.value[0] ?? null)
+
+/**
+ * More than one line, so they are coloured by WHICH point rather than by value:
+ * two lines on one value ramp are the same colour wherever they agree.
+ */
+const twoPoints = computed(() => lines.value.length > 1)
+const hasOcean = computed(() => lines.value.some(l => l.surface === 'ocean'))
+const hasLand = computed(() => lines.value.some(l => l.surface === 'land'))
 
 const seriesName = computed(() => props.label ?? 'Value')
 
@@ -132,10 +181,10 @@ const axisStyle = {
 const container = ref<HTMLElement | null>(null)
 let chart: echarts.ECharts | null = null
 
-const hasData = computed(() => (props.series?.dates.length ?? 0) > 0)
+const hasData = computed(() => lines.value.length > 0)
 
 /** Bucket starts as epoch ms, ascending — the snap targets for a click. */
-const stamps = computed(() => (props.series?.dates ?? []).map(d => Date.parse(`${d.slice(0, 10)}T00:00:00Z`)))
+const stamps = computed(() => (primary.value?.series.dates ?? []).map(d => Date.parse(`${d.slice(0, 10)}T00:00:00Z`)))
 
 /** The series' own bucket nearest to an x value, so a click can only land on a real frame. */
 function nearestDate(x: number): string | null {
@@ -151,14 +200,20 @@ function nearestDate(x: number): string | null {
   // `lo` is the first bucket at or after the click; its left neighbour may be closer.
   const prev = Math.max(0, lo - 1)
   const best = Math.abs(values[lo]! - x) < Math.abs(values[prev]! - x) ? lo : prev
-  return props.series?.dates[best] ?? null
+  return primary.value?.series.dates[best] ?? null
 }
 
+const ZERO_LINE = { yAxis: 0, lineStyle: { color: '#94a3b8', type: 'dashed', width: 1 }, label: { show: false } }
+
+/** Whether a surface's own axis gets a dashed zero. */
+function zeroFor(surface: Surface): boolean {
+  return surface === 'ocean' ? !!props.zeroLine : !!props.landZeroLine
+}
+
+/** The primary line's markers: its axis's zero, and the MAP / CMP dates. */
 function markLine(): echarts.SeriesOption['markLine'] {
   const data: Array<Record<string, unknown>> = []
-  if (props.zeroLine) {
-    data.push({ yAxis: 0, lineStyle: { color: '#94a3b8', type: 'dashed', width: 1 }, label: { show: false } })
-  }
+  if (primary.value && zeroFor(primary.value.surface)) data.push(ZERO_LINE)
   if (props.selectedDate) {
     data.push({
       xAxis: props.selectedDate,
@@ -202,9 +257,10 @@ function markLine(): echarts.SeriesOption['markLine'] {
  * pinned at the red end.
  */
 function visualMap(): echarts.EChartsOption['visualMap'] {
-  const stops = props.stops ?? []
+  const land = primary.value?.surface === 'land'
+  const stops = (land ? props.landStops : props.stops) ?? []
   if (stops.length < 2 || twoPoints.value) return undefined
-  if (props.categorical) {
+  if (props.categorical && !land) {
     // Piecewise, for the same reason the map's ramp is a `step`: there is no
     // colour between two classes because there is no value between them. A
     // continuous map would blend Cat 2's amber into Cat 3's orange across a
@@ -257,6 +313,14 @@ function visualMap(): echarts.EChartsOption['visualMap'] {
  */
 const isWholeClasses = computed(() => wholeClasses(props.series))
 
+/** Tooltip text for a land value, in the land layer's own units. */
+function formatLand(value: unknown): string {
+  if (value == null) return '—'
+  const n = Number(value)
+  if (props.landLog2Percent) return `${formatLog2Percent(n)} of normal`
+  return `${n.toFixed(1)}${props.landUnit ? ` ${props.landUnit}` : ''}`
+}
+
 /**
  * Tooltip text for one value.
  *
@@ -295,7 +359,7 @@ const normals = computed(() => props.series?.climatology ?? null)
 
 function normalSeries(): echarts.SeriesOption[] {
   const clim = normals.value
-  if (twoPoints.value || !clim?.some(v => v != null)) return []
+  if (twoPoints.value || primary.value?.surface !== 'ocean' || !clim?.some(v => v != null)) return []
   return [{
     type: 'line',
     name: normalName.value,
@@ -317,70 +381,125 @@ function normalSeries(): echarts.SeriesOption[] {
   }]
 }
 
-/** Point B, in its pin's colour. Never carries the markLines — A's line does. */
-function secondLine(): echarts.SeriesOption[] {
-  const second = props.secondSeries
-  if (!twoPoints.value || !second) return []
-  return [{
+/** Which y-axis a surface is drawn against: ocean first (left), land after it (right). */
+function axisIndex(surface: Surface): number {
+  return surface === 'land' && hasOcean.value ? 1 : 0
+}
+
+/**
+ * One line of the plot. The primary carries the MAP / CMP markers and, with a
+ * single line, the value ramp; every other line is in its pin's colour. The
+ * first land line that is not the primary carries the land axis's zero.
+ */
+function lineSeries(line: Line, index: number, ramp: boolean): echarts.SeriesOption {
+  const name = line.surface === 'land' ? (props.landLabel ?? 'Land') : seriesName.value
+  const firstLand = lines.value.findIndex(l => l.surface === 'land')
+  const color = PIN_COLORS[line.pin]
+  return {
     type: 'line',
-    name: `B · ${seriesName.value}`,
-    data: second.dates.map((date, i) => [date, second.values[i]]),
+    name: twoPoints.value ? `${line.pin.toUpperCase()} · ${name}` : name,
+    data: line.series.dates.map((date, i) => [date, line.series.values[i]]),
+    yAxisIndex: axisIndex(line.surface),
     showSymbol: false,
     large: true,
-    lineStyle: { width: 1, color: PIN_COLORS.b },
-    itemStyle: { color: PIN_COLORS.b },
+    // An explicit lineStyle.color *beats* the visualMap rather than losing to
+    // it, so the fallback colour is only set when there is no ramp to apply —
+    // otherwise the line draws flat cyan and silently ignores the scale.
+    lineStyle: twoPoints.value
+      ? { width: 1, color }
+      : ramp ? { width: 1 } : { width: 1, color: '#38bdf8' },
+    // The tooltip's marker, which otherwise takes ECharts' palette.
+    ...(twoPoints.value ? { itemStyle: { color } } : {}),
+    // Per series, because the two axes print differently: a rainfall ratio is
+    // a percent of normal, not the log2 it is stored as.
+    tooltip: { valueFormatter: line.surface === 'land' ? formatLand : formatValue },
+    ...(index === 0
+      ? { markLine: markLine() }
+      : index === firstLand && props.landZeroLine
+        ? { markLine: { silent: true, symbol: 'none', animation: false, data: [ZERO_LINE] } }
+        : {}),
     z: 2,
-  }]
+  }
 }
 
 const normalName = computed(() =>
   `${props.series?.climatologyBaseline ?? '1991-2020'} normal`)
 
+/**
+ * The land axis, on the right. Its own `scale: true` range — a land anomaly is
+ * several times the ocean's — and gridlines only when it is the sole axis, so
+ * two sets of rules never cross the plot.
+ */
+function landAxis(): echarts.YAXisComponentOption {
+  return {
+    ...axisStyle,
+    type: 'value',
+    position: 'right',
+    scale: true,
+    // Prefixed, since beside the ocean's both axes can read °C.
+    name: `Land ${props.landLog2Percent ? '% of normal' : (props.landUnit ?? '')}`.trim(),
+    nameLocation: 'end',
+    nameGap: 8,
+    axisLabel: {
+      color: AXIS_LABEL,
+      ...(props.landLog2Percent ? { formatter: (v: number) => formatLog2Percent(v) } : {}),
+    },
+    splitLine: { show: !hasOcean.value, lineStyle: { color: AXIS_SPLIT } },
+  }
+}
+
+/** The ocean axis, on the left. */
+function oceanAxis(): echarts.YAXisComponentOption {
+  // `scale: true` frees the axis from having to include zero. Without it a
+  // tropical SST record — 25 to 30 degC — is drawn against a 0-30 axis and
+  // reads as a flat line; with it the axis still picks nice round bounds,
+  // just ones that bracket the data.
+  //
+  // A categorical axis wants the opposite: zero IS meaningful (it is "no
+  // heatwave", where most of the series sits), the whole scale is only ever
+  // 0..5, and only whole numbers can occur — so it is pinned, with an interval
+  // of 1 so no tick lands on a value the data cannot take.
+  //
+  // Only where the values ARE classes, though: a region's area mean of them
+  // spends the whole archive under 1, and pinning that to 0..5 draws it as a
+  // flat line along the axis floor. There the axis keeps its zero — "no
+  // heatwave" is still the meaningful bottom — and lets the top follow the
+  // data.
+  return props.categorical
+    ? {
+        ...axisStyle,
+        type: 'value',
+        min: 0,
+        max: isWholeClasses.value ? 5 : undefined,
+        interval: isWholeClasses.value ? 1 : undefined,
+        name: (hasLand.value ? 'Ocean ' : '') + (props.unit || (isWholeClasses.value ? 'category' : 'mean category')),
+        nameLocation: 'end',
+        nameGap: 8,
+        splitLine: { show: true, lineStyle: { color: AXIS_SPLIT } },
+      }
+    : {
+        ...axisStyle,
+        type: 'value',
+        scale: true,
+        name: hasLand.value ? `Ocean ${props.unit ?? '°C'}`.trim() : (props.unit ?? '°C'),
+        nameLocation: 'end',
+        nameGap: 8,
+        splitLine: { show: true, lineStyle: { color: AXIS_SPLIT } },
+      }
+}
+
 function option(): echarts.EChartsOption {
-  const points = (props.series?.dates ?? []).map((date, i) => [date, props.series!.values[i]])
   const ramp = visualMap()
   const normal = normalSeries()
+  const yAxes: echarts.YAXisComponentOption[] = []
+  if (hasOcean.value) yAxes.push(oceanAxis())
+  if (hasLand.value) yAxes.push(landAxis())
   return {
     animation: false,
-    grid: { top: 24, right: 16, bottom: 44, left: 52 },
-    tooltip: { trigger: 'axis', valueFormatter: formatValue },
+    grid: { top: 24, right: hasLand.value ? 56 : 16, bottom: 44, left: hasOcean.value ? 52 : 16 },
+    tooltip: { trigger: 'axis' },
     xAxis: { type: 'time', ...axisStyle },
-    // `scale: true` frees the axis from having to include zero. Without it a
-    // tropical SST record — 25 to 30 degC — is drawn against a 0-30 axis and
-    // reads as a flat line; with it the axis still picks nice round bounds,
-    // just ones that bracket the data.
-    //
-    // A categorical axis wants the opposite: zero IS meaningful (it is "no
-    // heatwave", where most of the series sits), the whole scale is only ever
-    // 0..5, and only whole numbers can occur — so it is pinned, with an interval
-    // of 1 so no tick lands on a value the data cannot take.
-    //
-    // Only where the values ARE classes, though: a region's area mean of them
-    // spends the whole archive under 1, and pinning that to 0..5 draws it as a
-    // flat line along the axis floor. There the axis keeps its zero — "no
-    // heatwave" is still the meaningful bottom — and lets the top follow the
-    // data.
-    yAxis: props.categorical
-      ? {
-          ...axisStyle,
-          type: 'value',
-          min: 0,
-          max: isWholeClasses.value ? 5 : undefined,
-          interval: isWholeClasses.value ? 1 : undefined,
-          name: props.unit || (isWholeClasses.value ? 'category' : 'mean category'),
-          nameLocation: 'end',
-          nameGap: 8,
-          splitLine: { show: true, lineStyle: { color: AXIS_SPLIT } },
-        }
-      : {
-          ...axisStyle,
-          type: 'value',
-          scale: true,
-          name: props.unit ?? '°C',
-          nameLocation: 'end',
-          nameGap: 8,
-          splitLine: { show: true, lineStyle: { color: AXIS_SPLIT } },
-        },
+    yAxis: yAxes,
     // The full record is ~16k daily points; dataZoom is what makes that browsable,
     // and `large` turns on ECharts' batched path so panning stays smooth.
     dataZoom: [
@@ -400,27 +519,11 @@ function option(): echarts.EChartsOption {
           data: [normalName.value],
         }
       : undefined,
+    // The primary first: the visualMap, the markLine watcher and the click
+    // snapping all address series 0.
     series: [
-      {
-        type: 'line',
-        name: twoPoints.value ? `A · ${seriesName.value}` : seriesName.value,
-        data: points,
-        showSymbol: false,
-        large: true,
-        // An explicit lineStyle.color *beats* the visualMap rather than losing
-        // to it, so the fallback colour is only set when there is no ramp to
-        // apply — otherwise the line draws flat cyan and silently ignores the
-        // scale.
-        lineStyle: twoPoints.value
-          ? { width: 1, color: PIN_COLORS.a }
-          : ramp ? { width: 1 } : { width: 1, color: '#38bdf8' },
-        // The tooltip's marker, which otherwise takes ECharts' palette.
-        ...(twoPoints.value ? { itemStyle: { color: PIN_COLORS.a } } : {}),
-        markLine: markLine(),
-        z: 2,
-      },
+      ...lines.value.map((line, i) => lineSeries(line, i, !!ramp)),
       ...normal,
-      ...secondLine(),
     ],
   }
 }
@@ -483,7 +586,7 @@ watch(container, (el, previous) => {
   if (hasData.value) nextTick(render)
 })
 
-watch(() => [props.series, props.secondSeries], () => {
+watch(() => [props.series, props.secondSeries, props.landSeries, props.secondLandSeries], () => {
   if (!hasData.value) {
     chart?.dispose()
     chart = null
@@ -500,7 +603,7 @@ watch(() => [props.selectedDate, props.compareDate], () => {
 
 // Dragging the colour range is a recolour and nothing else — same reason the map
 // repaints without refetching a frame — so it merges in and leaves the zoom alone.
-watch(() => props.stops, () => {
+watch(() => [props.stops, props.landStops], () => {
   const ramp = visualMap()
   if (chart && hasData.value && ramp) chart.setOption({ visualMap: ramp })
 }, { deep: true })

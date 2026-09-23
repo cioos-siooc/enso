@@ -688,6 +688,40 @@ def read_land_clim(
     return block[[where[k] for k in idx]]
 
 
+def read_land_clim_cell(
+    source: str,
+    gy: int,
+    gx: int,
+    *,
+    period: str,
+    window_days: int,
+    clim_dir: Path | None = None,
+) -> dict[int, float]:
+    """One land cell's climatology, `{mmdd: value}` over all 366 keys.
+
+    The point-series twin of `read_land_clim`: the same file, the same baseline
+    check, but one `(gy, gx)` column of it rather than whole days — 366 floats
+    against ~380 MB. The file is south-up and 0-360 like the land grid, so the
+    indices go straight in. Keys with no data (NaN) are left out.
+    """
+    path = land_clim_path(source, clim_dir)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no land climatology for {source!r} at {path}; run `CPC.cli clim`"
+        )
+    with _open(path) as ds:
+        got_period = str(ds.getncattr("baseline_period"))
+        got_window = int(ds.getncattr("window_days"))
+        if got_period != period or got_window != window_days:
+            raise ValueError(
+                f"{path.name} was built for {got_period} with a {got_window}-day "
+                f"window, but domain.yml declares {period} with {window_days}. "
+                "Rebuild it with `CPC.cli clim`."
+            )
+        column = np.ma.filled(ds.variables[source][:, gy, gx], np.nan).astype("float64")
+    return {k: float(v) for k, v in zip(MMDD_KEYS, column) if np.isfinite(v)}
+
+
 def land_valid_mask(raw: np.ndarray) -> np.ndarray:
     """Cells that carry a reading.
 

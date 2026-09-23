@@ -344,7 +344,14 @@ export interface Series {
   dates: string[]
   values: Array<number | null>
   period?: Period
-  variable?: VariableName
+  variable?: VariableName | LandVariableName
+  /**
+   * On a land series only: which surface the clicked 0.05-degree pixel is.
+   * `ocean` comes back with no values — the land frames are cut to CoralTemp's
+   * coastline, so a click on drawn sea has no land record, even where a
+   * 0.5-degree CPC block overhangs it.
+   */
+  surface?: 'land' | 'ocean'
   /**
    * What these values ARE, when that is not simply the variable.
    *
@@ -400,6 +407,24 @@ let regionRequestSeq = 0
 
 /** Which second-point request is the current one. Same job as `regionRequestSeq`. */
 let secondRequestSeq = 0
+
+/** The same for each pin's land series. */
+const landRequestSeq = { a: 0, b: 0 }
+
+/**
+ * One pin's land series: the land overlay's layer at that cell. Beside the
+ * ocean series rather than in place of it, because a click is answered by
+ * both and only the one whose surface it hit comes back with values.
+ */
+export interface LandPin {
+  series: Series | null
+  /** `layer|period|lat|lon` the series was fetched for. */
+  key: string | null
+  loading: boolean
+  error: string | null
+}
+
+const emptyLandPin = (): LandPin => ({ series: null, key: null, loading: false, error: null })
 
 /**
  * Region the app opens on. Nino 3.4 is the index the repo is named for, and it
@@ -584,6 +609,13 @@ export const useMainStore = defineStore('main', {
     /** Whether the next map click drops B rather than moving A. */
     addingPoint: false,
     /**
+     * Each pin's land series, fetched only while the land overlay is on and
+     * only in point scope. The chart plots it on a right-hand axis of its own:
+     * land and ocean are never on one scale (±8 against ±3, mm/day against
+     * degrees), and the map's two legends already say so.
+     */
+    landPins: { a: emptyLandPin(), b: emptyLandPin() } as Record<'a' | 'b', LandPin>,
+    /**
      * Per-variable display range override; absent means domain.yml's vmin/vmax.
      *
      * The images carry data, not colour — Mapbox applies the ramp itself — so
@@ -738,6 +770,42 @@ export const useMainStore = defineStore('main', {
     /** B's series, when the chart should draw it: point scope only. */
     activeSecondSeries: (state): Series | null =>
       state.scope === 'point' && state.secondPoint ? state.secondSeries : null,
+
+    /** A's land series, when the chart should draw it: point scope, overlay on, values present. */
+    activeLandSeries: (state): Series | null => {
+      const series = state.landPins.a.series
+      return state.scope === 'point' && state.landLayer && series?.dates.length ? series : null
+    },
+
+    /** B's, under the same conditions plus B existing. */
+    activeSecondLandSeries: (state): Series | null => {
+      const series = state.landPins.b.series
+      return state.scope === 'point' && state.landLayer && state.secondPoint && series?.dates.length
+        ? series
+        : null
+    },
+
+    /**
+     * Why the chart has no land line although the overlay is on, or null.
+     *
+     * Only the reasons that hold for every cell — the rainfall ratio at a daily
+     * period, a climatology not built yet — since those are about the layer,
+     * not the click. The API gives the same answer in its 400; this is what
+     * saves the request.
+     */
+    landChartReason: (state): string | null => {
+      if (state.scope !== 'point' || !state.landLayer) return null
+      const layer = landLayerName(state.landLayer, state.landMode)
+      const meta = state.domain?.variables?.[layer]
+      if (!state.coverage?.land) return 'Land data is not loaded on this server'
+      if (meta && !meta.periods.includes(state.period)) {
+        return `${meta.shortName} is charted ${meta.periods.join(' or ')} only`
+      }
+      if (state.coverage.land.layers[layer] === false) {
+        return 'The 1991-2020 land climatology has not been built yet'
+      }
+      return null
+    },
 
     /**
      * The ranking the panel draws, for whichever scope is active.
@@ -1191,7 +1259,10 @@ export const useMainStore = defineStore('main', {
       if (scope === 'region' && !this.regionSeries) return this.loadRegionSeries()
       // B may have been left behind by a variable or period change made in
       // region scope; a no-op when it is current.
-      if (scope === 'point') void this.refreshSecondPoint()
+      if (scope === 'point') {
+        void this.refreshSecondPoint()
+        void this.refreshLand()
+      }
       if (scope === 'point' && !this.pointSeries && this.selectedPoint) {
         const { lat, lon } = this.selectedPoint
         // The scope change is already reported; the cell it returns to was
@@ -1302,8 +1373,12 @@ export const useMainStore = defineStore('main', {
         }
       }
 
-      // A view that names B but leaves A alone reaches no `selectPoint` above.
-      if (this.scope === 'point') void this.refreshSecondPoint()
+      // A view that names B but leaves A alone reaches no `selectPoint` above,
+      // and one that only turns the land overlay on reaches nothing at all.
+      if (this.scope === 'point') {
+        void this.refreshSecondPoint()
+        void this.refreshLand()
+      }
 
       if (view.camera) this.requestCamera(view.camera)
     },
@@ -1364,6 +1439,7 @@ export const useMainStore = defineStore('main', {
     setLandLayer(source: LandSource | null) {
       if (source === this.landLayer) return
       this.landLayer = source
+      void this.refreshLand()
       trackEvent('land_layer_changed', {
         layer: source,
         mode: this.landMode,
@@ -1375,6 +1451,7 @@ export const useMainStore = defineStore('main', {
     setLandMode(mode: LandMode) {
       if (mode === this.landMode) return
       this.landMode = mode
+      void this.refreshLand()
       trackEvent('land_layer_changed', {
         layer: this.landLayer,
         mode,
@@ -1452,8 +1529,10 @@ export const useMainStore = defineStore('main', {
       try {
         const api = useApi()
         // B rides along: every refetch of A (variable, period, a link) is one
-        // B needs too, and a no-op for B when it is already current.
+        // B needs too, and a no-op for B when it is already current. So do
+        // both pins' land series, which a period change also invalidates.
         void this.refreshSecondPoint()
+        void this.refreshLand()
         const [series, ranking] = await Promise.all([
           api.post<Series>('/timeseries', { lat, lon, period: this.period, variable: this.variable }),
           sameCell
@@ -1489,6 +1568,53 @@ export const useMainStore = defineStore('main', {
       }
     },
 
+    /**
+     * Fetch each pin's land series where it is missing or stale; clear it where
+     * the overlay is off or the layer cannot be charted at this period.
+     *
+     * One action for both pins, because everything that invalidates one —
+     * layer, mode, period — invalidates the other. A pin whose key is current
+     * is left alone, so calling this from every refresh path costs nothing.
+     */
+    async refreshLand() {
+      const layer = this.landLayer ? landLayerName(this.landLayer, this.landMode) : null
+      await Promise.all((['a', 'b'] as const).map(async (pin) => {
+        const point = pin === 'a' ? this.selectedPoint : this.secondPoint
+        if (!point || !layer || this.landChartReason) {
+          landRequestSeq[pin]++
+          this.landPins[pin] = emptyLandPin()
+          return
+        }
+        // Region scope keeps what it has for the trip back, and fetches nothing.
+        if (this.scope !== 'point') return
+        const key = `${layer}|${this.period}|${point.lat}|${point.lon}`
+        const current = this.landPins[pin]
+        if (key === current.key && (current.series || current.loading)) return
+        const seq = ++landRequestSeq[pin]
+        // The previous line stays up while the new one loads, like the ocean's.
+        this.landPins[pin] = { ...current, key, loading: true, error: null }
+        try {
+          const series = await useApi().post<Series>('/landTimeseries', {
+            lat: point.lat, lon: point.lon, period: this.period, variable: layer,
+          })
+          if (seq !== landRequestSeq[pin]) return
+          this.landPins[pin] = { series, key, loading: false, error: null }
+        }
+        catch (error: unknown) {
+          if (seq !== landRequestSeq[pin]) return
+          const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          console.error(`[enso] /landTimeseries failed for point ${pin.toUpperCase()}`, error)
+          // Key cleared so the next refresh retries rather than trusting it.
+          this.landPins[pin] = {
+            series: null,
+            key: null,
+            loading: false,
+            error: detail ?? requestErrorMessage(error, `land at point ${pin.toUpperCase()}`),
+          }
+        }
+      }))
+    },
+
     /** Arm or disarm "the next map click drops B". */
     setAddingPoint(on: boolean) {
       this.addingPoint = on
@@ -1505,6 +1631,7 @@ export const useMainStore = defineStore('main', {
       trackEvent('point_added', { lat, lon, variable: this.variable, source })
       this.secondPoint = { lat, lon }
       if (this.scope !== 'point') await this.setScope('point')
+      void this.refreshLand()
       await this.refreshSecondPoint()
     },
 
@@ -1524,6 +1651,8 @@ export const useMainStore = defineStore('main', {
       this.secondError = null
       this.loadingSecond = false
       this.addingPoint = false
+      landRequestSeq.b++
+      this.landPins.b = emptyLandPin()
     },
 
     /**
@@ -1549,9 +1678,6 @@ export const useMainStore = defineStore('main', {
         })
         if (seq !== secondRequestSeq) return
         this.secondSeries = series
-        // A land cell answers with an empty series, which would otherwise draw
-        // nothing and say nothing — B's chip would name a place with no line.
-        if (!series.dates.length) this.secondError = 'No ocean record at point B'
       }
       catch (error: unknown) {
         if (seq !== secondRequestSeq) return

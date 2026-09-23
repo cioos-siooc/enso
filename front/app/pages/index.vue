@@ -92,7 +92,7 @@
           <TimeseriesChart
             :series="store.activeSeries"
             :second-series="store.activeSecondSeries"
-            :loading="store.activeSeriesLoading"
+            :loading="store.activeSeriesLoading || landLoading"
             :empty-message="emptyPointMessage"
             :error="!!store.activeError"
             :title="chartTitle"
@@ -103,6 +103,13 @@
             :unit="store.seriesUnitLabel"
             :categorical="store.seriesIsCategorical"
             :label="variableLabel"
+            :land-series="store.activeLandSeries"
+            :second-land-series="store.activeSecondLandSeries"
+            :land-stops="store.landVariable ? store.stopsFor(store.landVariable) : []"
+            :land-unit="landMeta?.units === 'degC' ? '°C' : landMeta?.units"
+            :land-label="landMeta?.shortName"
+            :land-log2-percent="landMeta?.display === 'log2_percent'"
+            :land-zero-line="store.landMode === 'anomaly'"
             @select="store.setDate($event)"
             @select-compare="setCompareFromChart"
           >
@@ -294,11 +301,32 @@ const chartTitle = computed(() =>
  * order: a failure first, then the informational out-of-box case, then the
  * hint. `activeError` is scope-aware, so a failed region load reads as one too.
  */
-const emptyPointMessage = computed(
-  () => store.activeError
-    ?? store.outsideDomain
-    ?? 'Click anywhere on the map to read that cell’s full record.',
-)
+const emptyPointMessage = computed(() => {
+  if (store.activeError) return store.activeError
+  if (store.scope === 'point' && store.landLayer) {
+    const reason = store.landChartReason ?? store.landPins.a.error
+    if (reason) return reason
+  }
+  if (store.outsideDomain) return store.outsideDomain
+  // Inside the box, a land click answers with an empty ocean series.
+  if (store.scope === 'point' && store.pointSeries && !store.pointSeries.dates.length) {
+    if (store.activeLandSeries) {
+      return 'No ocean record here. The chart shows this cell’s land record; the numbers and rankings cover the ocean only.'
+    }
+    return store.landLayer
+      ? 'No ocean or land record at this cell.'
+      : 'No ocean record here. Turn on a land layer to chart land temperature or rain.'
+  }
+  return 'Click anywhere on the map to read that cell’s full record.'
+})
+
+/** The land overlay's layer metadata, for the chart's right-hand axis. */
+const landMeta = computed(() =>
+  store.landVariable ? store.domain?.variables?.[store.landVariable] ?? null : null)
+
+/** Either pin's land series in flight, in point scope. */
+const landLoading = computed(() =>
+  store.scope === 'point' && (store.landPins.a.loading || store.landPins.b.loading))
 
 /**
  * What rank 1 means for what is actually plotted. "Warmest" is right for a

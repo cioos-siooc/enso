@@ -24,6 +24,7 @@ from shared.domain import global_grid, quantities, regions, subset, variable, va
 from shared.domain import variable as variable_meta  # `variable` is a query param name in /image
 
 from modules import render, state
+from modules.land import LandLayerError, land_point_timeseries
 from modules.freshness import data_freshness
 from modules.clickhouse_helpers import client, reset
 from modules.periods import Period
@@ -44,10 +45,15 @@ from modules.timeseries import (
 Variable = Literal["sst", "anom", "mhw"]
 
 # What `/image` can draw: the ocean variables and the six land overlay layers.
-# A SEPARATE Literal, deliberately — the land layers have no timeseries,
-# ranking or region path, so widening `Variable` itself would let
+# A SEPARATE Literal, deliberately — the land layers have a point series of
+# their own (`/landTimeseries`, a different grid and table) but no ranking or
+# region path, so widening `Variable` itself would let
 # `/timeseries?variable=land_tmax` through validation to code that cannot serve
 # it. This keeps that a 422.
+LandVariable = Literal[
+    "land_tmax", "land_tmin", "land_precip",
+    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio",
+]
 ImageVariable = Literal[
     "sst", "anom", "mhw",
     "land_tmax", "land_tmin", "land_precip",
@@ -123,6 +129,15 @@ class PointRequest(BaseModel):
     end: dt.date | None = None
     period: Period = "daily"
     variable: Variable = "sst"
+
+
+class LandPointRequest(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-360, le=360)
+    start: dt.date | None = None
+    end: dt.date | None = None
+    period: Period = "daily"
+    variable: LandVariable = "land_tmax"
 
 
 class RankingRequest(BaseModel):
@@ -485,6 +500,44 @@ def timeseries(request: PointRequest, http_request: Request):
         "lon": request.lon,
         "buckets": len(result.get("dates", [])),
         "outside_domain": False,
+    })
+    return result
+
+
+@app.post("/landTimeseries")
+def land_timeseries(request: LandPointRequest, http_request: Request):
+    """One land layer's record at the CPC cell nearest a point.
+
+    Global, unlike `/timeseries`: land is not cut to the Pacific box. A click on
+    CoralTemp OCEAN answers 200 with an empty series and `surface: "ocean"` —
+    the land frames are cut to that coastline, so a block overhanging the sea
+    is not something the map shows. See `modules/land.py`.
+
+    400 for a period the layer is not declared at (the rainfall ratio is weekly
+    and monthly only) or an anomaly layer whose climatology is not built, with
+    the reason in `detail`, same as `/image`.
+    """
+    try:
+        result = land_point_timeseries(
+            request.lat,
+            request.lon,
+            request.start,
+            request.end,
+            request.period,
+            request.variable,
+        )
+    except LandLayerError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc), "error": {"code": "land_unavailable"}},
+        )
+    capture_event(http_request, "land_point_queried", {
+        "variable": request.variable,
+        "period": request.period,
+        "lat": request.lat,
+        "lon": request.lon,
+        "surface": result["surface"],
+        "buckets": len(result["dates"]),
     })
     return result
 
