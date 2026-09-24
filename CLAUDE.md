@@ -25,8 +25,8 @@ ports you'll actually hit:
 | `api` | FastAPI backend | 9021 |
 | `db-ch` | ClickHouse | 9023 (HTTP), 9024 (native) |
 | `process` | NetCDF → ClickHouse ingest + image rendering (the CLI) | — |
-| `prefect` | Prefect server: the daily `run`'s schedule and run-history UI | 9025 |
-| `scheduler` | the `process` image serving `CRW/flows.py` to `prefect` | — |
+| `prefect` | Prefect server: the daily `run`'s schedule and run-history UI (**dev only**; prod uses the shared server at `prefect.cioospacific.ca`) | 9025 |
+| `scheduler` | the `process` image serving `CRW/flows.py` to the Prefect server | — |
 
 Ports are deliberately offset from the ocean-acidification-dashboard's 9010–9014 so both
 stacks can run at once.
@@ -103,11 +103,13 @@ the dev file; `.env.prod.example` is the template. The seven that matter:
   docker compose -f docker-compose.prod.yml --env-file .env.prod \
     run --rm process python -m CRW.cli run
   ```
-- **`prefect` + `scheduler` run the daily `run` on a schedule**, with its history in a
-  browser at `PREFECT_PUBLIC_URL` — see "Prefect" under the process pipeline. Both start
-  with a plain `up -d`. Prod **requires** `PREFECT_AUTH_STRING` (the UI can trigger runs)
-  and `PREFECT_PUBLIC_URL`; create and `chown` `PREFECT_DIR` like `DATA_DIR`. The port is
-  published for the host's TLS proxy — basic auth over plain HTTP is a cleartext password.
+- **`scheduler` runs the daily `run` on a schedule, against a Prefect server that is not
+  in this stack.** Prod registers with the shared server at `https://prefect.cioospacific.ca`
+  (a standalone Postgres-backed deployment in `/home/cioos/prefect` on that host, serving
+  other projects' flows too), with its history in that UI — see "Prefect" under the process
+  pipeline. `scheduler` starts with a plain `up -d`. Prod **requires** `PREFECT_API_URL`
+  (`https://prefect.cioospacific.ca/api`) and `PREFECT_AUTH_STRING` (that server's
+  `user:password`).
 
 `api` runs without `--reload` (it would watch source that is no longer mounted) on
 `--workers ${API_WORKERS:-4}` — separate *processes*, so the per-thread ClickHouse client
@@ -908,19 +910,27 @@ it freezes weekly and monthly frames at whatever was last rendered.
 
 #### Prefect: the schedule and the run history
 
-**`run` is scheduled by a self-hosted Prefect server, and it adds nothing else.**
+**`run` is scheduled by Prefect, and it adds nothing else.**
 `CRW/flows.py` wraps `cli.run_targets()` (which dates a run covers) and `cli._process_date()`
 (what happens to one) unchanged, so the scheduled run and `python -m CRW.cli run` are the
 same job. It is the only module that imports Prefect, and the CLI never imports it.
-Prefect 3.8.6 and SQLite, not Postgres, for one flow a day. **The client pin in
-`pyproject.toml` and `PREFECT_IMAGE_TAG` must move together.**
+Prefect 3.8.6.
+
+**Prod and dev use different servers, deliberately.** Prod's `scheduler` registers with the
+shared server at `https://prefect.cioospacific.ca` (`PREFECT_API_URL`), which is not part of
+this repo. Dev keeps its own local `prefect` service on SQLite, because dev and prod
+registering the same deployment on one server would overwrite each other's schedule. **The
+client pin in `pyproject.toml` must match both**: the shared server's version and dev's
+`PREFECT_IMAGE_TAG`. So a Prefect upgrade means upgrading the shared server first, which
+affects every project on it.
 
 ```bash
 docker compose -f docker-compose.dev.yml --env-file .env.dev \
   --profile prefect up -d prefect scheduler          # dev: http://localhost:9025, admin:admin
 ```
 
-- **What the UI shows**: flow `daily-run`, deployment `daily`, one flow run per firing and
+- **What the UI shows**: flow `enso-daily-run`, deployment `daily`, tag `enso`, one flow
+  run per firing and
   **one task run per date**, named after the date. Each date's task ends in a state named
   for its outcome: `Ingested`, `Skipped`, `Unpublished` or `Failed`. So on a normal day the
   thirty recheck dates show as `Skipped` and the one new date as `Ingested`. The flow ends
@@ -1795,7 +1805,9 @@ menu, pick the default region — report nothing. Found in the browser, not by r
   password of `""`, not as "no auth": the server enables auth, the client sends no header,
   and every call 401s — the scheduler dies on start registering its deployment. Dev
   defaults to `admin:admin` for that reason.
-- **Three Prefect container details, each found by it failing:**
+- **Three Prefect container details, each found by it failing** (the first two are about
+  the server container, so they apply to dev's local `prefect` and to the shared server's
+  own compose file, not to anything in prod here):
   - The server's state mounts at `/var/lib/prefect`, **not `/opt/prefect`**. The image
     keeps its `entrypoint.sh` in `/opt/prefect`, so a mount there leaves tini with no file
     to run.

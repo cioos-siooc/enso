@@ -15,8 +15,9 @@ dependencies = [
     "matplotlib>=3.9",
     "pillow>=11.0",
     # Scheduler + run history UI for the daily `run` (CRW/flows.py). Pinned
-    # exactly: it must match the `prefect` server image's tag in both compose
-    # files, since a client newer than its server can send what it cannot read.
+    # exactly: it must match the server's version — in prod the shared server at
+    # prefect.cioospacific.ca, in dev PREFECT_IMAGE_TAG in docker-compose.dev.yml
+    # — since a client newer than its server can send what it cannot read.
     "prefect==3.8.6",
 ]
 
