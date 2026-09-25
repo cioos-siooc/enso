@@ -6,18 +6,33 @@
          is projected, then what is being read off it. Stacked with a gap rather
          than positioned individually so neither has to know the other's height. -->
     <div class="absolute left-2 top-2 z-10 flex flex-col items-start gap-2">
-      <UFieldGroup v-if="token" size="xs" class="rounded-lg shadow-lg">
+      <div class="flex items-center gap-2">
+        <UFieldGroup v-if="token" size="xs" class="rounded-lg shadow-lg">
+          <UButton
+            v-for="item in PROJECTIONS"
+            :key="item.value"
+            :icon="item.icon"
+            :label="item.label"
+            :color="projection === item.value ? 'primary' : 'neutral'"
+            :variant="projection === item.value ? 'solid' : 'subtle'"
+            :title="item.title"
+            @click="setProjection(item.value)"
+          />
+        </UFieldGroup>
+
+        <!-- Only while the legend is hidden: it is the legend's way back. -->
         <UButton
-          v-for="item in PROJECTIONS"
-          :key="item.value"
-          :icon="item.icon"
-          :label="item.label"
-          :color="projection === item.value ? 'primary' : 'neutral'"
-          :variant="projection === item.value ? 'solid' : 'subtle'"
-          :title="item.title"
-          @click="setProjection(item.value)"
+          v-if="legend.hidden.value"
+          icon="i-mdi-palette-outline"
+          label="Legend"
+          size="xs"
+          color="neutral"
+          variant="subtle"
+          class="rounded-lg shadow-lg"
+          title="Show the colour legend"
+          @click="legend.setHidden(false)"
         />
-      </UFieldGroup>
+      </div>
 
       <ScopeControl />
     </div>
@@ -39,6 +54,7 @@ import { useMainStore, type VariableName } from '~/stores/main'
 import type { ColorStop } from '~/utils/colorScale'
 
 const store = useMainStore()
+const legend = useLegend()
 const api = useApi()
 const token = useRuntimeConfig().public.mapboxToken
 
@@ -106,13 +122,14 @@ const PROJECTIONS = [
 const PROJECTION_KEY = 'enso.map.projection'
 
 /**
- * Where the globe opens: the North Pacific, centred just east of the dateline.
+ * Where the globe opens: zoomed out over the whole basin, the default Nino 3
+ * box in view.
  *
  * A globe cannot be framed with `fitBounds` — half the box is behind the limb at
  * any zoom that fits it — so it gets a centre and a zoom instead. Mercator keeps
  * fitting the full box, which is the shape it is good at.
  */
-const GLOBE_VIEW = { center: [-128, 48] as [number, number], zoom: 3 }
+const GLOBE_VIEW = { center: [-130, 15] as [number, number], zoom: 2 }
 
 const projection = ref<ProjectionName>('globe')
 
@@ -662,9 +679,10 @@ onMounted(() => {
     showMarker(lat, lng)
   })
 
-  // The store opens on a default cell, so the pin has to be there before the
-  // first click or the chart would be describing an unmarked point.
-  if (store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
+  // The store seeds a default cell, so the pin has to be there before the
+  // first click whenever the chart is describing it. In region scope it waits
+  // for the scope watcher below.
+  if (store.scope === 'point' && store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
 })
 
 // Swapping the URL in place keeps the layer and its paint properties, so
@@ -699,6 +717,7 @@ watch(() => store.activeScale, applyPaint, { deep: true })
 // already where the user clicked, so a flight there would be a jolt with no
 // destination.
 watch(() => [store.scope, store.activeRegion], () => {
+  if (store.scope === 'point' && !marker && store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
   syncRegionBox()
   frameRegion()
 })

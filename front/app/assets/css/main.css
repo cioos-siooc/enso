@@ -16,3 +16,13 @@ body,
 .mapboxgl-ctrl-attrib {
   opacity: 0.6;
 }
+
+.mapboxgl-ctrl-logo {
+  width: 64px !important;
+  height: 17px !important;
+}
+
+.mapboxgl-ctrl-attrib-inner {
+  font-size: 9px;
+  line-height: 14px;
+}

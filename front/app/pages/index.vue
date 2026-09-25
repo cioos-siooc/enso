@@ -89,7 +89,7 @@
     <div class="flex min-w-0 grow flex-col">
       <div class="relative grow">
         <AnomalyMap />
-        <ColorLegend class="absolute bottom-4 left-1/2 z-10 -translate-x-1/2" />
+        <ColorLegend class="absolute bottom-0 left-1/2 z-10 -translate-x-1/2" />
       </div>
 
       <!-- The chart and, under it, what its values are measured against. The

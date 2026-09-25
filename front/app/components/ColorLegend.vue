@@ -1,90 +1,77 @@
 <template>
+  <!--
+    One line, not a stacked block: the legend sits over the middle of the map,
+    and every row of height it takes is ocean it hides. Title, ramp and the
+    no-climatology key read left to right; the mid ticks are gone because the
+    two ends and a diverging ramp's white centre already say where zero is.
+  -->
   <div
-    v-if="stops.length"
-    class="rounded-lg border border-default bg-elevated/90 px-3 py-2 shadow-lg backdrop-blur"
+    v-if="stops.length && !legend.hidden.value"
+    class="flex items-center gap-3 whitespace-nowrap rounded-t-lg border border-b-0 border-default bg-elevated/90 px-3 py-1.5 shadow-lg backdrop-blur"
   >
-    <!--
-      A categorical key has no range to edit, so its title is a plain label. The
-      continuous case moves the title inside the popover trigger instead, so the
-      whole block — title, Customize chip, bar and ticks — is one hit target.
-    -->
-    <div v-if="categorical" class="mb-1 flex items-center gap-1.5">
-      <span class="text-[11px] font-medium text-muted">{{ title }}</span>
-    </div>
-
     <!--
       A categorical scale is a key, not a ramp. Its five classes have names, and
       the names are the point — "Cat 3" means Severe, which is what the map is
       being read for. There is also nothing here to re-range: the classes are the
-      values, so the popover, the slider and the tick row are all absent rather
-      than disabled.
+      values, so the popover and the slider are absent rather than disabled.
     -->
-    <div v-if="categorical" class="flex w-48 flex-col gap-0.5">
+    <template v-if="categorical">
+      <span class="text-[11px] font-medium text-muted">{{ title }}</span>
       <!--
         The class the raster cannot carry, and therefore the one the key has to.
         `mhw`'s WebP holds land, ice AND heatwave-free ocean at alpha 0 alike, so
         the map draws code 0 as a flat fill under the raster instead — which
         means the commonest thing on screen is the one colour the five stops
-        below do not account for. It leads rather than trails the list because it
-        is the floor of the same ordinal scale: 0, then 1..5.
+        do not account for. It leads because it is the floor of the same
+        ordinal scale: 0, then 1..5.
       -->
-      <div
+      <span
         v-if="backgroundColor"
-        class="flex items-center gap-1.5 text-[11px] text-muted"
+        class="flex items-center gap-1 text-[11px] text-muted"
+        title="Category 0"
       >
-        <span
-          class="h-2.5 w-4 shrink-0 rounded-sm"
-          :style="{ background: backgroundColor }"
-        />
-        <span class="tabular-nums text-default">0</span>
-        <span>no heatwave</span>
-      </div>
-      <div
+        <span class="h-2.5 w-3 shrink-0 rounded-sm" :style="{ background: backgroundColor }" />
+        none
+      </span>
+      <span
         v-for="stop in stops"
         :key="stop.value"
-        class="flex items-center gap-1.5 text-[11px] text-muted"
+        class="flex items-center gap-1 text-[11px] text-muted"
+        :title="`Category ${stop.value}`"
       >
-        <span
-          class="h-2.5 w-4 shrink-0 rounded-sm"
-          :style="{ background: stop.color }"
-        />
-        <span class="tabular-nums text-default">{{ stop.value }}</span>
-        <span>{{ stop.label }}</span>
-      </div>
-    </div>
+        <span class="h-2.5 w-3 shrink-0 rounded-sm" :style="{ background: stop.color }" />
+        {{ stop.label }}
+      </span>
+    </template>
 
     <UPopover v-else :content="{ side: 'top', align: 'center' }">
       <!--
         A real button, not the bar with a click handler: this is the only way to
         reach the range control, so it has to be focusable and it has to say what
         it does. It also has to *look* editable — a gradient reads as a legend,
-        which is a thing you consult, not a thing you press — so the affordance
-        is spelled out in a chip beside the title rather than left to the cursor.
+        which is a thing you consult, not a thing you press — so the tune icon
+        sits in a ring at the end of the row rather than being left to the cursor.
       -->
       <button
         type="button"
-        class="group block w-48 cursor-pointer rounded ring-offset-2 ring-offset-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        class="group flex cursor-pointer items-center gap-2 rounded ring-offset-2 ring-offset-elevated focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         :aria-label="`Adjust the ${meta?.shortName ?? ''} colour range`"
         title="Adjust the colour range"
       >
-        <span class="mb-1 flex items-center gap-1.5">
-          <span class="text-[11px] font-medium text-muted">{{ title }}</span>
-          <!-- Marks a range that is not domain.yml's, so a map read at ±1 is never
-               mistaken for one read at the default ±3. -->
-          <span v-if="isCustom" class="text-[11px] text-primary">custom</span>
-          <span
-            class="ml-auto flex items-center gap-0.5 rounded px-1 py-px text-[10px] text-muted ring-1 ring-default transition-colors group-hover:text-default group-hover:ring-primary group-focus-visible:text-default"
-          >
-            <UIcon name="i-mdi-tune-variant" class="size-3" />
-            Customize
-          </span>
-        </span>
+        <span class="text-[11px] font-medium text-muted">{{ title }}</span>
+        <!-- Marks a range that is not domain.yml's, so a map read at ±1 is never
+             mistaken for one read at the default ±3. -->
+        <span v-if="isCustom" class="text-[11px] text-primary">custom</span>
+        <span class="text-[11px] tabular-nums text-muted">{{ formatTick(scale.vmin) }}</span>
         <span
-          class="block h-2.5 w-full rounded ring-offset-1 ring-offset-elevated transition-shadow group-hover:ring-1 group-hover:ring-primary"
+          class="block h-2.5 w-40 rounded ring-offset-1 ring-offset-elevated transition-shadow group-hover:ring-1 group-hover:ring-primary"
           :style="{ background: gradient }"
         />
-        <span class="mt-1 flex justify-between text-[11px] text-muted">
-          <span v-for="(tick, i) in ticks" :key="i">{{ formatTick(tick) }}</span>
+        <span class="text-[11px] tabular-nums text-muted">{{ formatTick(scale.vmax) }}</span>
+        <span
+          class="flex items-center rounded p-0.5 text-muted ring-1 ring-default transition-colors group-hover:text-default group-hover:ring-primary group-focus-visible:text-default"
+        >
+          <UIcon name="i-mdi-tune-variant" class="size-3" />
         </span>
       </button>
 
@@ -185,7 +172,7 @@
     -->
     <div
       v-if="store.variable === 'anom' && store.domain?.noClimColor"
-      class="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted"
+      class="flex items-center gap-1.5 border-l border-default pl-3 text-[11px] text-muted"
     >
       <span
         class="h-2.5 w-2.5 rounded-sm border border-default"
@@ -193,6 +180,19 @@
       />
       <span>no climatology</span>
     </div>
+
+    <!-- Hides the whole legend, for a clean screenshot. The way back is a
+         button in the map's top-left control column, which a screenshot
+         already carries, so hiding this leaves the bottom of the map bare. -->
+    <button
+      type="button"
+      class="-mr-1 flex cursor-pointer items-center rounded p-0.5 text-muted transition-colors hover:text-default focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      aria-label="Hide the legend"
+      title="Hide the legend"
+      @click="legend.setHidden(true)"
+    >
+      <UIcon name="i-mdi-close" class="size-3.5" />
+    </button>
   </div>
 </template>
 
@@ -201,6 +201,7 @@ import { trackEvent } from '~/composables/useAnalytics'
 import { quantise, useMainStore } from '~/stores/main'
 
 const store = useMainStore()
+const legend = useLegend()
 
 /**
  * The active variable's stops, spread over the range in force — sst is
@@ -249,12 +250,6 @@ const gradient = computed(() => {
   if (!list.length) return ''
   const parts = list.map((s, i) => `${s.color} ${((i / (list.length - 1)) * 100).toFixed(1)}%`)
   return `linear-gradient(to right, ${parts.join(', ')})`
-})
-
-const ticks = computed(() => {
-  const { vmin, vmax } = scale.value
-  const mid = (vmin + vmax) / 2
-  return [vmin, (vmin + mid) / 2, mid, (mid + vmax) / 2, vmax]
 })
 
 /**
@@ -343,5 +338,8 @@ function formatTick(tick: number): string {
 
 // localStorage is browser-only, and this component mounts after /domain has
 // landed — so the remembered ranges are clamped against a known encoding.
-onMounted(() => store.loadScales())
+onMounted(() => {
+  store.loadScales()
+  legend.restore()
+})
 </script>

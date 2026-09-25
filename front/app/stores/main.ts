@@ -342,11 +342,10 @@ const DEFAULT_POINT = { lat: 48, lon: -128 }
 let regionRequestSeq = 0
 
 /**
- * Region the app opens on. Nino 3.4 is the index the repo is named for, and it
- * is the one number this dashboard exists to show — so it is what the numbers
- * panel reads before anyone has clicked anything.
+ * Region the app opens on — the app opens in region scope, so this is what the
+ * numbers panel reads before anyone has clicked anything.
  */
-const DEFAULT_REGION = 'nino34'
+const DEFAULT_REGION = 'nino3'
 
 /** localStorage key a variable's display range is remembered under. */
 const scaleKey = (variable: VariableName) => `enso.scale.${variable}`
@@ -468,15 +467,11 @@ export const useMainStore = defineStore('main', {
     /**
      * Whether the chart and the numbers panel read a point or a region.
      *
-     * Opens on `point`. The empty "click something" state that used to argue
-     * for opening on a region is not reachable: `loadMetadata()` seeds
-     * DEFAULT_POINT before anything renders, so the app lands with a real cell
-     * charted and its monthly ranks populated rather than showing their own
-     * empty state. Both scopes now have a ranking — a region's is folded from
-     * `region_daily`'s area means — so the panel no longer goes blank on a
-     * scope switch either.
+     * Opens on `region` (DEFAULT_REGION). `loadMetadata()` still seeds
+     * DEFAULT_POINT alongside, so switching to point scope lands on a real cell
+     * charted rather than an empty state.
      */
-    scope: 'point' as Scope,
+    scope: 'region' as Scope,
     /** Named region the region scope is reading. Seeded by `loadMetadata()`. */
     activeRegion: null as string | null,
     regionSeries: null as Series | null,

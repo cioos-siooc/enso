@@ -1420,8 +1420,13 @@ and a control it does not mention is one nobody looks for.
 imagery is for.** Clicking the legend opens a popover (`ColorLegend.vue`) with a
 two-handle slider, exact min/max number fields, and Reset. **The affordance is
 spelled out rather than left to the cursor** — a gradient reads as a legend, a
-thing you consult, so the trigger carries a `Customize` chip beside the title and
-the whole block (title, chip, bar, ticks) is one button. Categorical variables
+thing you consult, so the trigger ends in a ringed tune icon and the whole row
+(title, end values, bar, icon) is one button. The legend is **one line**, not a
+stacked block — it sits bottom-centre over the map, and every row of height is
+ocean it hides; `mhw`'s key is the same row of named swatches. An `×` at its end
+hides it outright (for screenshots); the way back is a `Legend` button beside the
+Globe/Flat toggle, shown only while it is hidden — the legend cannot carry its own
+restore control. Shared through `useLegend()`, remembered as `enso.legend.hidden`. Categorical variables
 keep a plain title: there is no range to edit. Narrowing `sst` to 20–30 recolours
 the map instantly and **issues no network request at all** — verified in Chromium, zero
 `/image` fetches — because the frame on screen carries the value and Mapbox re-applies the
