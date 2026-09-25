@@ -15,10 +15,11 @@ export interface CameraView {
 }
 
 /**
- * Where the globe opens: the North Pacific, centred just east of the dateline.
+ * Where the globe opens: zoomed out over the whole basin, the default Nino 3
+ * box in view.
  *
  * A globe cannot be framed with `fitBounds` — half the box is behind the limb at
  * any zoom that fits it — so it gets a centre and a zoom instead. Mercator keeps
  * fitting the full box, which is the shape it is good at.
  */
-export const GLOBE_VIEW: CameraView = { center: [-128, 48], zoom: 3 }
+export const GLOBE_VIEW: CameraView = { center: [-130, 15], zoom: 2 }

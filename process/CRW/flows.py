@@ -77,7 +77,10 @@ def process_date(client, http, date: dt.date, *, force: bool, keep_nc: bool) -> 
     return Completed(name=outcome.capitalize(), message=f"{date}: {outcome}")
 
 
-@flow(name="daily-run", log_prints=True)
+# Prefixed with the project: in prod the server is shared with other projects'
+# flows (prefect.cioospacific.ca), and a bare `daily-run` would sit beside
+# theirs under one name.
+@flow(name="enso-daily-run", log_prints=True)
 def daily_run(
     date: dt.date | None = None,
     recheck_days: int = 30,
@@ -131,6 +134,7 @@ if __name__ == "__main__":
 
     served.serve(
         name="daily",
+        tags=["enso"],
         cron=os.environ.get("RUN_CRON", DEFAULT_CRON),
         paused=_bool_env("RUN_SCHEDULE_PAUSED"),
         parameters={"keep_nc": _bool_env("RUN_KEEP_NC")},

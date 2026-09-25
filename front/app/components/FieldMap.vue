@@ -732,9 +732,10 @@ onMounted(() => {
     showMarker(lat, lng)
   })
 
-  // The store opens on a default cell, so the pin has to be there before the
-  // first click or the chart would be describing an unmarked point.
-  if (store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
+  // The store seeds a default cell, so the pin has to be there before the
+  // first click whenever the chart is describing it. In region scope it waits
+  // for the scope watcher below.
+  if (store.scope === 'point' && store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
   syncMarkerB()
   syncCursor()
 
@@ -786,7 +787,10 @@ watch(
 // The box follows the scope and the chosen region together — it is one
 // selection drawn twice, not a layer with a toggle of its own. Flying the camera
 // to it is the host's job (`AnomalyMap.frameRegion`).
-watch(() => [store.scope, store.activeRegion], syncRegionBox)
+watch(() => [store.scope, store.activeRegion], () => {
+  if (store.scope === 'point' && !marker && store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
+  syncRegionBox()
+})
 
 // The pin follows the selected cell however it was chosen. A click moves it
 // directly, but a deep link, a story step or the other map in compare mode

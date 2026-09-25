@@ -61,19 +61,35 @@
          is projected, then what is being read off it. Stacked with a gap rather
          than positioned individually so neither has to know the other's height. -->
     <div class="absolute left-2 top-2 z-20 flex flex-col items-start gap-2">
-      <UFieldGroup v-if="token" :size="narrow ? 'sm' : 'xs'" class="rounded-lg shadow-lg">
+      <div class="flex items-center gap-2">
+        <UFieldGroup v-if="token" :size="narrow ? 'sm' : 'xs'" class="rounded-lg shadow-lg">
+          <UButton
+            v-for="item in PROJECTIONS"
+            :key="item.value"
+            :icon="item.icon"
+            :label="narrow ? undefined : item.label"
+            :aria-label="item.label"
+            :color="projection === item.value ? 'primary' : 'neutral'"
+            :variant="projection === item.value ? 'solid' : 'subtle'"
+            :title="item.title"
+            @click="setProjection(item.value)"
+          />
+        </UFieldGroup>
+
+        <!-- Only while the legend is hidden: it is the legend's way back. -->
         <UButton
-          v-for="item in PROJECTIONS"
-          :key="item.value"
-          :icon="item.icon"
-          :label="narrow ? undefined : item.label"
-          :aria-label="item.label"
-          :color="projection === item.value ? 'primary' : 'neutral'"
-          :variant="projection === item.value ? 'solid' : 'subtle'"
-          :title="item.title"
-          @click="setProjection(item.value)"
+          v-if="legend.hidden.value"
+          icon="i-mdi-palette-outline"
+          :label="narrow ? undefined : 'Legend'"
+          aria-label="Show the colour legend"
+          :size="narrow ? 'sm' : 'xs'"
+          color="neutral"
+          variant="subtle"
+          class="rounded-lg shadow-lg"
+          title="Show the colour legend"
+          @click="legend.setHidden(false)"
         />
-      </UFieldGroup>
+      </div>
 
       <ScopeControl />
       <SecondPointControl />
@@ -93,7 +109,7 @@
 <script setup lang="ts">
 import type mapboxgl from 'mapbox-gl'
 import { useMainStore } from '~/stores/main'
-import type { CameraView, ProjectionName } from '~/utils/mapView'
+import { GLOBE_VIEW, type CameraView, type ProjectionName } from '~/utils/mapView'
 import { bucketLabel } from '~/utils/periods'
 
 /**
@@ -105,6 +121,7 @@ import { bucketLabel } from '~/utils/periods'
  * divider between them.
  */
 const store = useMainStore()
+const legend = useLegend()
 const token = useRuntimeConfig().public.mapboxToken
 const { narrow } = useViewport()
 

@@ -68,7 +68,7 @@
              and the land's scales cannot honestly share one (the ocean anomaly
              saturates at +/-3, land at +/-8), and each is re-ranged on its own.
              They wrap onto two rows on a phone rather than overflowing. -->
-        <div class="absolute bottom-4 left-1/2 z-10 flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap items-end justify-center gap-2">
+        <div class="absolute bottom-0 left-1/2 z-10 flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap items-end justify-center gap-2">
           <ColorLegend />
           <ColorLegend
             v-if="store.landVariable"
