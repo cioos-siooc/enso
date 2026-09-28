@@ -46,7 +46,7 @@
       >Heatwave</span>
       <span class="text-muted group-hover:text-default">
         <span class="font-medium text-highlighted tabular-nums">{{ heatwave.extent }}%</span>
-        of the Pacific<span v-if="extentPhrase">, {{ extentPhrase }}</span>
+        of the Pacific in a marine heatwave <span v-if="extentPhrase">{{ extentPhrase }}</span>
       </span>
     </button>
 
@@ -189,12 +189,12 @@ const extentPhrase = computed(() => {
   const h = heatwave.value
   if (!h) return ''
   if (h.normal != null && h.ratio != null) {
-    // "about the same as" rather than "1x normal", which reads as a unit.
-    if (h.ratio >= 1.15) return `${h.ratio}× the normal ${h.normal}% for this time of year`
-    if (h.ratio <= 0.85) return `below the normal ${h.normal}% for this time of year`
-    return `about the normal ${h.normal}% for this time of year`
+    // Two percentages side by side, not a ratio of them: "3.4× the normal
+    // 14.5%" was read as a multiplier on something unnamed.
+    if (h.ratio >= 1.15 || h.ratio <= 0.85) return `(normally ${h.normal}% at this time of year)`
+    return `(about normal for this time of year)`
   }
-  return `${h.rank} highest of ${h.of.toLocaleString('en-GB')} days on record`
+  return `(${h.rank} highest of ${h.of.toLocaleString('en-GB')} days on record)`
 })
 
 const ensoTitle = computed(() =>
