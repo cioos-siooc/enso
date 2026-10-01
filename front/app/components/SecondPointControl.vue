@@ -2,13 +2,15 @@
   <!-- Point scope only: B is a second cell on the point chart, and a region's
        chart has nothing to put it beside. Alt-click does the same on a desktop;
        this button is the path that works on a phone, and the one that says the
-       feature exists at all. -->
+       feature exists at all. It sits in the time bar's Compare group beside
+       swipe compare's Date: a second place and a second date are the two ways
+       to compare. -->
   <UButton
     v-if="store.scope === 'point'"
-    :size="narrow ? 'sm' : 'xs'"
-    class="rounded-lg shadow-lg"
+    :size="size"
     :icon="store.secondPoint ? 'i-mdi-map-marker-remove' : 'i-mdi-map-marker-plus'"
-    :label="label"
+    :label="narrow ? undefined : label"
+    :aria-label="label"
     :color="store.addingPoint ? 'primary' : 'neutral'"
     :variant="store.addingPoint ? 'solid' : 'subtle'"
     :title="title"
@@ -20,12 +22,14 @@
 <script setup lang="ts">
 import { useMainStore } from '~/stores/main'
 
+defineProps<{ size: 'xs' | 'sm' }>()
+
 const store = useMainStore()
 const { narrow } = useViewport()
 
 const label = computed(() => {
   if (store.secondPoint) return 'Remove B'
-  return store.addingPoint ? 'Click the map…' : 'Add point'
+  return store.addingPoint ? 'Click the map…' : 'Point'
 })
 
 const title = computed(() => (store.secondPoint

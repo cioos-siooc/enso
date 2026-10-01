@@ -58,8 +58,10 @@
     </template>
 
     <!-- Everything that changes what the map is showing, in one column: how it
-         is projected, then what is being read off it. Stacked with a gap rather
-         than positioned individually so neither has to know the other's height. -->
+         is projected, WHAT is drawn (the layers card), then WHERE is being read
+         (scope). "When" — including both compare modes — is the time bar's.
+         Stacked with a gap rather than positioned individually so no control
+         has to know another's height. -->
     <div class="absolute left-2 top-2 z-20 flex flex-col items-start gap-2">
       <div class="flex items-center gap-2">
         <UFieldGroup v-if="token" :size="narrow ? 'sm' : 'xs'" class="rounded-lg shadow-lg">
@@ -91,9 +93,8 @@
         />
       </div>
 
+      <LayerControl />
       <ScopeControl />
-      <SecondPointControl />
-      <LandControl />
     </div>
 
     <div
@@ -109,7 +110,7 @@
 <script setup lang="ts">
 import type mapboxgl from 'mapbox-gl'
 import { useMainStore } from '~/stores/main'
-import { GLOBE_VIEW, type CameraView, type ProjectionName } from '~/utils/mapView'
+import { GLOBE_VIEW, mercatorOpenBounds, type CameraView, type ProjectionName } from '~/utils/mapView'
 import { bucketLabel } from '~/utils/periods'
 
 /**
@@ -169,11 +170,8 @@ function frame(animate = true) {
     else map.jumpTo(options)
     return
   }
-  // The whole box, no clipping. The old INITIAL_NORTH workaround existed
-  // because the OISST domain ran to 90N and the 70-90 strip dominated a
-  // Mercator fit; this box stops at 65N, so it fits without a sliver.
-  const b = store.domain!.imageBounds
-  map.fitBounds([[b.west, b.south], [b.east, b.north]], {
+  // The Pacific basin, not the whole +/-85 degree frame — see `mercatorOpenBounds`.
+  map.fitBounds(mercatorOpenBounds(store.domain!.regions, store.domain!.imageBounds), {
     padding: 20,
     duration: animate ? 600 : 0,
   })

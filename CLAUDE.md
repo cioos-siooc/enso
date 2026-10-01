@@ -25,7 +25,7 @@ ports you'll actually hit:
 | `api` | FastAPI backend | 9021 |
 | `db-ch` | ClickHouse | 9023 (HTTP), 9024 (native) |
 | `process` | NetCDF → ClickHouse ingest + image rendering (the CLI) | — |
-| `prefect` | Prefect server: the daily `run`'s schedule and run-history UI (**dev only**; prod uses the shared server at `prefect.cioospacific.ca`) | 9025 |
+| `prefect` | Prefect server: the daily `run`'s schedule and run-history UI (**dev only**; prod uses the shared server at `pipelines.cioospacific.ca`) | 9025 |
 | `scheduler` | the `process` image serving `CRW/flows.py` to the Prefect server | — |
 
 Ports are deliberately offset from the ocean-acidification-dashboard's 9010–9014 so both
@@ -104,11 +104,11 @@ the dev file; `.env.prod.example` is the template. The seven that matter:
     run --rm process python -m CRW.cli run
   ```
 - **`scheduler` runs the daily `run` on a schedule, against a Prefect server that is not
-  in this stack.** Prod registers with the shared server at `https://prefect.cioospacific.ca`
-  (a standalone Postgres-backed deployment in `/home/cioos/prefect` on that host, serving
-  other projects' flows too), with its history in that UI — see "Prefect" under the process
-  pipeline. `scheduler` starts with a plain `up -d`. Prod **requires** `PREFECT_API_URL`
-  (`https://prefect.cioospacific.ca/api`) and `PREFECT_AUTH_STRING` (that server's
+  in this stack.** Prod registers with the shared server at `https://pipelines.cioospacific.ca`
+  (the [cioos-pacific-pipeline](https://github.com/cioos-siooc/cioos-pacific-pipeline) stack,
+  serving other projects' flows too), with its history in that UI — see "Prefect" under the
+  process pipeline. `scheduler` starts with a plain `up -d`. Prod **requires** `PREFECT_API_URL`
+  (`https://pipelines.cioospacific.ca/api`) and `PREFECT_AUTH_STRING` (that server's
   `user:password`).
 
 `api` runs without `--reload` (it would watch source that is no longer mounted) on
@@ -446,7 +446,7 @@ rename** — HDF5/NetCDF magic bytes, then length against `Content-Length` — r
 backoff, and falls back to the THREDDS host. These files are HDF5 (`\x89HDF`), not classic
 NetCDF.
 
-##### The land overlay: six layers, drawn over the ocean
+##### The land overlay: seven layers, drawn over the ocean
 
 **A map overlay, not a fourth ocean variable.** It is drawn over whichever ocean variable
 is showing, with its own legend, so El Niño's ocean anomaly and its land response are on one
@@ -460,6 +460,7 @@ on land plots the overlay's layer at that cell from `POST /landTimeseries` (see 
 | `land_precip` | precip | mean **mm/day** | G,B · 0.01 mm · 0 | d/w/m |
 | `land_tmax_anom` / `land_tmin_anom` | tmax / tmin | mean of (value − normal) | G,B · 0.01 °C · −327.68 | d/w/m |
 | `land_precip_ratio` | precip | **log2(mean ÷ normal)** | R · 1/32 · −4, sentinel 0 | **w/m** |
+| `land_precip_anom` | precip | mean of (value − normal), mm/day | G,B · 0.01 mm · −327.68 | **w/m** |
 
 **What a layer is made of is declared, not coded.** `domain.yml` gives each `grid: land`,
 `source`, `transform` (`none` | `difference` | `log2_ratio`), `periods`, `resampling:
@@ -478,7 +479,15 @@ Decisions, each measured first (see ROADMAP.md B6 for the numbers):
   It's the ocean's `NO_CLIM_RGBA` third state, and it means the same thing: a value exists,
   a meaningful departure doesn't. `noValueLabel` in `/domain` says which reason applies,
   because the colour is shared.
-- **Rain is weekly and monthly only as a ratio.** A daily rainfall anomaly is noise; a daily
+- **Precipitation has two anomalies, and the ratio is the default.** The Layers card offers
+  `% of normal` and `mm vs normal` beside `Value` (`landMode` `anomaly` / `difference`; a
+  temperature has only the first, and `landModeFor` maps `difference` onto it). The ratio says
+  how unusual a bucket is for that place; the mm departure says how much water went missing,
+  which the ratio hides in a desert at 300% of almost nothing. Measured, a month's departure is
+  within ±1.6 mm/day over 90% of land cells, so it opens at ±3.
+- **It is precipitation, not rain**, in every label: CPC's gauge analysis counts snow as its
+  liquid-water equivalent.
+- **Precipitation anomalies are weekly and monthly only.** A daily rainfall anomaly is noise; a daily
   temperature anomaly (a heatwave day) isn't. `/image` answers **400** for a period outside
   `periods`, not 404, because it's a request error rather than a missing frame.
 - **Land anomalies are wider than the ocean's**: ±8 by default against ±3. The within-month
@@ -556,8 +565,11 @@ no-overlap rule geometrically, column by column.
 
 ##### The frontend overlay
 
+- **Controls: the map's top-left Layers card (`LayerControl.vue`)** holds the ocean
+  variable and the land overlay as two rows, so both "what is drawn" choices sit together;
+  the time bar holds only "when", plus the Compare group (second point, second date).
 - **State**: `store.landLayer` (`tmax` | `tmin` | `precip` | null) and `store.landMode`
-  (`value` | `anomaly`), independent of `store.variable`. `landVariable` maps the pair to a
+  (`value` | `anomaly` | `difference`), independent of `store.variable`. `landVariable` maps the pair to a
   layer name (`utils/land.ts`). `landReasonAt(date)` says why a bucket can't be drawn: the
   period isn't declared, the climatology isn't built, or the date is past **that product's**
   coverage, since temperature and rain end on different days.
@@ -834,7 +846,7 @@ sst       Float32 ALIAS sst_raw * 0.01
 lat       Float32 ALIAS -89.975 + gy * 0.05
 lon       Float32 ALIAS 0.025 + gx * 0.05
 ENGINE = MergeTree ORDER BY (gy, gx, date)
-PARTITION BY if(toYear(date) >= 2024, toString(toYear(date)),
+PARTITION BY if(toYear(date) >= 2026, toString(toYear(date)),
                 toString(intDiv(toYear(date), 10) * 10))    -- decades, then years
 ```
 
@@ -851,7 +863,7 @@ cat   UInt8   -- 1..5, the source's own ordinal class; no scale factor to undo
 lat   Float32 ALIAS -89.975 + gy * 0.05
 lon   Float32 ALIAS 0.025 + gx * 0.05
 ENGINE = MergeTree ORDER BY (gy, gx, date)
-PARTITION BY if(toYear(date) >= 2024, toString(toYear(date)),
+PARTITION BY if(toYear(date) >= 2026, toString(toYear(date)),
                 toString(intDiv(toYear(date), 10) * 10))    -- decades, then years
 ```
 
@@ -999,7 +1011,7 @@ Five decisions worth not undoing:
 4. **`has_clim` is per (cell, date), not per cell.** The ice edge moves through the year,
    so it cannot be a static property. It is what makes the region identity below exact.
 
-5. **Partitioning is by decade for the archive and by year from 2024 on, and the point
+5. **Partitioning is by decade for the archive and by year from 2026 on, and the point
    query is the whole reason.** `ORDER BY (gy, gx, date)` makes one cell's 15k-row history
    a single contiguous key range — which is exactly what the chart asks for on every map
    click — and a partition key cuts that range into one piece per partition. The cost is
@@ -1012,7 +1024,12 @@ Five decisions worth not undoing:
    | | partitions | parts | file opens | cold TTFB |
    |---|---|---|---|---|
    | `PARTITION BY toYear(date)` | 42 | 196 | ~790 | **~3.4 s** |
-   | this expression | 8 | 8 | ~32 | **~0.14 s** |
+   | this expression (boundary 2024) | 8 | 8 | ~32 | **~0.14 s** |
+
+   On dev after the 2026-09 global rebuild (boundary 2026, 6 partitions, each merged to one
+   part, `sst_clim` merged to one): an `anom` point query selects **7 parts** (6 + 1) and
+   makes **34 file opens**. Before `sst_clim` was merged it was 17 parts and ~70 opens —
+   the climatology table counts too.
 
    **The symptom this fixes is "only the first click is slow."** A second query on the same
    cell is ~0.18 s under either scheme, because the granules are in the page cache by then —
@@ -1020,21 +1037,35 @@ Five decisions worth not undoing:
    marks are only 89 MiB and were already resident; the cost is the *data* granules,
    scattered over 129 GB, which nothing can hold.
 
-   **2024 onward stays per-year deliberately.** `ingest.delete_day()` replaces a revised
-   date with an `ALTER ... DELETE`, a mutation that rewrites every part it touches, and
-   folding the recent years into a decade would take that from ~3 GB to ~31 GB. The source
-   only ever revises the recent end (`--recheck-days`), so splitting the key at that
-   boundary buys the fast read without paying for it on ingest.
+   **The current year stays per-year deliberately.** `ingest.delete_day()` replaces a
+   revised date with an `ALTER ... DELETE`, a mutation that rewrites every part it
+   touches, and folding the current year into a decade would take that from ~7 GiB to
+   ~40–65 GiB (global). The source only ever revises the recent end (`--recheck-days`),
+   so splitting the key at that boundary buys the fast read without paying for it on
+   ingest. **Only the year still being revised needs its own partition**, which is why the
+   boundary moved from 2024 to 2026 in the 2026-09 rebuild and 2024–2025 folded into the
+   2020s.
 
-   **It is also sized to the disk it runs on.** Merges are capped by free space, so one
-   ~120 GB `archive` partition would never merge down on a box with 90 GB free — it would
-   settle at a dozen parts instead, silently, which is the thing being fixed. Decade
-   buckets top out at **31.35 GiB** (the 2010s), which merges in that headroom.
+   **It is also sized to the disk it runs on, and the rule is 2× free, not 1×.** Merges are
+   capped by free space: ClickHouse will only select a merge (including `OPTIMIZE FINAL`)
+   when free space, less what running merges have reserved, is about **twice** the
+   partition's size — below that `OPTIMIZE` returns immediately and merges nothing, with no
+   error. Globally the decades are **~62–65 GiB** (the 2020s ~38 GiB), so merging one needs
+   ~130 GB free; one ~250 GiB `archive` partition would never merge at all.
 
-   Bumping `shared.ch.PARTITION_BOUNDARY_YEAR` is the maintenance this needs: years past it
-   accumulate one partition each, so around 2034 it is worth moving it forward and
-   re-running the migration. Nothing breaks meanwhile — a point query just picks up one
-   more part per elapsed year.
+   Bumping `shared.ch.PARTITION_BOUNDARY_YEAR` is the maintenance this needs, each January
+   or so: years past it accumulate one partition each. Nothing breaks meanwhile — a point
+   query just picks up one more part per elapsed year.
+
+   **Moving a partition between keys, without rewriting it.** `ATTACH PARTITION ... FROM`
+   refuses across differing partition keys, even for a partition whose value is the same
+   under both. What works is `DETACH PARTITION` (with `SETTINGS max_partition_size_to_drop
+   = 0` above 50 GB), `mv` the part directories into the new table's `detached/`, and
+   `ATTACH PARTITION` — a rename, seconds for 60 GiB. **ClickHouse does not validate a
+   moved part against the new key**: a 2024 part attached under the 2026 key kept partition
+   `2024` silently. So move only partitions whose value is unchanged, copy the rest with
+   `INSERT ... SELECT`, and check every part's `min_date`/`max_date` against the new
+   expression with `partitionId()` before `EXCHANGE TABLES`.
 
    **Changing the DDL does not change an existing database.** `ensure_schema()` is
    `CREATE TABLE IF NOT EXISTS`, so `CRW.cli repartition` is what actually rewrites the
@@ -1243,8 +1274,9 @@ same job. It is the only module that imports Prefect, and the CLI never imports 
 Prefect 3.8.6.
 
 **Prod and dev use different servers, deliberately.** Prod's `scheduler` registers with the
-shared server at `https://prefect.cioospacific.ca` (`PREFECT_API_URL`), which is not part of
-this repo. Dev keeps its own local `prefect` service on SQLite, because dev and prod
+shared server at `https://pipelines.cioospacific.ca` (`PREFECT_API_URL`), which is not part of
+this repo: it is the [cioos-pacific-pipeline](https://github.com/cioos-siooc/cioos-pacific-pipeline)
+stack, whose README documents this flow beside its own pipelines. Dev keeps its own local `prefect` service on SQLite, because dev and prod
 registering the same deployment on one server would overwrite each other's schedule. **The
 client pin in `pyproject.toml` must match both**: the shared server's version and dev's
 `PREFECT_IMAGE_TAG`. So a Prefect upgrade means upgrading the shared server first, which
@@ -1580,10 +1612,11 @@ app/components/AnomalyMap.vue      map host: projection, camera, swipe-compare d
 app/components/FieldMap.vue        one MapboxGL map drawing the field for one date
 app/components/StoryPicker.vue     header button + list of guided stories
 app/components/StoryCard.vue       the current story step's caption and Prev/Next
-app/components/TimeControl.vue     variable + period toggles, date stepper, playback
+app/components/TimeControl.vue     "when": period toggle, date stepper, playback, Compare (Point / Date)
 app/components/ColorLegend.vue     gradient + the colour range control (popover)
 app/components/BaselineNote.vue    what the chart's values are measured against (+ popover)
 app/components/TimeseriesChart.vue ECharts line with dataZoom
+app/components/LayerControl.vue    "what": the map's Layers card, Ocean + Land rows (LayerRows.vue); a popover on a phone
 app/components/ScopeControl.vue    point / named-region switch, over the map
 app/components/StatsPanel.vue      the dock's headline value and stat cards
 app/components/MonthlyRankPanel.vue  the map's month, every year ranked (under the cards)
@@ -1662,9 +1695,9 @@ how a view is entered. Two more keys: `c=YYYY-MM-DD` is swipe compare's second d
 
 **A second pin, B, plotted beside A on the chart, and nothing else.** The dock's stats and
 ranking stay on A, whose heading reads `A · <cell>` while B exists, so no second ranking is
-fetched. B is dropped by the map's `Add point` button (arms the next click, crosshair cursor,
+fetched. B is dropped by the time bar's Compare → `Point` button (arms the next click, crosshair cursor,
 Esc disarms; the phone path) or by **Alt-click** — Shift-drag is Mapbox's box zoom and
-Ctrl-click is a right click on a Mac. It is removed from its pin's popup, the map button, or
+Ctrl-click is a right click on a Mac. It is removed from its pin's popup, that button, or
 the × in `PointPair.vue`'s chip row under the time bar.
 
 - **Store:** `secondPoint`/`secondSeries`, fetched by `refreshSecondPoint()`, which is a
@@ -1714,8 +1747,8 @@ divider, because two components each deciding where to fly would fight. Framing 
   the host's `onMounted`. Reading it during setup would render the projection buttons
   differently on the server, and a child's `onMounted` runs before its parent's, so the
   map would open on the wrong projection.
-- **Shift-, Ctrl- or Cmd-click on the chart sets the compare date**, while compare is on. All
-  three, because Ctrl-click on a Mac is a right click and never reaches the chart. With
+- **Alt-click on the chart sets the compare date**, while compare is on — the same modifier
+  that drops pin B on the map, so "the second one" is one gesture everywhere. With
   compare off the modifier is ignored, so a click never opens a second map. It reports
   `compare_date_changed` with `source: 'chart'` and no debounce, since one click is one
   choice.

@@ -3,26 +3,9 @@
        compare's second stepper both open, the controls do not fit one row, and a
        horizontally scrolling toolbar hides the one control you are looking for. -->
   <div class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-default bg-elevated/90 px-2 py-1 shadow-lg backdrop-blur">
-    <!--
-      UFieldGroup, not UButtonGroup: Nuxt UI v4 renamed it and the old name
-      resolves to an empty comment node instead of erroring, so the control
-      simply vanishes from the DOM.
-    -->
-    <UFieldGroup :size="size">
-      <UButton
-        v-for="item in VARIABLES"
-        :key="item.value"
-        :label="item.label"
-        :color="store.variable === item.value ? 'primary' : 'neutral'"
-        :variant="store.variable === item.value ? 'solid' : 'subtle'"
-        :disabled="!store.variableReady(item.value)"
-        :title="store.variableReady(item.value) ? item.title : item.pending"
-        @click="store.setVariable(item.value)"
-      />
-    </UFieldGroup>
-
-    <div class="hidden h-5 w-px bg-accented md:block" />
-
+    <!-- "When" only: what is drawn is the map's Layers card, where is its
+         scope control. UFieldGroup, not UButtonGroup — Nuxt UI v4 renamed it
+         and the old name renders an empty comment node. -->
     <UFieldGroup :size="size">
       <UButton
         v-for="item in PERIODS"
@@ -80,55 +63,6 @@
 
     <div class="hidden h-5 w-px bg-accented md:block" />
 
-    <!-- Swipe compare. Only the date is the user's to set on the second map:
-         variable, period and colour range are shared, so the legend describes
-         both halves. The second stepper is sky-tinted to match the chart's CMP
-         line and the right half of the divider. -->
-    <div class="flex items-center gap-1">
-      <UButton
-        icon="i-mdi-compare-horizontal"
-        :label="store.compareDate || narrow ? undefined : 'Compare'"
-        aria-label="Compare"
-        :color="store.compareDate ? 'primary' : 'neutral'"
-        :variant="store.compareDate ? 'solid' : 'ghost'"
-        :size="size"
-        :disabled="!store.selectedDate"
-        :title="store.compareDate ? 'Stop comparing' : 'Compare this map with another date, side by side'"
-        @click="store.toggleCompare()"
-      />
-      <template v-if="store.compareDate">
-        <UButton
-          icon="i-mdi-chevron-left"
-          variant="ghost"
-          color="neutral"
-          :size="size"
-          :disabled="compareAtStart"
-          @click="stepCompare(-1)"
-        />
-        <UInput
-          v-model="compareInput"
-          type="date"
-          :size="size"
-          :min="store.coverage?.start ?? undefined"
-          :max="store.coverage?.end ?? undefined"
-          class="w-36"
-          :ui="{ base: 'ring-sky-400/70' }"
-          aria-label="Compare date"
-          title="Or Shift-click the chart"
-        />
-        <UButton
-          icon="i-mdi-chevron-right"
-          variant="ghost"
-          color="neutral"
-          :size="size"
-          :disabled="compareAtEnd"
-          @click="stepCompare(1)"
-        />
-      </template>
-    </div>
-
-    <div class="hidden h-5 w-px bg-accented md:block" />
-
     <!-- Playback runs until stopped: the playhead is just repeated store.setDate(),
          so stepping or clicking the chart mid-run relocates it rather than fighting
          it, and reaching the end of coverage stops it. Typing in the date
@@ -162,6 +96,59 @@
       {{ bucketLabel(store.selectedDate, store.period) }}
     </span>
 
+    <div class="hidden h-5 w-px bg-accented md:block" />
+
+    <!-- Both ways to compare, together: a second PLACE (B, a second line on
+         the chart) and a second DATE (swipe compare, a second map). Only the
+         date is the user's to set on the second map: variable, period and
+         colour range are shared, so the legend describes both halves. The
+         second stepper is sky-tinted to match the chart's CMP line and the
+         right half of the divider. -->
+    <div class="flex items-center gap-1">
+      <span class="hidden pl-1 text-xs text-muted sm:inline">Compare</span>
+      <SecondPointControl :size="size" />
+      <UButton
+        icon="i-mdi-compare-horizontal"
+        :label="narrow ? undefined : 'Date'"
+        aria-label="Compare with another date"
+        :color="store.compareDate ? 'primary' : 'neutral'"
+        :variant="store.compareDate ? 'solid' : 'subtle'"
+        :size="size"
+        :disabled="!store.selectedDate"
+        :title="store.compareDate ? 'Stop comparing' : 'Compare this map with another date, side by side'"
+        @click="store.toggleCompare()"
+      />
+      <template v-if="store.compareDate">
+        <UButton
+          icon="i-mdi-chevron-left"
+          variant="ghost"
+          color="neutral"
+          :size="size"
+          :disabled="compareAtStart"
+          @click="stepCompare(-1)"
+        />
+        <UInput
+          v-model="compareInput"
+          type="date"
+          :size="size"
+          :min="store.coverage?.start ?? undefined"
+          :max="store.coverage?.end ?? undefined"
+          class="w-36"
+          :ui="{ base: 'ring-sky-400/70' }"
+          aria-label="Compare date"
+          title="Or Alt-click the chart"
+        />
+        <UButton
+          icon="i-mdi-chevron-right"
+          variant="ghost"
+          color="neutral"
+          :size="size"
+          :disabled="compareAtEnd"
+          @click="stepCompare(1)"
+        />
+      </template>
+    </div>
+
     <!-- Exports the series the chart is drawing, at the current variable and
          period, rather than issuing a request of its own: a second path to the
          same numbers would be a second definition of "the weekly mean".
@@ -192,35 +179,6 @@ import { cellSlug, downloadCsv, seriesCsv, slug } from '~/utils/csv'
 
 const store = useMainStore()
 
-// Anomaly first, and it is what the app opens on: the question this dashboard
-// exists for is "how far from normal is it", and absolute SST is the reference
-// view you switch to. MHW comes last because it is the narrowest question of the
-// three — not "how warm" but "is this officially a heatwave, and how bad" — and
-// it is the one most likely to be unavailable, being a separate archive.
-//
-// `pending` is the tooltip shown while a variable's precondition is unmet. Each
-// says what is missing rather than just greying out, because in both cases the
-// failure mode without the gate is silent wrong data, not an error — see
-// `variableReady` in the store.
-const VARIABLES = [
-  {
-    value: 'anom' as const,
-    label: 'Anomaly',
-    title: 'Difference from the 1991-2020 daily climatology',
-    pending: 'Anomaly needs the full 366-day climatology, which is still loading',
-  },
-  {
-    value: 'sst' as const,
-    label: 'SST',
-    title: 'Sea surface temperature',
-  },
-  {
-    value: 'mhw' as const,
-    label: 'MHW',
-    title: 'NOAA marine heatwave category, 1 (Moderate) to 5 (Beyond extreme)',
-    pending: 'Marine heatwave needs its own archive, which has not finished ingesting',
-  },
-]
 const { playing, fps, canPlay, play, stop } = usePlayback()
 
 /** Finger-sized on a phone, compact everywhere else. */

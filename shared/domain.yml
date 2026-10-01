@@ -6,11 +6,14 @@
 #
 #   `global`  — the full CoralTemp 7200x3600 grid. Cell indices stored in
 #               ClickHouse (`gy`, `gx`) are indices into THIS grid, never into
-#               the Pacific subset. Widening the subset later therefore needs no
-#               reindex and no re-ingest; only the `subset` block changes.
+#               the subset, so a cell's identity does not depend on the box.
+#               Widening the box needs no REINDEX, but it does need a re-ingest:
+#               ingest keeps only the cells inside `subset`, so nothing outside
+#               it was ever stored.
 #
 #   `subset`  — the box actually ingested and rendered. Used for map extents,
-#               ingest-time subsetting, and render bounds.
+#               ingest-time subsetting, and render bounds. Today it is the whole
+#               grid (it was the Pacific, 60S-65N 100E-70W, until 2026-09-28).
 #
 # TWO ORIENTATION FACTS, both of which produce plausible-looking wrong output if
 # ignored. `shared/fields.py` is the single place either is applied:
@@ -36,20 +39,20 @@ global:
   nlon: 7200  # gx in [0, 7199]
 
 subset:
-  name: Pacific
-  # 60S-65N, 100E-70W. Cell-centre bounds, degrees_east 0-360.
-  # Index ranges: gy 600..3099, gx 2000..5799.
+  name: Global
+  # The whole CoralTemp grid, poles included: 17,193,140 ocean cells a day
+  # (measured from shared/masks/coraltemp_ocean.npz), against the Pacific box's
+  # 7,477,923. Cell-centre bounds, degrees_east 0-360; gy 0..3599, gx 0..7199.
   #
-  # 100E rather than 120E because CoralTemp is a coral-reef product and 120
-  # clips the Coral Triangle and the Java/Banda seas. 65N/60S captures the
-  # Blob, the PDO domain, the Bering Sea, and the ACC at Pacific longitudes.
-  # 7,477,923 ocean cells per day, 96.8% of them with a climatology.
-  lat_min: -59.975
-  lat_max: 64.975
-  lon_min: 100.025
-  lon_max: 289.975
-  nlat: 2500
-  nlon: 3800
+  # It was 60S-65N, 100E-70W (gy 600..3099, gx 2000..5799) until 2026-09-28.
+  # The `pacific` region below still carries those bounds, so the basin-wide
+  # numbers keep meaning what they did.
+  lat_min: -89.975
+  lat_max: 89.975
+  lon_min: 0.025
+  lon_max: 359.975
+  nlat: 3600
+  nlon: 7200
 
 # A THIRD grid, for the land layers only: NOAA CPC Global Unified (precip, tmax,
 # tmin), 0.5 degree, daily, from NOAA PSL. `land_temp_daily` and
@@ -57,7 +60,7 @@ subset:
 # `sst_daily`, an entirely different meaning. Nothing joins a land table to an
 # ocean one, and nothing should.
 #
-# LAND IS GLOBAL; the Pacific `subset` above is the OCEAN's box and does not
+# LAND IS GLOBAL; the `subset` above is the OCEAN's box and does not
 # apply here. The land tables and the land climatology hold the whole grid —
 # 259,200 cells, of which ~62,881 carry temperature (55S-83N) and ~93,000
 # precipitation (Antarctica included) on a given day. Only the land IMAGE is
@@ -139,7 +142,7 @@ variables:
       - {label: Temperate, vmin: 10.0, vmax: 25.0}
       - {label: Cold, vmin: -2.0, vmax: 12.0}
     # How far the user may drag the displayed range, which is NOT the encoding's
-    # limit: two bytes at 0.01 degC reach 650 degC, and a control bounded by that
+    # limit: two bytes at 0.1 degC reach 6550 degC, and a control bounded by that
     # would be almost entirely above the boiling point. -2 is the freezing point
     # of seawater and the data's own floor; 36 clears the warmest ocean SST
     # anywhere on Earth, and the Pacific box peaks near 32.
@@ -151,11 +154,16 @@ variables:
     #
     # Two channels, high byte first: value = (G*256 + B) * scale + offset. One
     # byte would be 0.134 degC across the display range, which is visibly
-    # posterized when the map is zoomed in; two carry the source's own 0.01 degC
-    # exactly, at 2.33x the bytes.
+    # posterized when the map is zoomed in, so two it is.
+    #
+    # 0.1 degC, not the source's 0.01, since the 2026-09 global render: the last
+    # digit compresses like noise, and 0.1 halved a global 4096 frame (2.99 MB
+    # to ~1.6 MB a day, measured over August/September 2026) with no difference
+    # visible side by side in the app. The chart and the numbers still read
+    # 0.01 from ClickHouse; only the map is at 0.1.
     encoding:
       channels: [G, B]
-      scale: 0.01
+      scale: 0.1
       offset: -5.0
   anom:
     long_name: Daily sea surface temperature anomaly
@@ -404,7 +412,7 @@ variables:
       offset: -100.0
   land_precip:
     long_name: Daily land precipitation
-    short_name: Rain
+    short_name: Precipitation
     # A RATE, not a total, and the same unit at every period: a weekly frame is
     # the mean daily rainfall over that week. The frontend can label the total
     # (x days in the bucket); the raster carries one scale.
@@ -416,6 +424,11 @@ variables:
     vmin: 0.0
     vmax: 20.0
     colormap: YlGnBu
+    # The first three quarters only. YlGnBu's last quarter runs from mid blue to
+    # near-black navy (#081d58), which is the heaviest precipitation drawn
+    # almost invisible on the dark basemap and the chart: the values a
+    # precipitation map is read for.
+    colormap_range: [0.0, 0.75]
     # Rainfall is heavily skewed — measured, 58% of the box's land is dry on a
     # typical day while a wet-season cell passes 30 mm/day as a monthly mean —
     # so the bands are the answer to that rather than a log scale on the raw
@@ -509,7 +522,7 @@ variables:
         the nights.
   land_precip_ratio:
     long_name: Land precipitation relative to normal
-    short_name: Rain vs normal
+    short_name: Precip vs normal
     # The NUMBER is log2(actual / normal); `display` below is what the legend
     # prints. Stored as a log so a halving (-1) and a doubling (+1) sit the same
     # distance from normal (0). Measured, linear percent-of-normal puts every
@@ -563,11 +576,58 @@ variables:
       label: the 1991-2020 mean for the time of year
       computed_by: here
       note: >-
-        Rainfall over the week or month as a share of the 1991-2020 average for
-        the same days of the year, computed in this project from NOAA CPC
-        Global Unified. 100% is normal, 50% half the usual rain, 200% double.
-        Cells that normally get almost no rain at that time of year are shown
-        grey, because a ratio there is meaningless.
+        Precipitation over the week or month as a share of the 1991-2020 average
+        for the same days of the year, computed in this project from NOAA CPC
+        Global Unified. 100% is normal, 50% half the usual amount, 200% double.
+        Cells that normally get almost no precipitation at that time of year
+        are shown grey, because a ratio there is meaningless.
+
+  land_precip_anom:
+    long_name: Land precipitation anomaly
+    short_name: Precip anomaly
+    # The ABSOLUTE departure, beside the ratio above rather than instead of it.
+    # The two answer different questions: the ratio says how unusual a bucket
+    # is for that place, and a desert at 300% of a 0.2 mm/day normal is a big
+    # ratio of almost no water; this says how much water went missing or
+    # arrived, which is what a drought over Indonesia is actually made of.
+    # No single colour range suits both a desert and a monsoon, which is why
+    # the range is the user's (presets below) and the ratio stays the default.
+    units: mm/day
+    precision: 1
+    grid: land
+    source: precip
+    transform: difference
+    resampling: nearest
+    # Weekly and monthly only, for the ratio's reason: a daily departure is
+    # mostly a dry day against a small normal, or one storm.
+    periods: [weekly, monthly]
+    # Measured over four global buckets, the middle 90% of land cells sit
+    # within about +/-1.6 mm/day on a month and +/-3 on a week, with tails to
+    # -18 and +42; +/-3 saturates only the wettest and driest percent of a month.
+    vmin: -3.0
+    vmax: 3.0
+    colormap: BrBG
+    presets:
+      - {label: Fine, vmin: -1.0, vmax: 1.0}
+      - {label: Monsoon, vmin: -10.0, vmax: 10.0}
+    limits: [-50.0, 50.0]
+    # Two bytes at 0.01 mm/day, the value layer's precision, centred: +/-327.67,
+    # beyond any weekly mean departure the record holds.
+    encoding:
+      channels: [G, B]
+      scale: 0.01
+      offset: -327.68
+    baseline:
+      period: '1991-2020'
+      statistic: mean
+      # The same 7-day window as the ratio, and so the same climatology file.
+      window_days: 7
+      label: the 1991-2020 mean for the time of year
+      computed_by: here
+      note: >-
+        Precipitation over the week or month minus the 1991-2020 average for
+        the same days of the year, in mm per day, computed in this project from
+        NOAA CPC Global Unified. Negative is drier than normal, positive wetter.
 
 # Named boxes for area-mean indices. Bounds are inclusive cell-centre ranges in
 # degrees_east (0-360) / degrees_north, and all of them fit inside `subset`.

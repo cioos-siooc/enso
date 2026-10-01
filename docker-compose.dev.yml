@@ -29,6 +29,15 @@ x-process: &process
     - ./process:/app
     - ./shared:/app/shared
     - ./data:/opt/data
+    # The daily archives can live on another disk: the global archive is
+    # ~163 GB and ClickHouse wants the checkout's disk. Unset, they stay
+    # under ./data as before.
+    - ${SST_NC_HOST:-./data/sst}:/opt/data/sst
+    - ${MHW_NC_HOST:-./data/MHW}:/opt/data/MHW
+    # The CPC year files too. The land climatology stays on ./data, mounted
+    # back over its default path, because `api` reads it from there.
+    - ${LAND_NC_HOST:-./data/land}:/opt/data/land
+    - ./data/land/climatology:/opt/data/land/climatology
   depends_on:
     db-ch:
       condition: service_healthy

@@ -44,7 +44,7 @@ from modules.timeseries import (
 # query builder, and documents the choice in /docs.
 Variable = Literal["sst", "anom", "mhw"]
 
-# What `/image` can draw: the ocean variables and the six land overlay layers.
+# What `/image` can draw: the ocean variables and the seven land overlay layers.
 # A SEPARATE Literal, deliberately — the land layers have a point series of
 # their own (`/landTimeseries`, a different grid and table) but no ranking or
 # region path, so widening `Variable` itself would let
@@ -52,12 +52,12 @@ Variable = Literal["sst", "anom", "mhw"]
 # it. This keeps that a 422.
 LandVariable = Literal[
     "land_tmax", "land_tmin", "land_precip",
-    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio",
+    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio", "land_precip_anom",
 ]
 ImageVariable = Literal[
     "sst", "anom", "mhw",
     "land_tmax", "land_tmin", "land_precip",
-    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio",
+    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio", "land_precip_anom",
 ]
 
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"

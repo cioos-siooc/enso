@@ -40,16 +40,16 @@ def test_land_arrays_are_the_whole_grid():
 
 
 def test_box_resolves_on_the_land_grid(grid):
-    """The ocean's box, measured on the 0.5-degree grid: 250 x 380."""
+    """The ocean's box, measured on the 0.5-degree grid: the whole 360 x 720."""
     box = domain.subset()
-    assert box.gy_range(grid) == (60, 309)
-    assert box.gx_range(grid) == (200, 579)
-    assert domain.subset_shape(grid) == (250, 380)
-    # The box's own corners, so a wrong origin cannot pass by counting cells.
-    assert grid.lat(60) == pytest.approx(-59.75)
-    assert grid.lat(309) == pytest.approx(64.75)
-    assert grid.lon(200) == pytest.approx(100.25)
-    assert grid.lon(579) == pytest.approx(289.75)
+    assert box.gy_range(grid) == (0, 359)
+    assert box.gx_range(grid) == (0, 719)
+    assert domain.subset_shape(grid) == (360, 720)
+    # The grid's own corners, so a wrong origin cannot pass by counting cells.
+    assert grid.lat(0) == pytest.approx(-89.75)
+    assert grid.lat(359) == pytest.approx(89.75)
+    assert grid.lon(0) == pytest.approx(0.25)
+    assert grid.lon(719) == pytest.approx(359.75)
 
 
 def test_land_subset_shape_differs_from_the_ocean_one():
@@ -58,8 +58,8 @@ def test_land_subset_shape_differs_from_the_ocean_one():
     `subset.nlat/nlon` in `domain.yml` are the OCEAN grid's answer. A land reader
     asserting against them would reject every file it ever saw.
     """
-    assert domain.subset_shape(domain.global_grid()) == (2500, 3800)
-    assert domain.subset_shape(domain.land_grid()) == (250, 380)
+    assert domain.subset_shape(domain.global_grid()) == (3600, 7200)
+    assert domain.subset_shape(domain.land_grid()) == (360, 720)
 
 
 # --- The reader's two conventions --------------------------------------------
@@ -329,22 +329,28 @@ def test_a_retry_recovers(tmp_path, no_backoff):
 # --- Rendering: grid-agnostic resampling and the coastline cut ---------------
 
 
-def test_to_mercator_spacing_matches_the_old_ocean_formula():
-    """The shape-derived spacing IS the old subset-derived one, on the ocean grid.
+def test_to_mercator_places_rows_by_the_subset_not_the_image_edges():
+    """A field row lands at its own latitude, whatever the image is clipped to.
 
-    `to_mercator` used to read `subset().nlat` and `lat_min`; it now derives both
-    from the field's shape and the image edges. Measured byte-identical on a
-    random 2500x3800 field at two widths, both resamplings — this pins the
-    arithmetic that makes it so.
+    The image stops at Mercator's +/-85.05; a global field runs to +/-90. Spacing
+    the rows over the clipped edges (as `to_mercator` once did, which was exact
+    only while the box sat inside +/-85) put them at 0.04725 degrees instead of
+    0.05, shifting every latitude by up to ~4 degrees. A field that is its own
+    row's latitude must come back as the latitude of each pixel centre.
     """
     from shared import render
 
     box = domain.subset()
-    edges = render.bounds()
-    old_res = (box.lat_max - box.lat_min) / (box.nlat - 1)
-    new_res = (edges["north"] - edges["south"]) / box.nlat
-    assert new_res == pytest.approx(old_res, abs=1e-12)
-    assert edges["south"] + 0.5 * new_res == pytest.approx(box.lat_min, abs=1e-12)
+    lat = box.lat_min + np.arange(box.nlat) * (box.lat_max - box.lat_min) / (box.nlat - 1)
+    field = np.repeat(lat[:, None], 8, axis=1).astype("float64")
+    out = render.to_mercator(field, width=8)
+
+    e = render.bounds()
+    y_top, y_bot = render._merc_y(e["north"]), render._merc_y(e["south"])
+    h = out.shape[0]
+    y = y_top + (np.arange(h) + 0.5) / h * (y_bot - y_top)
+    want = np.degrees(2 * np.arctan(np.exp(y)) - np.pi / 2)
+    assert np.abs(out[:, 0] - want).max() < 1e-4  # float32 blend weights
 
 
 def _ocean_pixel_centres(width):
@@ -360,6 +366,18 @@ def _ocean_pixel_centres(width):
     return lat, lon
 
 
+def _shared_rows(c):
+    """(canvas rows, ocean rows) where the land and ocean frames overlap.
+
+    Canvas row k is ocean row k - row0. A global ocean frame reaches 85.05N and
+    85.05S, so the land frame (60S-85N) is a crop of it and `row0` is negative;
+    a box narrower than that was extended instead, with `row0` positive.
+    """
+    h = c.ocean_shape[0]
+    k0, k1 = max(c.row0, 0), min(c.row0 + h, c.shape[0])
+    return slice(k0, k1), slice(k0 - c.row0, k1 - c.row0)
+
+
 def test_land_canvas_shares_the_ocean_frame_grid():
     """Rows coincide everywhere; columns exactly, west of the dateline."""
     from shared import render
@@ -369,7 +387,9 @@ def test_land_canvas_shares_the_ocean_frame_grid():
         lat, lon = _ocean_pixel_centres(width)
         h = len(lat)
         assert c.ocean_shape == (h, width)
-        np.testing.assert_allclose(c.lat[c.row0 : c.row0 + h], lat, atol=1e-9)
+        rows, ocean_rows = _shared_rows(c)
+        assert rows.stop - rows.start == c.shape[0] or ocean_rows == slice(0, h)
+        np.testing.assert_allclose(c.lat[rows], lat[ocean_rows], atol=1e-9)
         # Whole ocean columns west of the dateline (the one straddling it is not).
         west = lon[lon + 0.5 * c.px <= 180 + 1e-9]
         col0 = int(np.argmin(np.abs(c.lon - west[0])))
@@ -382,8 +402,8 @@ def test_land_canvas_stays_inside_the_dateline():
 
     c = render.land_canvas(2048)
     assert -180 <= c.west < -180 + c.px and 180 - c.px < c.east <= 180
-    # 60S exactly — the ocean frame's own south edge — and just under 85N.
-    assert c.south == pytest.approx(-60, abs=1e-9)
+    # Inside 60S-85N by less than a row: the ocean frame's rows, cropped.
+    assert -60 <= c.south < -59.9
     assert 84.9 < c.north <= 85
 
 
@@ -397,8 +417,9 @@ def test_land_cut_never_overlaps_the_ocean_raster():
     cut = render._land_cut(width)
     ocean = np.where(fields.ocean_mask(), 0.0, np.nan).astype("float32")
     footprint = np.isfinite(render.to_mercator(ocean, width, nearest=False))
-    h = c.ocean_shape[0]
-    band = cut[c.row0 : c.row0 + h]
+    rows, ocean_rows = _shared_rows(c)
+    band = cut[rows]
+    footprint = footprint[ocean_rows]
     west = render.bounds()["west"]
     for k in range(c.shape[1]):
         lo = np.mod(c.lon[k] - 0.5 * c.px - west, 360.0)
@@ -439,19 +460,19 @@ def test_land_frames_tile_the_ocean_exactly():
     assert (land | footprint).all()
     # And where the grids coincide (west of the dateline), the global cut IS it.
     c = render.land_canvas(width)
-    h = c.ocean_shape[0]
+    rows, ocean_rows = _shared_rows(c)
     lon = _ocean_pixel_centres(width)[1]
     n = int((lon + 0.5 * c.px <= 180 + 1e-9).sum())
     col0 = int(np.argmin(np.abs(c.lon - lon[0])))
-    assert np.array_equal(render._land_cut(width)[c.row0 : c.row0 + h, col0 : col0 + n], land[:, :n])
+    assert np.array_equal(render._land_cut(width)[rows, col0 : col0 + n], land[ocean_rows, :n])
 
 
 def test_ocean_mask_is_the_measured_one():
-    """The committed mask is global; its box decodes to 7,477,923 ocean cells."""
+    """The committed mask is global: 17,193,140 ocean cells, as `sst_daily` holds."""
     assert fields.global_ocean_mask().shape == (3600, 7200)
     mask = fields.ocean_mask()
-    assert mask.shape == (2500, 3800)
-    assert int(mask.sum()) == 7_477_923
+    assert mask.shape == (3600, 7200)
+    assert int(mask.sum()) == 17_193_140
 
 
 # --- Buckets: what each declared transform does -------------------------------
@@ -607,6 +628,7 @@ def test_every_land_layer_declares_what_buckets_needs():
     assert sorted(land) == sorted([
         "land_tmax", "land_tmin", "land_precip",
         "land_tmax_anom", "land_tmin_anom", "land_precip_ratio",
+        "land_precip_anom",
     ])
     for v in land.values():
         assert v.resampling == "nearest"
@@ -698,7 +720,7 @@ def _render_all(prune, img_dir, first, last):
 
     for frame in prune.missing_frames(ingest.PRECIP_TARGET, first, last):
         name, period, day = frame.split("/")
-        path = prune.cache_path(dt.date.fromisoformat(day), 2048, period, name)
+        path = prune.cache_path(dt.date.fromisoformat(day), prune.DEFAULT_WIDTH, period, name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"x")
 
@@ -753,3 +775,15 @@ def test_an_empty_land_day_encodes_as_a_blank_frame():
     blank = np.full(domain.land_shape(), np.nan, dtype="float32")
     img = Image.open(BytesIO(render.encode(blank, 256, "land_tmax")))
     assert np.asarray(img.convert("RGBA"))[..., 3].max() == 0
+
+
+def test_colormap_range_keeps_the_heaviest_precipitation_readable():
+    # YlGnBu's own end is near-black navy; the declared slice stops at a blue
+    # that still reads on the dark basemap and chart.
+    from shared.render import colormap_stops
+    import matplotlib.colors as mc
+
+    stops = colormap_stops("land_precip")
+    r, g, b = mc.to_rgb(stops[-1]["color"])
+    assert 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.3
+    assert stops[0]["color"] == mc.to_hex(__import__("matplotlib").colormaps["YlGnBu"](0.0))

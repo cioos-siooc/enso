@@ -272,7 +272,7 @@
                 target="_blank"
                 class="text-primary"
               >NOAA CPC Global Unified</ULink>
-              &mdash; daily land temperature and rainfall at 0.5&deg;, from weather
+              &mdash; daily land temperature and precipitation at 0.5&deg;, from weather
               stations and rain gauges, for the Land overlay. Its anomalies are
               against a 1991&ndash;2020 normal computed here. Least reliable where
               stations are sparse, such as interior New Guinea and Borneo.
@@ -413,8 +413,8 @@ const steps = [
     title: 'Choose the field',
     figure: 'field',
     text: 'Temperature, Anomaly (against the 1991\u20132020 climatology) or Marine heatwave category '
-      + '(against NOAA\u2019s 1985\u20132012 90th percentile \u2014 a different baseline), in the bar under '
-      + 'the map. The line under the chart always names the one in force. A field whose archive is not '
+      + '(against NOAA\u2019s 1985\u20132012 90th percentile \u2014 a different baseline), in the Layers '
+      + 'panel at the map\u2019s top-left, where the Land row adds temperature or precipitation over the continents. The line under the chart always names the one in force. A field whose archive is not '
       + 'fully loaded stays disabled and says why.',
   },
   {
@@ -428,7 +428,8 @@ const steps = [
     title: 'Move through time',
     figure: 'time',
     text: 'Daily, weekly or monthly frames; step with the arrows, type a date, or press play. Playback '
-      + 'runs to the end of the archive and stops there rather than looping.',
+      + 'runs to the end of the archive and stops there rather than looping. Compare, at the end of the '
+      + 'same bar, adds a second point to the chart or a second date beside the map.',
   },
   {
     title: 'Read the chart, and steer with it',

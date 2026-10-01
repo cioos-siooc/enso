@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from shared.ch import DATABASE, STATUS_FAILED, STATUS_SUCCESS
+from shared.ch import DATABASE, STATUS_FAILED, STATUS_INGESTING, STATUS_SUCCESS
 from shared.domain import global_grid, subset
 from shared.fields import (
     mhw_valid_mask,
@@ -115,19 +115,87 @@ SST_TARGET = Target("sst_daily", COLUMNS, read_day, status_mod.SST_TABLE)
 MHW_TARGET = Target("mhw_daily", MHW_COLUMNS, read_mhw_day, status_mod.MHW_TABLE)
 
 
-def delete_day(client, date: dt.date, table: str = "sst_daily") -> None:
+def delete_day(
+    client, date: dt.date, table: str = "sst_daily", *, lightweight: bool = False
+) -> None:
     """Remove an already-ingested day so it can be replaced.
 
-    Both daily tables are plain MergeTrees, so this is a mutation that rewrites
-    the affected parts of the day's year-partition. Expensive, and deliberately
-    so: it only runs when the source revises a date in place, which is rare and
-    confined to the recent end of the archive.
+    Both daily tables are plain MergeTrees, so by default this is a mutation
+    that rewrites the affected parts of the day's partition. Expensive, and
+    deliberately so: it only runs when the source revises a date in place,
+    which is rare and confined to the recent, per-year end of the archive.
+
+    `lightweight` is for clearing what a crashed insert left behind, which can
+    happen anywhere in a backfill. There the mutation would rewrite merged parts
+    of a decade partition — tens of GiB for one day — and it ran past the
+    client's timeout while stalling every concurrent insert. Instead it issues a
+    lightweight DELETE and does NOT wait for it: during a bulk ingest the parts
+    it must touch are nearly always being merged, and a synchronous one sat
+    unapplied for over 30 minutes. Not waiting is safe because a mutation only
+    applies to parts that existed when it was created, so the day's rows
+    reinserted straight afterwards are untouched. Until it applies, a read of
+    that day sees both copies; the merges (or the `OPTIMIZE ... FINAL` a
+    backfill ends with) settle it. A day with no rows — a file that failed to
+    read — issues nothing.
     """
+    if lightweight:
+        present = client.query(
+            f"SELECT count() FROM {DATABASE}.{table} WHERE date = %(date)s",
+            parameters={"date": date},
+        ).result_rows[0][0]
+        if present:
+            client.command(
+                f"DELETE FROM {DATABASE}.{table} WHERE date = %(date)s",
+                parameters={"date": date},
+                settings={"lightweight_deletes_sync": 0},
+            )
+        return
     client.command(
         f"ALTER TABLE {DATABASE}.{table} DELETE WHERE date = %(date)s",
         parameters={"date": date},
         settings={"mutations_sync": 2},
     )
+
+
+# The RowBinary layout of every column either daily table carries. `date` is a
+# ClickHouse Date, which on the wire is a UInt16 count of days since 1970-01-01.
+ROW_BINARY = {
+    "date": "<u2", "gy": "<u2", "gx": "<u2",
+    "sst_raw": "<i2", "has_clim": "u1", "cat": "u1",
+}
+_EPOCH = dt.date(1970, 1, 1)
+
+# Blocks of ~a day rather than ClickHouse's default ~1 M rows, so a 5-day batch
+# lands as ~6 parts instead of ~86. Not one block per insert: an 86 M-row block
+# made the server throw `std::length_error` in `splitBlockIntoParts` on about
+# 1 insert in 175 (ClickHouse 26.5, 8 concurrent writers).
+_INSERT_BLOCKS = {
+    "max_insert_block_size": 1 << 24,
+    "min_insert_block_size_rows": 0,
+    "min_insert_block_size_bytes": 0,
+}
+
+
+def _row_binary(dtype: np.dtype, files: list[NcFile], days: list[tuple]) -> bytes:
+    """Pack a batch into RowBinary: a numpy record array, straight to bytes.
+
+    This replaces `client.insert()` with Python lists, which cost ~11 GB of
+    objects per 5-day global batch and, worse, serialises the Date column
+    through `struct.pack(*column)` — one Python argument per row. At 86 M rows
+    that segfaulted Python 3.13 intermittently (clickhouse-connect 1.8.0,
+    `driver/common.py:write_array`), leaving part of the batch inserted.
+    """
+    total = sum(int(cols[0].size) for cols in days)
+    out = np.empty(total, dtype=dtype)
+    names = dtype.names
+    at = 0
+    for nc, cols in zip(files, days):
+        n = int(cols[0].size)
+        out["date"][at : at + n] = (nc.date - _EPOCH).days
+        for name, values in zip(names[1:], cols):
+            out[name][at : at + n] = values
+        at += n
+    return out.tobytes()
 
 
 def ingest_files(
@@ -156,17 +224,25 @@ def ingest_files(
 
     pending: list[NcFile] = []
     rows_per_day: list[int] = []
-    buffers: list[list] = [[] for _ in target.columns]
+    days: list[tuple] = []  # per pending day, its per-column arrays
+    dtype = np.dtype([(c, ROW_BINARY[c]) for c in target.columns])
 
     def flush() -> None:
         if not pending:
             return
+        # Marked before the insert, because a large insert lands as several
+        # parts and is not atomic: a crash part-way leaves rows with no success
+        # status, and the next run would insert them a second time. A day left
+        # at `ingesting` is cleared by the replace path below before reinsert.
+        for nc in pending:
+            status_mod.record(client, nc, STATUS_INGESTING, table=target.status_table)
         try:
-            client.insert(
+            client.raw_insert(
                 f"{DATABASE}.{target.table}",
-                buffers,
-                column_names=target.columns,
-                column_oriented=True,
+                target.columns,
+                insert_block=_row_binary(dtype, pending, days),
+                settings=_INSERT_BLOCKS,
+                fmt="RowBinary",
             )
         except Exception as exc:  # noqa: BLE001 — recorded per-day below
             log.exception("insert failed for %d day(s)", len(pending))
@@ -189,8 +265,7 @@ def ingest_files(
         finally:
             pending.clear()
             rows_per_day.clear()
-            for buf in buffers:
-                buf.clear()
+            days.clear()
 
     for nc in files:
         row = existing.get(nc.date)
@@ -211,15 +286,17 @@ def ingest_files(
 
         # A day previously loaded must be cleared first: the daily tables are
         # plain MergeTrees and would otherwise end up holding both versions.
-        if row is not None and row["status"] == STATUS_SUCCESS:
+        # `ingesting` and `failed` may have left part of an insert behind, so
+        # they are cleared too, with a lightweight delete (see `delete_day`).
+        if row is not None and row["status"] in (STATUS_SUCCESS, STATUS_INGESTING, STATUS_FAILED):
             flush()
-            log.info("replacing already-ingested %s in %s", nc.date, target.table)
-            delete_day(client, nc.date, target.table)
+            crashed = row["status"] != STATUS_SUCCESS
+            log.info("%s %s in %s", "clearing interrupted" if crashed else "replacing already-ingested",
+                     nc.date, target.table)
+            delete_day(client, nc.date, target.table, lightweight=crashed)
 
         n = int(columns[0].size)
-        buffers[0].extend([nc.date] * n)
-        for i, values in enumerate(columns, start=1):
-            buffers[i].extend(values.tolist())
+        days.append(columns)
         pending.append(nc)
         rows_per_day.append(n)
 

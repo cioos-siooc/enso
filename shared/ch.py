@@ -64,9 +64,12 @@ def get_client(database: str | None = None, **kwargs):
 #
 # **Recent years stay per-year deliberately.** `ingest.delete_day()` replaces a
 # revised date with an `ALTER ... DELETE`, a mutation that rewrites every part it
-# touches; folding 2024+ into a decade would take that from ~3 GB to ~31 GB. The
-# source only ever revises the recent end (`--recheck-days`), so splitting the
-# key at the boundary below buys the fast read without paying for it on ingest.
+# touches; folding the current year into a decade would take that from ~7 GiB to
+# ~40 GiB (global). The source only ever revises the recent end
+# (`--recheck-days`), so splitting the key at the boundary below buys the fast
+# read without paying for it on ingest. Only the year `run` still revises needs
+# its own partition: the boundary was 2024 until the 2026-09 global re-ingest,
+# when 2024 and 2025 were folded into the 2020s (6 partitions, not 8).
 #
 # It is also sized to the disk it runs on. Merges are capped by free space, so a
 # single `archive` partition of ~120 GB would not merge down on a box with 90 GB
@@ -78,7 +81,7 @@ def get_client(database: str | None = None, **kwargs):
 # accumulate one partition each, so around 2034 it is worth moving it forward and
 # re-running `CRW.cli repartition`. Nothing breaks in the meantime; a point query
 # just picks up one more part per elapsed year.
-PARTITION_BOUNDARY_YEAR = 2024
+PARTITION_BOUNDARY_YEAR = 2026
 
 DAILY_PARTITION_SQL = (
     f"if(toYear(date) >= {PARTITION_BOUNDARY_YEAR}, toString(toYear(date)),"

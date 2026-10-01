@@ -2,7 +2,7 @@ import axios from 'axios'
 import type { Period } from '~/utils/periods'
 
 /** Mirrors `shared/render.py`'s DEFAULT_WIDTH — see `imageUrl` below. */
-export const IMAGE_WIDTH = 2048
+export const IMAGE_WIDTH = 4096
 
 /**
  * Thin axios wrapper bound to the API.

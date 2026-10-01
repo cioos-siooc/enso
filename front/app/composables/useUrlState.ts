@@ -105,7 +105,7 @@ export function useUrlState() {
       // Unknown values are dropped rather than trusted, like the variable: a
       // hand-edited link must not put the store into a state no button reaches.
       landLayer: land && LAND_SOURCES.includes(land) ? land : undefined,
-      landMode: landMode === 'value' || landMode === 'anomaly' ? landMode : undefined,
+      landMode: landMode === 'value' || landMode === 'anomaly' || landMode === 'difference' ? landMode : undefined,
     })
   }
 

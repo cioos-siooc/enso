@@ -534,15 +534,15 @@ function option(): echarts.EChartsOption {
  * `'click'` event to hit. Converting the raw pixel and snapping to the nearest
  * bucket is what makes anywhere in the plot area a valid target.
  *
- * With compare on, a Shift-, Ctrl- or Cmd-click sets the compare date instead.
- * All three, because Ctrl-click on a Mac is a right click and never arrives
- * here. With compare off the modifier is ignored: opening a second map is the
- * time bar's toggle, not a side effect of a click.
+ * With compare on, an Alt-click sets the compare date instead: the same
+ * modifier that drops the second pin on the map, so "the other one" is one
+ * gesture everywhere. With compare off the modifier is ignored: opening a
+ * second map is the time bar's toggle, not a side effect of a click.
  */
 function onZrClick(event: {
   offsetX?: number
   offsetY?: number
-  event?: { zrX?: number, zrY?: number, shiftKey?: boolean, ctrlKey?: boolean, metaKey?: boolean }
+  event?: { zrX?: number, zrY?: number, altKey?: boolean }
 }) {
   if (!chart) return
   const px = event.offsetX ?? event.event?.zrX
@@ -555,8 +555,7 @@ function onZrClick(event: {
   const date = nearestDate(Number(x))
   if (!date) return
   const native = event.event
-  const modified = native?.shiftKey || native?.ctrlKey || native?.metaKey
-  if (modified && props.compareDate) {
+  if (native?.altKey && props.compareDate) {
     if (date !== props.compareDate) emit('selectCompare', date)
   }
   else if (date !== props.selectedDate) emit('select', date)

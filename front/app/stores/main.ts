@@ -7,7 +7,7 @@ import type { MonthlyRanking } from '~/utils/ranking'
 import { bucketEnd, bucketStart } from '~/utils/periods'
 import type { CameraView } from '~/utils/mapView'
 import type { LandCoverage, LandMode, LandSource, LandVariableName } from '~/utils/land'
-import { landLayerName, landUnavailableReason } from '~/utils/land'
+import { landLayerName, landModeFor, landUnavailableReason } from '~/utils/land'
 
 /**
  * Turn a failed request into something worth showing the user.
@@ -1342,6 +1342,7 @@ export const useMainStore = defineStore('main', {
       // the land control, so it reports nothing.
       if (view.landLayer !== undefined) this.landLayer = view.landLayer
       if (view.landMode) this.landMode = view.landMode
+      this.landMode = landModeFor(this.landLayer, this.landMode)
       // Before the selection below, which refreshes B alongside A.
       if (view.point2 === null) this.clearSecondPoint()
       else if (view.point2) this.secondPoint = { ...view.point2 }
@@ -1434,6 +1435,8 @@ export const useMainStore = defineStore('main', {
     setLandLayer(source: LandSource | null) {
       if (source === this.landLayer) return
       this.landLayer = source
+      // Leaving precipitation's mm mode for a temperature lands on its anomaly.
+      this.landMode = landModeFor(source, this.landMode)
       void this.refreshLand()
       trackEvent('land_layer_changed', {
         layer: source,

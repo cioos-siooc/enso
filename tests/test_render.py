@@ -72,11 +72,12 @@ def test_land_is_alpha_zero():
     """
     box = domain.subset()
     field = _field(20.0)
+    # Stored 0..180E; a global frame is drawn -180..180, so that is its EAST half.
     field[:, : box.nlon // 2] = np.nan
 
     _, alpha = _decode(render.encode(field, WIDTH, "sst"), "sst")
-    assert (alpha[:, : WIDTH // 2 - 1] == 0).all()
-    assert (alpha[:, WIDTH // 2 + 1 :] == 255).all()
+    assert (alpha[:, WIDTH // 2 + 1 :] == 0).all()
+    assert (alpha[:, : WIDTH // 2 - 1] == 255).all()
 
 
 def test_bleed_works_on_codes_across_a_byte_wrap():

@@ -31,8 +31,9 @@
 #      and api's published ports while they are stopped. See its own comment
 #      below for why a migration needs the site down rather than merely slow.
 #   6. `scheduler` runs the daily `run` on a schedule, registered with the
-#      shared Prefect server at PREFECT_API_URL (prefect.cioospacific.ca), which
+#      shared Prefect server at PREFECT_API_URL (pipelines.cioospacific.ca), which
 #      is its own deployment and not part of this stack — dev runs a local one.
+#      That server is https://github.com/cioos-siooc/cioos-pacific-pipeline.
 #      `scheduler` is not behind a profile: it is the pipeline image serving
 #      CRW/flows.py, and it shares its `image:` with `process` — so
 #      `up -d --build` rebuilds the pipeline too, which it used to skip.
@@ -284,7 +285,7 @@ services:
     command: ["python", "-m", "CRW.flows"]
     environment:
       <<: *process-env
-      PREFECT_API_URL: ${PREFECT_API_URL:?set PREFECT_API_URL, e.g. https://prefect.cioospacific.ca/api}
+      PREFECT_API_URL: ${PREFECT_API_URL:?set PREFECT_API_URL, e.g. https://pipelines.cioospacific.ca/api}
       PREFECT_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?set PREFECT_AUTH_STRING to the shared server's user:password}
       PREFECT_LOGGING_EXTRA_LOGGERS: CRW,shared
       # The container runs as the host UID, which has no home directory here, so

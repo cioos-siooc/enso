@@ -25,8 +25,11 @@ describe('landLayerName', () => {
     ['precip', 'value', 'land_precip'],
     ['tmax', 'anomaly', 'land_tmax_anom'],
     ['tmin', 'anomaly', 'land_tmin_anom'],
-    // Rain's anomaly is a RATIO, not a difference in millimetres.
+    // Precipitation's default anomaly is a RATIO; `difference` is millimetres.
     ['precip', 'anomaly', 'land_precip_ratio'],
+    ['precip', 'difference', 'land_precip_anom'],
+    // A temperature anomaly already is a difference.
+    ['tmax', 'difference', 'land_tmax_anom'],
   ]
   it.each(cases)('%s + %s -> %s', (source, mode, name) => {
     expect(landLayerName(source, mode)).toBe(name)

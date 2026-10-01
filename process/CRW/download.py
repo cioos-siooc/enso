@@ -139,9 +139,15 @@ def fetch(
         log.info("downloading %s", source)
         with client.stream("GET", source) as response:
             response.raise_for_status()
+            expected = int(response.headers.get("content-length") or 0)
             with partial.open("wb") as fh:
                 for chunk in response.iter_bytes(chunk_size=1 << 20):
                     fh.write(chunk)
+        # A dropped connection can end the stream cleanly; without this the
+        # short body would be renamed into place as a complete day.
+        written = partial.stat().st_size
+        if expected and written != expected:
+            raise OSError(f"{source}: got {written} of {expected} bytes")
     except BaseException:
         partial.unlink(missing_ok=True)
         raise

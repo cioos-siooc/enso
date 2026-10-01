@@ -78,7 +78,7 @@ def process_date(client, http, date: dt.date, *, force: bool, keep_nc: bool) -> 
 
 
 # Prefixed with the project: in prod the server is shared with other projects'
-# flows (prefect.cioospacific.ca), and a bare `daily-run` would sit beside
+# flows (pipelines.cioospacific.ca), and a bare `daily-run` would sit beside
 # theirs under one name.
 @flow(name="enso-daily-run", log_prints=True)
 def daily_run(

@@ -13,7 +13,7 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { useMainStore, type DomainMeta, type LayerName } from '~/stores/main'
 import type { ColorStop } from '~/utils/colorScale'
-import { GLOBE_VIEW, type CameraView, type ProjectionName } from '~/utils/mapView'
+import { GLOBE_VIEW, mercatorOpenBounds, type CameraView, type ProjectionName } from '~/utils/mapView'
 import { PIN_COLORS } from '~/utils/points'
 
 /**
@@ -319,7 +319,7 @@ function backgroundRing(offset = 0): GeoJSON.Position[] {
  * copy, so there is only ever one layer to keep underneath the field.
  */
 function backgroundData(): GeoJSON.FeatureCollection {
-  const offsets = props.projection === 'globe' ? [0, -WORLD] : [0]
+  const offsets = needsWestCopy() ? [0, -WORLD] : [0]
   return {
     type: 'FeatureCollection',
     features: offsets.map(offset => ({
@@ -462,12 +462,22 @@ function addRaster() {
   syncBackground()
 }
 
-/** Add or drop the westward copy so it exists exactly on the globe. */
+/**
+ * On the globe, and only for a frame that crosses the antimeridian.
+ *
+ * The global frame is -180..180 and draws whole on the globe by itself; the
+ * copy is for a box like the old Pacific one at 100..290.
+ */
+function needsWestCopy(): boolean {
+  return props.projection === 'globe' && (store.domain?.imageBounds.east ?? 0) > 180
+}
+
+/** Add or drop the westward copy so it exists exactly where `needsWestCopy` says. */
 function syncWestCopy() {
   const url = currentUrl()
   if (!map || !map.getLayer(LAYER_ID)) return
 
-  const wanted = props.projection === 'globe'
+  const wanted = needsWestCopy()
   const present = Boolean(map.getSource(WEST_SOURCE_ID))
   if (wanted === present) return
 
@@ -685,7 +695,7 @@ onMounted(() => {
     ...(props.initialView
       ?? (globe
         ? GLOBE_VIEW
-        : { bounds: [[b.west, b.south], [b.east, b.north]] as [[number, number], [number, number]], fitBoundsOptions: { padding: 20 } })),
+        : { bounds: mercatorOpenBounds(store.domain.regions, b), fitBoundsOptions: { padding: 20 } })),
     projection: { name: props.projection },
   })
 

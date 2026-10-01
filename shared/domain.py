@@ -244,6 +244,11 @@ class Variable:
     # are recognised on sight — sampling some sequential map at five points
     # would throw that away.
     colormap: str | None = None
+    # The slice of `colormap` to spread over vmin..vmax, as fractions of it.
+    # For a ramp whose far end is too dark to read against the dark basemap and
+    # chart: YlGnBu ends in near-black navy, so precipitation stops at 0.75,
+    # where it is still a clear blue. The whole map when omitted.
+    colormap_range: tuple[float, float] | None = None
     colors: tuple[Category, ...] = ()
     # What the *absence* of a value means on this variable, as a colour, where
     # that is a thing rather than a gap. Only `mhw` declares one: its image is
@@ -495,6 +500,11 @@ def variables() -> dict[str, Variable]:
             cfg["limits"] = tuple(cfg["limits"])
         if cfg.get("periods") is not None:
             cfg["periods"] = tuple(cfg["periods"])
+        if cfg.get("colormap_range") is not None:
+            lo, hi = (float(x) for x in cfg["colormap_range"])
+            if not 0.0 <= lo < hi <= 1.0:
+                raise ValueError(f"{name}: colormap_range must be 0 <= lo < hi <= 1")
+            cfg["colormap_range"] = (lo, hi)
         cfg["colors"] = tuple(Category(**c) for c in cfg.get("colors", ()))
         cfg["presets"] = tuple(Preset(**p) for p in cfg.get("presets", ()))
         if cfg.get("baseline") is not None:

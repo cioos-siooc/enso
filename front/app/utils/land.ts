@@ -1,6 +1,6 @@
 /**
  * The land overlay's pure helpers: which layer a choice means, whether it can
- * be drawn on a given bucket, and how the rainfall ratio is printed.
+ * be drawn on a given bucket, and how the precipitation ratio is printed.
  *
  * Pure so they can be tested without a store or a map. The store's getters are
  * thin wrappers over these.
@@ -8,20 +8,26 @@
  * **The overlay is not a fourth ocean variable.** It is drawn over whichever
  * ocean variable is showing, with its own legend; the chart, stats and rankings
  * stay ocean. So a land choice is two independent picks — WHAT (tmax, tmin,
- * rain) and HOW (the value itself, or its departure from normal) — and this maps
- * the pair onto one of `domain.yml`'s six `land_*` layers.
+ * precipitation) and HOW (the value itself, or its departure from normal) — and this maps
+ * the pair onto one of `domain.yml`'s seven `land_*` layers.
  */
 import type { Period } from './periods'
 
 /** The CPC variable a land layer is built from. */
 export type LandSource = 'tmax' | 'tmin' | 'precip'
 
-/** The value itself, or its departure from the 1991-2020 normal. */
-export type LandMode = 'value' | 'anomaly'
+/**
+ * The value itself, or its departure from the 1991-2020 normal. `anomaly` is
+ * the source's default departure — a difference for temperature, a ratio for
+ * precipitation — and `difference` asks for precipitation's in mm/day instead.
+ * A temperature anomaly already is a difference, so only precipitation offers
+ * the third mode (`landModesFor`).
+ */
+export type LandMode = 'value' | 'anomaly' | 'difference'
 
 export type LandVariableName =
   | 'land_tmax' | 'land_tmin' | 'land_precip'
-  | 'land_tmax_anom' | 'land_tmin_anom' | 'land_precip_ratio'
+  | 'land_tmax_anom' | 'land_tmin_anom' | 'land_precip_ratio' | 'land_precip_anom'
 
 /** Which archive a source's dates come from: temperature and rain publish apart. */
 export type LandProduct = 'temp' | 'precip'
@@ -31,14 +37,28 @@ export const LAND_SOURCES: LandSource[] = ['tmax', 'tmin', 'precip']
 /**
  * The layer a choice means.
  *
- * Rain's anomaly is a RATIO, not a difference — `land_precip_ratio`, drawn as
+ * Precipitation's default anomaly is a RATIO — `land_precip_ratio`, drawn as
  * percent of normal — because a difference in millimetres cannot share one
- * scale between a desert and a monsoon. The two temperatures are differences in
- * degrees, like the ocean's anomaly.
+ * scale between a desert and a monsoon; `difference` gives the millimetres
+ * anyway (`land_precip_anom`), since how much water went missing is a question
+ * the ratio cannot answer. The two temperatures are differences in degrees,
+ * like the ocean's anomaly, under either departure mode.
  */
 export function landLayerName(source: LandSource, mode: LandMode): LandVariableName {
   if (mode === 'value') return `land_${source}`
-  return source === 'precip' ? 'land_precip_ratio' : `land_${source}_anom`
+  if (source === 'precip') return mode === 'difference' ? 'land_precip_anom' : 'land_precip_ratio'
+  return `land_${source}_anom`
+}
+
+/** The modes a source offers, in button order. */
+export function landModesFor(source: LandSource): LandMode[] {
+  return source === 'precip' ? ['value', 'anomaly', 'difference'] : ['value', 'anomaly']
+}
+
+/** `mode`, or the nearest one `source` offers: a difference is an anomaly. */
+export function landModeFor(source: LandSource | null, mode: LandMode): LandMode {
+  if (!source || landModesFor(source).includes(mode)) return mode
+  return 'anomaly'
 }
 
 export function landProduct(source: LandSource): LandProduct {

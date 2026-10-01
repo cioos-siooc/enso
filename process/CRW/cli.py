@@ -2,6 +2,7 @@
 
     python -m CRW.cli init                          # schema + climatology + region means
     python -m CRW.cli scan     [--limit N]          # what is on disk vs. ingested
+    python -m CRW.cli fetch    [--start/--end]      # bulk download, both archives
     python -m CRW.cli backfill [--start/--end]      # ingest local files
     python -m CRW.cli render   [--start/--end]      # render images in bulk
     python -m CRW.cli rollup   [--start/--end]      # build region_daily
@@ -36,6 +37,7 @@ import calendar
 import datetime as dt
 import logging
 import sys
+import time
 
 import httpx
 from shared.ch import DATABASE, STATUS_SUCCESS, ensure_schema, get_client
@@ -163,6 +165,59 @@ def cmd_scan(args) -> int:
     return 0
 
 
+def cmd_fetch(args) -> int:
+    """Download a date range of either or both archives, skipping files on disk.
+
+    The bulk counterpart of `run`'s per-date download: `backfill` then ingests
+    whatever landed. Files are independent, so a few run at once — the server
+    is slow per connection, not per client. A day that is not published (404)
+    is logged and skipped, not counted as a failure.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    ATTEMPTS = 4
+    products = [p for p in (download.SST, download.MHW)
+                if p.key in (args.product or ("sst", "mhw"))]
+    end = args.end or dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    days = [args.start + dt.timedelta(days=i) for i in range((end - args.start).days + 1)]
+    todo = [(d, p) for p in products for d in days
+            if not (p.directory / p.filename(d)).exists()]
+    print(f"fetch: {len(todo)} file(s) to download, "
+          f"{len(days) * len(products) - len(todo)} already on disk")
+
+    counts = {"ok": 0, "missing": 0, "failed": 0}
+
+    def one(item) -> str:
+        date, product = item
+        # The server drops connections under sustained load ("Server
+        # disconnected without sending a response"), so a failure is retried
+        # with a backoff before it counts. A 404 is an answer, not a failure.
+        for attempt in range(1, ATTEMPTS + 1):
+            try:
+                download.fetch(date, client=http, product=product)
+                return "ok"
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    log.warning("%s: %s not published", date, product.key)
+                    return "missing"
+                error = exc
+            except Exception as exc:  # noqa: BLE001 — one file must not stop the rest
+                error = exc
+            if attempt < ATTEMPTS:
+                log.warning("%s: %s attempt %d failed (%s), retrying",
+                            date, product.key, attempt, error)
+                time.sleep(10 * 3 ** (attempt - 1))
+        log.error("%s: %s failed: %s", date, product.key, error)
+        return "failed"
+
+    with download.new_client() as http, ThreadPoolExecutor(args.workers) as pool:
+        for outcome in pool.map(one, todo):
+            counts[outcome] += 1
+
+    print("fetch: {ok} downloaded, {missing} not published, {failed} failed".format(**counts))
+    return 1 if counts["failed"] else 0
+
+
 def cmd_backfill(args) -> int:
     ensure_schema()
 
@@ -206,7 +261,11 @@ def cmd_backfill(args) -> int:
             f"{files[0].date} .. {files[-1].date}"
             + (" (deleting NetCDF as it goes)" if args.delete_nc else "")
         )
-        with get_client() as client:
+        # Both timeouts raised: urllib3 bounds the request-body UPLOAD by the
+        # connect timeout (10 s default), and the server stops reading a large
+        # insert's body while it writes each block as a part, which under
+        # concurrent backfills and merges exceeds 10 s.
+        with get_client(send_receive_timeout=1800, connect_timeout=600) as client:
             counts = ingest.ingest_files(
                 client,
                 files,
@@ -752,6 +811,15 @@ def main(argv: list[str] | None = None) -> int:
     with_selection(sub.add_parser("scan", help="report disk vs. ingested")).set_defaults(
         func=cmd_scan
     )
+
+    p_fetch = sub.add_parser("fetch", help="download a date range of the daily archives")
+    p_fetch.add_argument("--start", type=_parse_date, default=dt.date(1985, 1, 1),
+                         help="first day, inclusive (default 1985-01-01)")
+    p_fetch.add_argument("--end", type=_parse_date, help="last day, inclusive (default yesterday)")
+    p_fetch.add_argument("--product", action="append", choices=("sst", "mhw"),
+                         help="repeatable; default both archives")
+    p_fetch.add_argument("--workers", type=int, default=4, help="parallel downloads (default 4)")
+    p_fetch.set_defaults(func=cmd_fetch)
 
     p_back = with_selection(sub.add_parser("backfill", help="ingest the local archive"))
     p_back.add_argument("--force", action="store_true", help="re-ingest loaded days")

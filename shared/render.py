@@ -43,9 +43,11 @@ IMAGE_DIR = Path(os.environ.get("OISST_IMAGE_DIR", "/opt/data/images"))
 
 MERCATOR_LAT_LIMIT = 85.0511287798066
 
-# The Pacific box is 3800 source columns wide; 2048 keeps a whole bucket under
-# ~200 KB while staying sharp at the zoom levels the map opens on.
-DEFAULT_WIDTH = 2048
+# The whole world, -180..180: 4096 px is 11.4 px/degree, the density the
+# Pacific box had at 2048 over 190 degrees. Measured on 2023-10-01: sst 2.8 MB,
+# anom 1.1 MB, mhw 0.2 MB a frame (2048 halves the density at 1.1/0.4/0.08 MB;
+# 8192 is 7.2/3.1 MB and a texture some phones cannot upload).
+DEFAULT_WIDTH = 4096
 
 # Ocean that has SST but no climatology (the seasonal ice fringe). Drawn as a
 # flat neutral grey on anomaly maps: transparent would read as land, and any
@@ -58,19 +60,34 @@ def _merc_y(lat_deg: np.ndarray | float) -> np.ndarray:
     return np.log(np.tan(np.pi / 4 + lat / 2))
 
 
+def _wraps() -> bool:
+    """Does the subset cover every longitude? Then the frame is re-centred."""
+    return subset().nlon == global_grid().nlon
+
+
 def bounds() -> dict:
     """The rendered image's geographic extent, Mercator-clipped.
 
-    Longitudes are **unwrapped** — the Pacific box's east edge is reported as
-    290, not -70. Mapbox accepts that and places the quad correctly across the
-    antimeridian; wrapping it would make west > east and collapse the source.
+    **A global subset renders as -180..180**, not the 0..360 it is stored on.
+    Mapbox draws a quad that crosses the antimeridian in only the world copy
+    nearest the camera (measured on the land frame), so a whole-world frame
+    has to sit inside -180..180 to draw everywhere, and on the globe it then
+    needs no westward second copy. `to_mercator` rolls the columns to match.
+
+    A box narrower than the world keeps **unwrapped** longitudes — the Pacific
+    box's east edge was reported as 290, not -70. Mapbox accepts that and
+    places the quad across the antimeridian; wrapping it would make
+    west > east and collapse the source.
     """
     box = subset()
     half = 0.5 * (box.lon_max - box.lon_min) / max(box.nlon - 1, 1)
+    west, east = box.lon_min - half, box.lon_max + half
+    if _wraps():
+        west, east = -180.0, 180.0
     return {
-        "west": box.lon_min - half,
+        "west": west,
         "south": max(box.lat_min - half, -MERCATOR_LAT_LIMIT),
-        "east": box.lon_max + half,
+        "east": east,
         "north": min(box.lat_max + half, MERCATOR_LAT_LIMIT),
     }
 
@@ -88,14 +105,23 @@ def to_mercator(
     category the source never contained — a ring of spurious Cat 3 around every
     Cat 4 core. There is nothing between two classes to interpolate.
 
-    The spacing comes from the field's own shape against the box's edges, so
-    any field covering exactly the box resamples correctly. The land layers do
+    The row spacing comes from the field's own shape against the subset's
+    edges, so any field covering exactly the subset resamples correctly, at
+    any resolution. The land layers do
     not come through here: they are global, and `land_canvas()` places them.
     """
     extent = bounds()
     nrows, ncols = field.shape
-    res = (extent["north"] - extent["south"]) / nrows
-    lat_first = extent["south"] + 0.5 * res
+    # The field's rows span the SUBSET, which is not the image once the image is
+    # clipped at Mercator's +/-85.05: a global field runs to +/-90, and
+    # spacing its rows over the clipped extent would shift every latitude.
+    box = subset()
+    half = 0.5 * (box.lat_max - box.lat_min) / max(box.nlat - 1, 1)
+    res = (box.lat_max - box.lat_min + 2 * half) / nrows
+    lat_first = box.lat_min - half + 0.5 * res
+    if _wraps():
+        # Stored 0..360 from 0.025E; drawn -180..180 (see `bounds`).
+        field = np.roll(field, ncols // 2, axis=1)
 
     y_top, y_bot = _merc_y(extent["north"]), _merc_y(extent["south"])
     x_span = np.radians(extent["east"] - extent["west"])
@@ -191,7 +217,7 @@ class LandCanvas:
     lat: np.ndarray  # pixel-centre latitude per row, north to south
     lon: np.ndarray  # pixel-centre longitude per column, -180..180
     px: float  # pixel width, degrees — the ocean frame's
-    row0: int  # canvas row of the ocean frame's first row
+    row0: int  # canvas row of the ocean frame's first row; negative = cropped
     ocean_shape: tuple[int, int]
 
     @property
@@ -292,10 +318,12 @@ def _land_cut(width: int) -> np.ndarray:
 
     h, _ = c.ocean_shape
     clear = _fine_land(width)  # True where no ocean raster draws
-    rows = slice(c.row0, c.row0 + h)
+    # Canvas row k is ocean row k - row0. `row0` is negative when the land frame
+    # is the ocean frame cropped (a global ocean frame already reaches 85N).
+    k0, k1 = max(c.row0, 0), min(c.row0 + h, c.shape[0])
     for cols in _ocean_columns(width):
         inside = cols >= 0
-        land[rows, inside] &= clear[:, cols[inside]]
+        land[k0:k1, inside] &= clear[k0 - c.row0:k1 - c.row0][:, cols[inside]]
     return land
 
 
@@ -332,7 +360,7 @@ def colorize(
             clip=True,
         )
     else:
-        cmap = matplotlib.colormaps[var.colormap].with_extremes(bad=(0, 0, 0, 0))
+        cmap = colormap_of(var.colormap, var.colormap_range).with_extremes(bad=(0, 0, 0, 0))
         norm = matplotlib.colors.Normalize(vmin=var.vmin, vmax=var.vmax, clip=True)
     rgba = cmap(norm(np.ma.masked_invalid(field)), bytes=True)
     if no_clim is not None:
@@ -383,11 +411,13 @@ def _bleed(codes: np.ndarray, known: np.ndarray, passes: int = 8) -> np.ndarray:
         if known.all():
             break
         acc = _neighbour_sum(np.where(known, codes, 0))
-        cnt = _neighbour_sum(known.astype("int32"))
+        # At most 4 neighbours: a byte holds the count, at a quarter of the
+        # memory traffic — a global 4096 frame is bandwidth-bound, not CPU-bound.
+        cnt = _neighbour_sum(known.view("uint8"))
         grow = (~known) & (cnt > 0)
-        codes = np.where(grow, acc // np.maximum(cnt, 1), codes)
+        np.floor_divide(acc, cnt, out=codes, where=grow)
         known = known | grow
-    return codes.astype("int64")
+    return codes
 
 
 def encode(
@@ -443,7 +473,7 @@ def encode(
     # reappear at the opposite end of the scale — a record-warm cell drawn as
     # the coldest colour on the map.
     codes = np.round((np.nan_to_num(merc, nan=0.0) - enc.offset) / enc.scale)
-    codes = np.clip(codes, enc.low_code, enc.depth - 1).astype("int64")
+    codes = np.clip(codes, enc.low_code, enc.depth - 1).astype("int32")
     if enc.sentinel is not None:
         codes = np.where(sentinel_cells, enc.sentinel, codes)
     # Land layers skip the bleed passes and take the median fill alone. They
@@ -465,10 +495,12 @@ def encode(
     rgba[..., 3] = np.where(ocean, 255, 0).astype("uint8")
 
     buffer = io.BytesIO()
-    # `method=4`: 6 buys under 2% for ~2.5x the encode time. Land frames are
-    # ~3x the pixels and mostly transparent, and measured the same size (within
-    # 2%) at `method=1` and lossless effort (`quality`) 25 in two thirds of the
-    # time — which over ~92k frames is hours.
+    # Ocean: `method=4`, effort 80 — size is what matters, and it is the floor.
+    # Measured on global 4096 frames: 2/50 is 0-4% larger (anom the most), 6/100
+    # at most 1% smaller for 5-10x the time. What sits under alpha 0 does not
+    # change the size at all (libwebp rewrites it without `exact`). Land frames
+    # are mostly transparent and measured the same size (within 2%) at
+    # `method=1` and effort 25 in two thirds of 4/80's time.
     method, effort = (1, 25) if land else (4, 80)
     Image.fromarray(rgba, mode="RGBA").save(
         buffer, format="WEBP", lossless=True, method=method, quality=effort
@@ -526,7 +558,7 @@ def colormap_stops(variable_name: str = "sst", n: int = 33) -> list[dict]:
             {"value": float(c.value), "color": c.color, "label": c.label}
             for c in var.colors
         ]
-    return _sampled_stops(var.colormap, var.vmin, var.vmax, n)
+    return _sampled_stops(var.colormap, var.vmin, var.vmax, n, var.colormap_range)
 
 
 def quantity_stops(name: str, n: int = 33) -> list[dict]:
@@ -541,14 +573,28 @@ def quantity_stops(name: str, n: int = 33) -> list[dict]:
     return _sampled_stops(q.colormap, q.vmin, q.vmax, n)
 
 
-def _sampled_stops(colormap: str, vmin: float, vmax: float, n: int) -> list[dict]:
+def colormap_of(name: str, span: tuple[float, float] | None = None):
+    """The named matplotlib colormap, cut to `span` (fractions of it) if given."""
+    cmap = matplotlib.colormaps[name]
+    if span is None:
+        return cmap
+    lo, hi = span
+    return matplotlib.colors.ListedColormap(
+        cmap(np.linspace(lo, hi, 256)), name=f"{name}[{lo}:{hi}]",
+    )
+
+
+def _sampled_stops(
+    colormap: str, vmin: float, vmax: float, n: int,
+    span: tuple[float, float] | None = None,
+) -> list[dict]:
     """`n` evenly spaced values across `vmin..vmax`, with their hex colours.
 
     Evenly spaced is load-bearing, not incidental: it is what lets the frontend
     re-label the same colours onto a narrower display range by index alone
     (`stopsFor`), without evaluating a colormap of its own.
     """
-    cmap = matplotlib.colormaps[colormap]
+    cmap = colormap_of(colormap, span)
     values = np.linspace(vmin, vmax, n)
     norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
     return [

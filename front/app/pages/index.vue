@@ -109,7 +109,7 @@
             :land-unit="landMeta?.units === 'degC' ? '°C' : landMeta?.units"
             :land-label="landMeta?.shortName"
             :land-log2-percent="landMeta?.display === 'log2_percent'"
-            :land-zero-line="store.landMode === 'anomaly'"
+            :land-zero-line="store.landMode !== 'value'"
             @select="store.setDate($event)"
             @select-compare="setCompareFromChart"
           >
@@ -315,7 +315,7 @@ const emptyPointMessage = computed(() => {
     }
     return store.landLayer
       ? 'No ocean or land record at this cell.'
-      : 'No ocean record here. Turn on a land layer to chart land temperature or rain.'
+      : 'No ocean record here. Turn on a land layer to chart land temperature or precipitation.'
   }
   return 'Click anywhere on the map to read that cell’s full record.'
 })
