@@ -41,7 +41,7 @@ import time
 
 import httpx
 from shared.ch import DATABASE, STATUS_SUCCESS, ensure_schema, get_client
-from shared.domain import regions
+from shared.domain import global_grid, regions
 from shared import fields
 from shared.periods import PERIODS, span
 from shared.render import DEFAULT_WIDTH
@@ -365,8 +365,9 @@ def cmd_mask(args) -> int:
         print("no polygon regions selected; every named region here is a plain box")
         return 0
     for key, n in sorted(counts.items()):
-        box = regions_mod.box_of(regions()[key])
-        area = (box[1] - box[0] + 1) * (box[3] - box[2] + 1)
+        region = regions()[key]
+        gy0, gy1 = region.gy_range(global_grid())
+        area = (gy1 - gy0 + 1) * len(region.gx_columns(global_grid()))
         print(f"  {key:<20} {n:>7,} cell(s) of {area:,} in its bounding box")
     return 0
 
@@ -493,7 +494,7 @@ def _process_date(client, http, date, *, force, keep_nc, width) -> str:
             available_mhw=config.available_mhw_dates(),
         )
         # The third thing a date has to keep in step, after the two daily tables.
-        # Rebuilt for this date alone — eight small key-range reads — and rebuilt
+        # Rebuilt for this date alone — every named region, ~9 s for all 22 — and rebuilt
         # unconditionally rather than only when MHW landed, because an SST-only
         # date writes a mean_mhw of 0 that the next run has to correct once the
         # heatwave file arrives ~90 minutes later.

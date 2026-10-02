@@ -411,7 +411,11 @@ class Region:
     lat: tuple[float, float]
     lon: tuple[float, float]
     partial: bool = False
-    # Outer rings, longitudes 0-360, or None for a plain box. No interior rings:
+    # A `region_groups` key: which heading the region menu lists it under.
+    group: str | None = None
+    # Outer rings, or None for a plain box. Longitudes are continuous across the
+    # ring — 0-360 where the region allows, negative where it crosses the prime
+    # meridian — and `lon` above is the ring's own west/east. No interior rings:
     # the islands inside a maritime zone are land, and land is excluded by
     # `sst_daily` holding ocean cells only, not by the geometry.
     polygon: tuple[tuple[tuple[float, float], ...], ...] | None = None
@@ -426,12 +430,38 @@ class Region:
         return tuple(sorted(int(grid.gy(v)) for v in self.lat))
 
     def gx_range(self, grid: GlobalGrid) -> tuple[int, int]:
-        """Inclusive `(first, last)` global column index of the bounding box.
+        """Inclusive `(west, east)` global column index of the bounding box.
 
-        Contiguous, not wrapping, for the reason `Subset.gx_range` documents:
-        `lon0` is on the 0-360 convention precisely so a Pacific box is one range.
+        **West first, not sorted, and `west > east` means the box wraps.** `lon0`
+        is on the 0-360 convention so a Pacific box is one range, but a region
+        crossing the PRIME meridian (the Mediterranean, the North Atlantic) is
+        then two: `gx >= west OR gx <= east`. Sorting the pair would silently
+        select the complement — every longitude the region does not cover.
+        `gx_sql()` writes the clause; nothing should hand-roll a BETWEEN on this.
         """
-        return tuple(sorted(int(grid.gx(v)) for v in self.lon))
+        return int(grid.gx(self.lon[0])), int(grid.gx(self.lon[1]))
+
+    def wraps(self, grid: GlobalGrid) -> bool:
+        """Whether the box crosses gx = 0, i.e. needs two column ranges."""
+        west, east = self.gx_range(grid)
+        return west > east
+
+    def gx_columns(self, grid: GlobalGrid) -> np.ndarray:
+        """Every global column index in the box, west to east, across a wrap."""
+        west, east = self.gx_range(grid)
+        if west <= east:
+            return np.arange(west, east + 1)
+        return np.concatenate([np.arange(west, grid.nlon), np.arange(0, east + 1)])
+
+    def gx_sql(self, grid: GlobalGrid) -> str:
+        """The `gx` half of a WHERE clause, binding `%(gx0)s`/`%(gx1)s`.
+
+        An OR of two ranges for a wrapping box. ClickHouse turns either form into
+        primary-key ranges within each `gy`, so the wrap costs nothing extra.
+        """
+        if self.wraps(grid):
+            return "(gx >= %(gx0)s OR gx <= %(gx1)s)"
+        return "gx BETWEEN %(gx0)s AND %(gx1)s"
 
 
 @functools.lru_cache(maxsize=1)
@@ -638,7 +668,7 @@ _REGION_DIR = Path(__file__).with_name("regions")
 
 
 def _load_polygon(filename: str) -> tuple[tuple[tuple[float, float], ...], ...]:
-    """Outer rings of a stored region polygon, longitudes on the 0-360 frame.
+    """Outer rings of a stored region polygon, longitudes as stored (continuous).
 
     Plain `json` rather than a geometry library: the file is read once per
     process and nothing here needs an operation on it beyond point-in-polygon,
@@ -656,6 +686,11 @@ def _load_polygon(filename: str) -> tuple[tuple[tuple[float, float], ...], ...]:
     if not rings:
         raise ValueError(f"{filename}: no usable ring")
     return rings
+
+
+def region_groups() -> dict[str, str]:
+    """Region menu headings, key -> label, in menu order."""
+    return dict(_raw().get("region_groups") or {})
 
 
 @functools.lru_cache(maxsize=1)
@@ -682,12 +717,25 @@ def regions() -> dict[str, Region]:
             lat, lon = (min(ys), max(ys)), (min(xs), max(xs))
         else:
             lat, lon = tuple(cfg["lat"]), tuple(cfg["lon"])
+        # West before east, always: a box crossing the prime meridian is written
+        # unwrapped (-20..0, or 354..396) rather than as a pair that reads the
+        # wrong way round, so `gx_range` can tell a wrap from a typo. A box wider
+        # than the globe would wrap onto itself and double-count.
+        if not lon[0] < lon[1] or lon[1] - lon[0] > 360:
+            raise ValueError(
+                f"region {key!r}: lon {list(lon)} must run west to east, unwrapped, "
+                "and span at most 360 degrees"
+            )
+        group = cfg.get("group")
+        if group is not None and group not in region_groups():
+            raise ValueError(f"region {key!r}: group {group!r} is not in region_groups")
         out[key] = Region(
             key=key,
             label=cfg["label"],
             lat=lat,
             lon=lon,
             partial=cfg.get("partial", False),
+            group=group,
             polygon=polygon,
         )
     return out

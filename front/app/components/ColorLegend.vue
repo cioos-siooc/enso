@@ -73,7 +73,7 @@
         <span class="text-[11px] font-medium text-muted">{{ title }}</span>
         <!-- Marks a range that is not domain.yml's, so a map read at ±1 is never
              mistaken for one read at the default ±3. -->
-        <span v-if="isCustom" class="text-[11px] text-primary">custom</span>
+        <span v-if="isCustom && !linked" class="text-[11px] text-primary">custom</span>
         <span class="text-[11px] tabular-nums text-muted">{{ formatTick(scale.vmin) }}</span>
         <span
           class="block h-2.5 w-40 rounded ring-offset-1 ring-offset-elevated transition-shadow group-hover:ring-1 group-hover:ring-primary"
@@ -90,14 +90,17 @@
       <template #content>
         <div class="w-64 p-3">
           <div class="mb-2 flex items-center justify-between">
-            <span class="text-xs font-medium">Colour range</span>
+            <span class="text-xs font-medium">
+              Colour range<template v-if="linked">
+                · shared with {{ ownerName }}</template>
+            </span>
             <UButton
               v-if="isCustom"
               label="Reset"
               size="xs"
               variant="subtle"
               color="neutral"
-              @click="store.resetScale(name)"
+              @click="store.resetScale(owner)"
             />
           </div>
 
@@ -200,6 +203,27 @@
       <span>{{ meta.noValueLabel }}</span>
     </div>
 
+    <!--
+      Put land on the ocean's range, so a colour is the same temperature either
+      side of the coast. Offered only where the pair shares units and colours
+      (`scalesLinkable`), which is why precipitation never shows it. While on,
+      the land popover edits the shared range; the land layer's own range is
+      kept and comes back when the link is turned off.
+    -->
+    <button
+      v-if="canLink && !reason"
+      type="button"
+      class="flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[11px] ring-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      :class="linked ? 'text-primary ring-primary' : 'text-muted ring-default hover:text-default hover:ring-primary'"
+      :aria-pressed="linked"
+      :aria-label="linked ? 'Unlink the land colour range from the ocean' : 'Use the ocean colour range for land'"
+      :title="linked ? `Land is on the ${ownerName} range. Click to give land its own.` : `Match the ${ownerName} range, so a colour means the same value on land and sea`"
+      @click="toggleLink"
+    >
+      <UIcon :name="linked ? 'i-mdi-link-variant' : 'i-mdi-link-variant-off'" class="size-3.5" />
+      <span>{{ linked ? 'Matched' : 'Match ocean' }}</span>
+    </button>
+
     <!-- Hides the whole legend, for a clean screenshot. The way back is a
          button in the map's top-left control column, which a screenshot
          already carries, so hiding this leaves the bottom of the map bare. -->
@@ -261,17 +285,38 @@ const percent = computed(() => meta.value?.display === 'log2_percent')
  */
 const backgroundColor = computed(() => meta.value?.backgroundColor ?? null)
 
+/**
+ * The layer whose range this legend edits: its own, or the ocean variable's
+ * while the land overlay is linked to it. Everything about the RANGE — value,
+ * bounds, step, presets, default, Reset — goes through this; everything about
+ * the LAYER — title, ticks' sign, stops' colours — stays on `name`.
+ */
+const owner = computed<LayerName>(() => store.scaleOwner(name.value))
+const linked = computed(() => owner.value !== name.value)
+/** The link toggle shows on the land legend only, and only for a compatible pair. */
+const canLink = computed(() => !!props.variable && props.variable === store.landVariable && store.scaleLinkable)
+const ownerName = computed(() => store.domain?.variables?.[owner.value]?.shortName ?? owner.value)
+
+function toggleLink() {
+  const on = !store.scaleLink
+  store.setScaleLink(on)
+  trackEvent('color_scale_linked', { on, land: name.value, ocean: store.variable })
+}
+
 const scale = computed(() => store.scaleFor(name.value))
-const bounds = computed(() => store.scaleBoundsFor(name.value))
-const isCustom = computed(() => store.scaleIsCustom(name.value))
+const bounds = computed(() => store.scaleBoundsFor(owner.value))
+const isCustom = computed(() => store.scaleIsCustom(owner.value))
 /** domain.yml's range — what Reset returns to. */
-const defaults = computed(() => ({ vmin: meta.value?.vmin ?? 0, vmax: meta.value?.vmax ?? 1 }))
+const defaults = computed(() => {
+  const m = store.domain?.variables?.[owner.value]
+  return { vmin: m?.vmin ?? 0, vmax: m?.vmax ?? 1 }
+})
 /**
  * Coarser than the encoding on purpose — see `rangeStep` in the store. The
  * slider and both number fields share it, so a value typed in can never sit off
  * the slider's grid and get silently snapped when the popover re-renders.
  */
-const step = computed(() => store.scaleStepFor(name.value))
+const step = computed(() => store.scaleStepFor(owner.value))
 
 /** The number fields' own step: whole percent for the ratio, else the range's. */
 const fieldStep = computed(() => (percent.value ? 1 : step.value))
@@ -329,7 +374,7 @@ const chips = computed(() => {
     quantise(a, step.value) === quantise(b, step.value)
   return [
     { label: 'Default', ...defaults.value, reset: true, active: !custom },
-    ...store.presetsFor(name.value).map(preset => ({
+    ...store.presetsFor(owner.value).map(preset => ({
       ...preset,
       reset: false,
       active: custom && same(vmin, preset.vmin) && same(vmax, preset.vmax),
@@ -342,14 +387,14 @@ function applyChip(chip: { label?: string, vmin: number, vmax: number, reset: bo
   // name is the question the presets were added to answer, and a bare pair of
   // bounds cannot distinguish a chip from a drag that landed on the same place.
   trackEvent('color_range_changed', {
-    variable: name.value,
+    variable: owner.value,
     source: chip.reset ? 'default' : 'preset',
     preset: chip.label,
     vmin: chip.vmin,
     vmax: chip.vmax,
   })
-  if (chip.reset) store.resetScale(name.value)
-  else store.setScale(name.value, chip.vmin, chip.vmax)
+  if (chip.reset) store.resetScale(owner.value)
+  else store.setScale(owner.value, chip.vmin, chip.vmax)
 }
 
 /**
@@ -366,14 +411,14 @@ function trackRange(source: 'slider' | 'field') {
   clearTimeout(rangeTimer)
   rangeTimer = setTimeout(() => {
     const { vmin, vmax } = scale.value
-    trackEvent('color_range_changed', { variable: name.value, source, vmin, vmax })
+    trackEvent('color_range_changed', { variable: owner.value, source, vmin, vmax })
   }, 1000)
 }
 onBeforeUnmount(() => clearTimeout(rangeTimer))
 
 /** All clamping lives in the store, so slider and keyboard agree exactly. */
 function commit(vmin: unknown, vmax: unknown, source: 'slider' | 'field' = 'field') {
-  store.setScale(name.value, Number(vmin), Number(vmax))
+  store.setScale(owner.value, Number(vmin), Number(vmax))
   trackRange(source)
 }
 

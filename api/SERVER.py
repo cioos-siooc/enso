@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from shared.domain import global_grid, quantities, regions, subset, variable, variables
+from shared.domain import global_grid, quantities, region_groups, regions, subset, variable, variables
 from shared.domain import variable as variable_meta  # `variable` is a query param name in /image
 
 from modules import render, state
@@ -389,9 +389,13 @@ def domain() -> dict:
                 "lon": list(r.lon),
                 "partial": r.partial,
                 "masked": r.masked,
+                "group": r.group,
             }
             for r in regions().values()
         ],
+        # Menu headings, in order. A region whose group is not listed here (or
+        # has none) is listed after them, ungrouped.
+        "regionGroups": [{"key": k, "label": v} for k, v in region_groups().items()],
     }
 
 

@@ -64,10 +64,11 @@
     <div class="flex min-w-0 grow flex-col">
       <div class="relative grow">
         <AnomalyMap />
-        <!-- Two legends when the land overlay is on, side by side: the ocean's
-             and the land's scales cannot honestly share one (the ocean anomaly
-             saturates at +/-3, land at +/-8), and each is re-ranged on its own.
-             They wrap onto two rows on a phone rather than overflowing. -->
+        <!-- Two legends when the land overlay is on, side by side: by default
+             each layer keeps its own range (the ocean anomaly opens at +/-3,
+             land at +/-8). The land legend's `Match ocean` puts a compatible
+             land layer on the ocean's range instead. They wrap onto two rows
+             on a phone rather than overflowing. -->
         <div class="absolute bottom-0 left-1/2 z-10 flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap items-end justify-center gap-2">
           <ColorLegend />
           <ColorLegend
@@ -257,7 +258,7 @@ function setCompareFromChart(date: string) {
 }
 
 /** With B on the chart, the dock says it is describing A. */
-const pinPrefix = computed(() => (store.activeSecondPoint ? 'A · ' : ''))
+const pinPrefix = computed(() => (store.hasSecond ? 'A · ' : ''))
 
 /**
  * What the panel is describing, said in the panel's own header.
@@ -267,7 +268,7 @@ const pinPrefix = computed(() => (store.activeSecondPoint ? 'A · ' : ''))
  * that its numbers sit a long way from the button that chose them.
  */
 const subjectTitle = computed(() => (store.scope === 'region'
-  ? store.activeRegionMeta?.label ?? 'Region'
+  ? pinPrefix.value + (store.activeRegionMeta?.label ?? 'Region')
   : pinPrefix.value + (formatCell(store.pointSeries?.cell) || 'No cell selected')))
 
 const subjectSubtitle = computed(() => (store.scope === 'region'

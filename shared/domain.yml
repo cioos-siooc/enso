@@ -45,8 +45,8 @@ subset:
   # 7,477,923. Cell-centre bounds, degrees_east 0-360; gy 0..3599, gx 0..7199.
   #
   # It was 60S-65N, 100E-70W (gy 600..3099, gx 2000..5799) until 2026-09-28.
-  # The `pacific` region below still carries those bounds, so the basin-wide
-  # numbers keep meaning what they did.
+  # The `pacific` region carried those bounds until 2026-10-02 and is GOaS's
+  # Pacific outline now; see below.
   lat_min: -89.975
   lat_max: 89.975
   lon_min: 0.025
@@ -629,61 +629,76 @@ variables:
         the same days of the year, in mm per day, computed in this project from
         NOAA CPC Global Unified. Negative is drier than normal, positive wetter.
 
+# How the region menu is grouped, in menu order. Every region names one.
+region_groups:
+  basins: Ocean basins
+  enso: ENSO and its relatives
+  north_pacific: North Pacific
+  mhw: Marine heatwave hotspots
+
 # Named boxes for area-mean indices. Bounds are inclusive cell-centre ranges in
 # degrees_east (0-360) / degrees_north, and all of them fit inside `subset`.
 regions:
-  # --- The whole ingested box, as a region.
-  #
-  # Bounds are `subset` above, repeated rather than referenced: YAML has no way
-  # to say "the same numbers" that survives `shared/domain.py` reading the two
-  # blocks independently, and a region that silently tracked a widened subset
-  # would change what every stored `region_daily` row means without changing its
-  # key. Widening the box is therefore a deliberate two-line edit and a rebuild
-  # of this one region, which is the right amount of friction.
+  # --- The Pacific basin, as a region: GOaS's outline, not a box.
   #
   # It exists because the basin-wide numbers the header ribbon reports — how much
   # of the Pacific is in a marine heatwave today, against what is normal for the
-  # date — are exactly a region rollup over this box. Adding it here rather than
+  # date — are exactly a region rollup over it. Adding it here rather than
   # writing a second aggregation path means `region_daily`, `region_clim`,
   # `/region/{key}`, the monthly ranking and the CSV export all serve it with no
-  # new code. The one cost is the rollup: 113.8 B rows for this key alone,
-  # measured at ~3 minutes, against seconds for any of the named boxes.
+  # new code.
+  #
+  # Until 2026-10-02 it was the old ingested box (60S-65N, 100E-70W), which put
+  # the Gulf of Mexico, the Caribbean, Hudson Bay and the eastern Indian Ocean
+  # into "the Pacific". It is now GOaS's North + South Pacific plus its South
+  # China and Eastern Archipelagic Seas, which GOaS keeps as a region of its own
+  # and the old box held; dropping them would take the warm pool out of an ENSO
+  # dashboard's basin. Changing the outline changes what every stored row for
+  # this key means, so it needs `rollup --clim --region pacific --fresh`.
   pacific:
-    label: Whole Pacific
-    lat: [-59.975, 64.975]
-    lon: [100.025, 289.975]
+    group: basins
+    label: Pacific Ocean (GOaS)
+    polygon: pacific.geojson
   # --- ENSO indices, computable for the first time now the domain reaches
   # south of the equator.
   nino34:
+    group: enso
     label: Nino 3.4
     lat: [-5.0, 5.0]
     lon: [190.0, 240.0]
   nino3:
+    group: enso
     label: Nino 3
     lat: [-5.0, 5.0]
     lon: [210.0, 270.0]
   nino4:
+    group: enso
     label: Nino 4
     lat: [-5.0, 5.0]
     lon: [160.0, 210.0]
   nino12:
+    group: enso
     label: Nino 1+2
     lat: [-10.0, 0.0]
     lon: [270.0, 280.0]
   # --- North Pacific / marine-heatwave boxes.
   ne_pacific:
+    group: north_pacific
     label: NE Pacific (the Blob)
     lat: [40.0, 60.0]
     lon: [200.0, 235.0]
   gulf_of_alaska:
+    group: north_pacific
     label: Gulf of Alaska
     lat: [50.0, 60.0]
     lon: [205.0, 225.0]
   bering_sea:
+    group: north_pacific
     label: Bering Sea
     lat: [55.0, 65.0]
     lon: [180.0, 200.0]
   pdo_north_pacific:
+    group: north_pacific
     label: North Pacific (PDO domain)
     # The conventional PDO domain runs to 70N; clipped to the subset's 65N.
     lat: [20.0, 65.0]
@@ -712,8 +727,96 @@ regions:
   # so the label names the bioregions and not the zone. The file records its
   # source, retrieval date and simplification.
   pacific_bioregions:
+    group: north_pacific
     label: Pacific Bioregions (DFO)
     polygon: pacific_bioregions.geojson
+
+  # --- Added with the 2026-09-28 move to a global grid.
+  #
+  # Two kinds, and the provenance rule above is what separates them. An INDEX
+  # box (IOD, ATL3, the globe, the Southern Ocean south of 60S) is a convention
+  # anyone can write down and is a box by definition — a polygon would make it
+  # wrong. A NAMED SEA is somebody's published outline, so it is a polygon whose
+  # file records its source, licence, retrieval date and simplification, and
+  # the label names that source.
+  #
+  # Several of these cross the PRIME meridian (the Mediterranean, the North
+  # Atlantic, and ATL3 nearly does). Their longitudes are written unwrapped,
+  # west before east — -6..36, not 354..36 — and `Region.gx_range` returns a
+  # wrapping pair that `gx_sql()` turns into two key ranges. Sorting the pair, as
+  # the code did while every region was Pacific, selects the complement.
+  global:
+    group: basins
+    label: Global ocean
+    # Every ocean cell CoralTemp has, poles included. The most expensive rollup
+    # here, since it scans the whole archive.
+    lat: [-89.975, 89.975]
+    lon: [0.025, 359.975]
+  n_atlantic:
+    group: basins
+    label: North Atlantic (GOaS)
+    polygon: n_atlantic.geojson
+  indian:
+    group: basins
+    label: Indian Ocean (GOaS)
+    polygon: indian.geojson
+  southern:
+    group: basins
+    label: Southern Ocean (S of 60S)
+    # A box, not GOaS's polygon: GOaS draws the Southern Ocean's northern edge
+    # at exactly 60S and its southern one at the Antarctic coast, which is land,
+    # and land is already excluded by `sst_daily`. So the polygon would select
+    # the same cells as this box, while its ring is cut at the antimeridian.
+    # South edge is the grid's first row; north edge the last cell centre
+    # south of 60S.
+    lat: [-89.975, -60.025]
+    lon: [0.025, 359.975]
+  # The Indian Ocean Dipole (Saji et al. 1999, Nature 401:360-363). The Dipole
+  # Mode Index is west minus east anomaly; it is not stored, because a
+  # difference of two rollups is not a third region. Both poles often move with
+  # ENSO, which is why they sit beside the Nino boxes.
+  iod_west:
+    group: enso
+    label: IOD west pole
+    lat: [-10.0, 10.0]
+    lon: [50.0, 70.0]
+  iod_east:
+    group: enso
+    label: IOD east pole
+    lat: [-10.0, 0.0]
+    lon: [90.0, 110.0]
+  # Atlantic Nino (Zebiak 1993): 20W-0, 3S-3N. East edge is the last cell
+  # centre west of 0, not 360.0 — that would round to gx 0 and wrap the box
+  # one column onto the far side of the meridian.
+  atl3:
+    group: enso
+    label: Atlantic Nino (ATL3)
+    lat: [-3.0, 3.0]
+    lon: [340.0, 359.975]
+  # --- Marine heatwave hotspots, each with a well-studied event.
+  tasman_sea:
+    group: mhw
+    label: Tasman Sea (IHO)
+    polygon: tasman_sea.geojson
+  mediterranean:
+    group: mhw
+    label: Mediterranean (IHO)
+    polygon: mediterranean.geojson
+  gulf_of_maine:
+    group: mhw
+    label: Gulf of Maine (SeaVoX)
+    polygon: gulf_of_maine.geojson
+  # The Ningaloo Nino index box (Kataoka et al. 2014): 22-32S, from 108E to
+  # the coast. The 2011 heatwave's footprint.
+  w_australia:
+    group: mhw
+    label: Ningaloo Nino (W Australia)
+    lat: [-32.0, -22.0]
+    lon: [108.0, 116.0]
+  coral_triangle:
+    group: mhw
+    label: Coral Triangle (MEOW)
+    polygon: coral_triangle.geojson
 
 # Quantities a timeseries can report that are NOT fields on the map.
 #

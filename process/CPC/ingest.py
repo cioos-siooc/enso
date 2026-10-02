@@ -179,13 +179,24 @@ def ingest_year(
     dates: list[dt.date] | None = None
     for name in tgt.variables:
         d, stack = read_land_year(name, year, nc_dir)
-        if dates is not None and d != dates:
-            raise ValueError(
-                f"{name}.{year}.nc covers {len(d)} days, "
-                f"{tgt.variables[0]}.{year}.nc covers {len(dates)} — the two "
-                "temperature files must agree before either is ingested"
+        stacks[name] = stack
+        if dates is None:
+            dates = d
+        elif d != dates:
+            # A current-year file fetched today beside one a failed download
+            # left at yesterday's length. Ingest only the days both carry; the
+            # next run, with both files current, picks up the rest.
+            shared = sorted(set(d) & set(dates))
+            log.warning(
+                "%s.%d.nc covers %d days, %s.%d.nc covers %d; ingesting the %d "
+                "they share", name, year, len(d), tgt.variables[0], year,
+                len(dates), len(shared),
             )
-        dates, stacks[name] = d, stack
+            keep = set(shared)
+            for other, other_dates in ((name, d), *((n, dates) for n in stacks if n != name)):
+                idx = [i for i, x in enumerate(other_dates) if x in keep]
+                stacks[other] = stacks[other][idx]
+            dates = shared
 
     existing = status_mod.load(client, tgt.status_table)
     counts = {"ingested": 0, "skipped": 0, "failed": 0, "rows": 0}

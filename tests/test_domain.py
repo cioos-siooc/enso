@@ -62,6 +62,53 @@ def test_polygon_region_with_bounds_raises(edited_domain):
         edited_domain(edit).regions()
 
 
+def test_region_east_of_west_required(edited_domain):
+    """A pair written the wrong way round must not be read as a wrap."""
+    def edit(raw):
+        raw["regions"]["nino34"]["lon"] = [240.0, 190.0]
+    with pytest.raises(ValueError, match="west to east"):
+        edited_domain(edit).regions()
+
+
+def test_unknown_region_group_raises(edited_domain):
+    def edit(raw):
+        raw["regions"]["nino34"]["group"] = "nowhere"
+    with pytest.raises(ValueError, match="nowhere"):
+        edited_domain(edit).regions()
+
+
+def test_every_region_is_grouped():
+    _clear()
+    groups = domain.region_groups()
+    assert all(r.group in groups for r in domain.regions().values())
+
+
+def test_prime_meridian_box_wraps():
+    """The Mediterranean crosses 0: two column ranges, not the complement."""
+    _clear()
+    grid = domain.global_grid()
+    med = domain.regions()["mediterranean"]
+    assert med.wraps(grid)
+    west, east = med.gx_range(grid)
+    cols = med.gx_columns(grid)
+    assert cols[0] == west and cols[-1] == east
+    # ~42 degrees of longitude, not the ~318 sorting the pair would select.
+    assert 40 / 0.05 < len(cols) < 44 / 0.05
+    assert "OR" in med.gx_sql(grid)
+    # And a Pacific box is still one BETWEEN.
+    assert not domain.regions()["nino34"].wraps(grid)
+    assert "BETWEEN" in domain.regions()["nino34"].gx_sql(grid)
+
+
+def test_atl3_stops_short_of_the_meridian():
+    """359.975 is the last cell west of 0; 360.0 would round to gx 0 and wrap."""
+    _clear()
+    grid = domain.global_grid()
+    atl3 = domain.regions()["atl3"]
+    assert not atl3.wraps(grid)
+    assert atl3.gx_range(grid)[1] == grid.nlon - 1
+
+
 def test_antimeridian_cells_coincide():
     """180.025E and -179.975E are one cell; 179.975E is its western neighbour."""
     grid = domain.global_grid()

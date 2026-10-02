@@ -4,7 +4,7 @@
        named box drawn on the same canvas. It sits under the projection pair so
        every control that reframes what the map is showing is in one column.
 
-       The region half is a MENU, not a second toggle. There are eight regions
+       The region half is a MENU, not a second toggle. There are twenty regions
        and only one is ever drawn, so a plain toggle needed a picker on a row of
        its own underneath it — two controls for one decision. As a dropdown the
        button states the region currently being read and opening it is how you
@@ -43,11 +43,27 @@ const { narrow } = useViewport()
  * reading. The active one is marked by weight and ink rather than a tick column,
  * which keeps every row on the same left edge.
  */
-const items = computed(() => (store.domain?.regions ?? []).map(r => ({
-  label: r.label,
-  class: store.scope === 'region' && r.key === store.activeRegion
-    ? 'font-semibold text-primary'
-    : undefined,
-  onSelect: () => { store.selectRegion(r.key) },
-})))
+const items = computed(() => {
+  const regions = store.domain?.regions ?? []
+  const item = (r: typeof regions[number]) => ({
+    label: r.label,
+    class: store.scope === 'region' && r.key === store.activeRegion
+      ? 'font-semibold text-primary'
+      : undefined,
+    onSelect: () => { store.selectRegion(r.key) },
+  })
+  // One section per declared group, in `domain.yml` order, each under its own
+  // heading — twenty-odd regions in one flat list is a scroll, not a menu. A
+  // region with no (or an unknown) group still appears, in a last section.
+  const groups = store.domain?.regionGroups ?? []
+  const known = new Set(groups.map(g => g.key))
+  const sections = groups
+    .map(g => [
+      { type: 'label' as const, label: g.label },
+      ...regions.filter(r => r.group === g.key).map(item),
+    ])
+    .filter(s => s.length > 1)
+  const rest = regions.filter(r => !r.group || !known.has(r.group)).map(item)
+  return rest.length ? [...sections, rest] : sections
+})
 </script>

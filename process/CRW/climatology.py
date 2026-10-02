@@ -191,7 +191,7 @@ def build_region_clim(client, keys: list[str] | None = None) -> int:
                    count() AS n_cells
             FROM {DATABASE}.sst_clim
             WHERE gy BETWEEN %(gy0)s AND %(gy1)s
-              AND gx BETWEEN %(gx0)s AND %(gx1)s{mask}
+              AND {region.gx_sql(grid)}{mask}
             GROUP BY mmdd
             ORDER BY mmdd
             """,

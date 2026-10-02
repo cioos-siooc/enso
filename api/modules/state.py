@@ -33,7 +33,7 @@ from .timeseries import _MHW_EXTENT_SCALE, MMDD_SQL, data_through
 # computed over and the one this repo is named for.
 ENSO_REGION = "nino34"
 
-# The whole ingested box. Its rollup is what makes the basin-wide extent a
+# The Pacific basin (GOaS's outline). Its rollup is what makes the basin-wide extent a
 # 15k-row read; see `domain.yml`'s `pacific` region.
 BASIN_REGION = "pacific"
 

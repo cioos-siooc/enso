@@ -93,11 +93,16 @@ const WORLD = 360
 const BACKGROUND_SOURCE_ID = 'field-background'
 const BACKGROUND_LAYER_ID = 'field-background-layer'
 
-const REGION_SOURCE_ID = 'region-box'
-const REGION_FILL_ID = 'region-box-fill'
-const REGION_LINE_ID = 'region-box-line'
-/** Amber, matching the chart's MAP markLine — "where the app is looking". */
-const REGION_COLOR = '#05df72'
+/**
+ * The two region outlines: A's (the region scope is reading) and B's (the
+ * second selection, when it is a region). Each in its pin's colour, so a box on
+ * the map and a line on the chart are tied the same way a pin and a line are.
+ */
+const REGION_SLOTS = {
+  a: { source: 'region-box', fill: 'region-box-fill', line: 'region-box-line', color: PIN_COLORS.a },
+  b: { source: 'region-box-b', fill: 'region-box-b-fill', line: 'region-box-b-line', color: PIN_COLORS.b },
+} as const
+type RegionSlot = keyof typeof REGION_SLOTS
 
 /**
  * The land overlay: a second raster, over whichever ocean variable is showing.
@@ -156,7 +161,7 @@ function showMarker(lat: number, lon: number) {
 }
 
 function syncLetterA() {
-  if (letterA) letterA.style.display = store.activeSecondPoint ? '' : 'none'
+  if (letterA) letterA.style.display = store.hasSecond ? '' : 'none'
 }
 
 /**
@@ -583,7 +588,7 @@ async function regionOutline(key: string): Promise<GeoJSON.Feature | null> {
   }
 }
 
-function regionPolygon(region: { lat: [number, number], lon: [number, number] }) {
+function regionPolygon(region: { lat: [number, number], lon: [number, number] }): GeoJSON.GeoJSON {
   const [south, north] = [...region.lat].sort((a, b) => a - b)
   const [west, east] = [...region.lon].sort((a, b) => a - b)
   const ring = [
@@ -593,16 +598,37 @@ function regionPolygon(region: { lat: [number, number], lon: [number, number] })
     ...densify(south, north, lat => [west, lat]),
   ]
   ring.push(ring[0]!)
-  return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [ring] } }
+  const polygon = { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [ring] } }
+  if (east - west < WHOLE_CIRCLE) return polygon
+
+  // A box all the way round (the globe, the Southern Ocean) has no west or east
+  // edge: its two meridian sides meet, and outlining them draws a seam down one
+  // meridian that is no boundary of anything. So the wash keeps the polygon and
+  // the line gets only the parallels — and none at a pole, where a "parallel"
+  // is a point.
+  const parallels = [south, north]
+    .filter(lat => Math.abs(lat) < 85)
+    .map(lat => ({
+      type: 'Feature' as const,
+      properties: {},
+      geometry: { type: 'LineString' as const, coordinates: [...densify(west, east, lon => [lon, lat]), [east, lat]] },
+    }))
+  return {
+    type: 'FeatureCollection',
+    features: [{ ...polygon, properties: { noOutline: true } }, ...parallels],
+  }
 }
 
+/** Longitude span at which a box is treated as going all the way round. */
+const WHOLE_CIRCLE = 359.9
+
 /**
- * Draw the region the app is currently reading, or nothing.
+ * Draw the region the app is currently reading, and B's when B is a region.
  *
- * Only ONE box is ever on the map, and only in region scope — the box is the
- * visual half of what the numbers panel is showing, so the two are the same
- * selection seen twice rather than two independent controls. Clicking a point
- * moves the app to point scope and the box goes with it.
+ * A's box is only drawn in region scope — it is the visual half of what the
+ * numbers panel is showing, so the two are the same selection seen twice rather
+ * than two independent controls. Clicking a point moves the app to point scope
+ * and the box goes with it. B's follows B alone, in either scope.
  */
 function syncRegionBox() {
   // NOT `map.isStyleLoaded()`. That reports whether every source in the style
@@ -611,12 +637,19 @@ function syncRegionBox() {
   // loaded page. Guarding on it silently skipped the box forever. `styleReady`
   // is set in the 'load' handler, which is the actual precondition.
   if (!map || !styleReady) return
-  const region = store.scope === 'region' ? store.activeRegionMeta : null
+  syncRegionSlot('a', store.scope === 'region' ? store.activeRegionMeta : null)
+  syncRegionSlot('b', store.secondRegionMeta)
+}
 
+type RegionMeta = NonNullable<typeof store.activeRegionMeta>
+
+function syncRegionSlot(slot: RegionSlot, region: RegionMeta | null) {
+  if (!map) return
+  const ids = REGION_SLOTS[slot]
   if (!region) {
-    if (map.getLayer(REGION_FILL_ID)) map.removeLayer(REGION_FILL_ID)
-    if (map.getLayer(REGION_LINE_ID)) map.removeLayer(REGION_LINE_ID)
-    if (map.getSource(REGION_SOURCE_ID)) map.removeSource(REGION_SOURCE_ID)
+    if (map.getLayer(ids.fill)) map.removeLayer(ids.fill)
+    if (map.getLayer(ids.line)) map.removeLayer(ids.line)
+    if (map.getSource(ids.source)) map.removeSource(ids.source)
     return
   }
 
@@ -627,38 +660,42 @@ function syncRegionBox() {
     // numbers cover Alaskan and high-seas water they do not.
     void regionOutline(region.key).then((feature) => {
       // The selection can move while this is in flight.
-      if (feature && store.scope === 'region' && store.activeRegion === region.key) {
-        drawRegion(feature)
-      }
+      const current = slot === 'a'
+        ? store.scope === 'region' && store.activeRegion === region.key
+        : store.secondRegion === region.key
+      if (feature && current) drawRegion(slot, feature)
     })
     return
   }
-  drawRegion(regionPolygon(region))
+  drawRegion(slot, regionPolygon(region))
 }
 
-/** Put one GeoJSON outline on the map, creating the source and layers once. */
-function drawRegion(data: GeoJSON.Feature) {
+/** Put one GeoJSON outline on the map, creating the slot's source and layers once. */
+function drawRegion(slot: RegionSlot, data: GeoJSON.GeoJSON) {
   if (!map) return
-  const existing = map.getSource(REGION_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+  const ids = REGION_SLOTS[slot]
+  const existing = map.getSource(ids.source) as mapboxgl.GeoJSONSource | undefined
   if (existing) {
     existing.setData(data)
     return
   }
 
-  map.addSource(REGION_SOURCE_ID, { type: 'geojson', data })
+  map.addSource(ids.source, { type: 'geojson', data })
   // A wash rather than a tint: the field underneath is the thing being read, and
   // a fill heavy enough to notice would shift every colour inside the box.
   map.addLayer({
-    id: REGION_FILL_ID,
+    id: ids.fill,
     type: 'fill',
-    source: REGION_SOURCE_ID,
-    paint: { 'fill-color': REGION_COLOR, 'fill-opacity': 0.07 },
+    source: ids.source,
+    paint: { 'fill-color': ids.color, 'fill-opacity': 0.07 },
   })
   map.addLayer({
-    id: REGION_LINE_ID,
+    id: ids.line,
     type: 'line',
-    source: REGION_SOURCE_ID,
-    paint: { 'line-color': REGION_COLOR, 'line-width': 2, 'line-opacity': 0.9 },
+    source: ids.source,
+    paint: { 'line-color': ids.color, 'line-width': 2, 'line-opacity': 0.9 },
+    // See `regionPolygon`: a whole-circle box's polygon is wash only.
+    filter: ['!', ['to-boolean', ['get', 'noOutline']]],
   })
 }
 
@@ -797,7 +834,7 @@ watch(
 // The box follows the scope and the chosen region together — it is one
 // selection drawn twice, not a layer with a toggle of its own. Flying the camera
 // to it is the host's job (`AnomalyMap.frameRegion`).
-watch(() => [store.scope, store.activeRegion], () => {
+watch(() => [store.scope, store.activeRegion, store.secondRegion], () => {
   if (store.scope === 'point' && !marker && store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
   syncRegionBox()
 })
@@ -809,9 +846,9 @@ watch(() => store.selectedPoint, (point) => {
   if (point) showMarker(point.lat, point.lon)
 })
 
-// B the same way, and it also follows the scope: hidden in region scope, where
-// the chart is not drawing it, and back on return.
+// B the same way. A's letter follows B of either kind.
 watch(() => store.activeSecondPoint, syncMarkerB)
+watch(() => store.hasSecond, syncLetterA)
 
 /** A crosshair while the next click is armed to drop B. */
 function syncCursor() {

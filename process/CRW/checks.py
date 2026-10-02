@@ -37,7 +37,7 @@ LEAP_DAY_CAT5_MAX = 200_000
 # a rollup built while `mhw_daily` was empty, not a region that never warmed.
 MIN_DAYS_FOR_ZERO_EXTENT = 365
 
-# The whole ingested box has never been heatwave-free on a single day since
+# The Pacific basin has never been heatwave-free on a single day since
 # 1985 (its archive minimum is well above zero), so a zero there is a broken
 # rollup, not a calm day.
 BASIN_REGION = "pacific"

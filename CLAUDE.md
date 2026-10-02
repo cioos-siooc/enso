@@ -576,6 +576,14 @@ no-overlap rule geometrically, column by column.
 - **When a bucket can't be drawn, the layer is REMOVED, not left on its last frame.**
   Mapbox's image source keeps the previous image on a 404, which would show last week's rain
   under this week's date. The land legend prints the reason in its place.
+- **`Match ocean` puts land on the ocean's colour range** (the land legend's link toggle,
+  `store.scaleLink`, remembered as `enso.scale.link`). Offered only where `scalesLinkable`
+  holds — same units, both continuous, **identical served stop colours** — so today
+  `sst` ↔ `land_tmax`/`land_tmin` and `anom` ↔ `land_t*_anom`, never precipitation. Every
+  scale getter resolves through `scaleOwner()`, so the map, both legends and the chart's
+  land line follow it together; while linked the land popover edits the ocean's range
+  (bounded by the ocean's `limits`), and the land layer's own override is kept for when
+  the link is turned off. Event `color_scale_linked` (`on`, `land`, `ocean`).
 - **`ColorLegend` takes a `variable` prop.** The land instance is labelled "Land", formats
   `log2_percent` ticks and number fields as percent while ranging in log2, and reads its grey
   row's text from `noValueLabel`. The scale machinery takes `LayerName`, so each land layer
@@ -728,9 +736,10 @@ entirely plausible when wrong, which is why `check_orientation()` raises rather 
 Widening it needs no re-ingest: `gy`/`gx` index the *global* grid, so only `domain.yml`'s
 `subset` block changes.
 
-#### One named region is a polygon, not a box
+#### The first polygon region: `pacific_bioregions`
 
-Every named region is a lat/lon rectangle except **`pacific_bioregions`**, which declares a
+Eight named regions are polygons now (see "The global regions" below). This one came first
+and set the rules. Like the others, **`pacific_bioregions`** declares a
 `polygon:` and no bounds — `shared/domain.py` derives its box from the ring, so a
 hand-written box cannot go stale behind a changed geometry, and `shared/mask.py` cuts that
 box down to the 26,222 cells actually inside. See `region_cells` below for the cost
@@ -783,6 +792,84 @@ unsimplified ring, and takes 11,131 vertices to 4,573 (104 KB). The union is a
 **MultiPolygon of two** parts — the second is a 20-vertex sliver of Boundary Bay at
 49.0–49.09°N, detached from the main body by the Point Roberts peninsula.
 
+#### The global regions (added 2026-10-02)
+
+Twelve regions came with the global grid. There are 22 in all, listed in the region menu
+under four headings that `domain.yml`'s `region_groups` declares; each region names its
+heading in `group:`, and `regions()` raises on a heading that isn't declared.
+
+| group | box (a convention, so a box by definition) | polygon (a published outline) |
+|---|---|---|
+| Ocean basins | `global`, `southern` (S of 60°S) | `pacific`, `n_atlantic`, `indian` — Marine Regions *Global Oceans and Seas* v1 |
+| ENSO and its relatives | `iod_west`, `iod_east` (Saji 1999), `atl3` (20°W–0, 3°S–3°N) | |
+| Marine heatwave hotspots | `w_australia` (Ningaloo Niño, 22–32°S 108–116°E) | `tasman_sea`, `mediterranean` (IHO S-23 via Marine Regions), `gulf_of_maine` (SeaVoX), `coral_triangle` (MEOW) |
+
+The rule is the one `pacific_bioregions` set: an index box is a convention anyone can write
+down, so it is a box; a named sea is someone's outline, so it is a polygon whose file records
+its source, licence, retrieval date and simplification, and whose label names that source.
+
+- **`southern` is a box although GOaS publishes it.** GOaS's Southern Ocean is everything
+  between 60°S and the Antarctic coast, and the coast is land, which `sst_daily` already
+  excludes. The polygon would select the same cells, and its ring is cut at the antimeridian.
+- **`mediterranean` is nine IHO sea areas unioned**: the Western and Eastern Basins plus
+  Alboran, Balearic, Ligurian, Tyrrhenian, Adriatic, Ionian and Aegean. GOaS's
+  "Mediterranean Region" was not used because it includes the Black Sea.
+- **`coral_triangle` is not the Coral Triangle Initiative's boundary.** Neither the Veron
+  et al. scientific boundary nor the CTI implementation area is published as a downloadable
+  polygon. This is the union of MEOW's (Spalding et al. 2007) Western and Eastern Coral
+  Triangle provinces, which are shelf bioregions, so it omits the deep basins inside the
+  triangle. That is why the label says `(MEOW)`. **MEOW's licence was not checked**; the
+  file says so.
+- **The outlines are simplified at 0.05° for the two basins and 0.005–0.01° for the seas.**
+  The cells that moves, measured against the unsimplified ring, are 0.25% (North Atlantic),
+  0.12% (Indian) and ≤0.2% elsewhere, mostly coastal. Each file's properties record the
+  tolerance and the count. Without API gzip the North Atlantic outline is 200 KB.
+- **The masks were cross-checked against shapely**: `CRW.cli mask`'s counts (n_atlantic
+  1,703,875, indian 2,823,600, coral_triangle 286,146, tasman_sea 140,617, mediterranean
+  106,240, gulf_of_maine 4,213) equal shapely's `contains_xy` on the same rings, cell for
+  cell. There is no build script in the repo; the scratch script that made the files is
+  described by their `properties`.
+
+**Rollup cost, measured on dev (NVMe):** `rollup --clim --fresh` took 33 min for all
+twelve new regions, 21 of them for `global` alone, which scans all 262 B `sst_daily` rows.
+The small boxes take seconds each and the two basin polygons 3–5 min. One date across all
+22 regions, which is what `run` appends daily, takes **9.4 s** including container start.
+Expect the full rebuild to be much slower on the production HDD.
+
+##### A region can cross the prime meridian, and its longitudes then wrap
+
+**`Region.gx_range()` returns `(west, east)`, not a sorted pair, and `west > east` means
+two column ranges.** The Mediterranean (−5.4…36.2) and the North Atlantic (−98…12) cross
+0°. While every region was Pacific, `gx_range` sorted its pair, and for these it would
+have **selected the complement**: every longitude the region does *not* cover, as a
+plausible-looking area mean. So:
+
+- **Longitudes are written unwrapped, west before east** (`-6..36`, not `354..36`), and
+  `regions()` raises on a pair that runs the wrong way, so a typo can't pass as a wrap.
+- **`region.gx_sql(grid)` writes the `gx` half of every region `WHERE`**:
+  `gx BETWEEN` for a normal box, `(gx >= west OR gx <= east)` for a wrapping one. Use it,
+  never a bare BETWEEN. ClickHouse turns either into key ranges within each `gy`.
+- `gx_columns()` lists the columns west to east across the wrap. That is what
+  `shared/mask.py` meshes over.
+- **`atl3`'s east edge is 359.975, not 360.0.** 360.0 rounds to gx 0 and would wrap the
+  box one column across the meridian.
+- Verified on 2023-07-25 for `mediterranean`: the rollup's 28.151 °C, 102,752 cells and
+  91.4% heatwave extent equal a direct query with no `gx` prefilter at all, and 3,794 of
+  those cells are west of 0°.
+
+**`shared/mask.py` is a scanline fill, not matplotlib's `contains_points`.** The old test
+costs cells × vertices, which was milliseconds for `pacific_bioregions` and would have
+been hours for the North Atlantic (3 M cells, ~9,000 vertices). The scanline gives the same
+centre-in-ring answer, decided per row; it matches the matplotlib result exactly on all
+four outlines it was compared on. **Its longitude frame is centred on the box, not started
+at the west edge.** The box's first column can sit half a cell west of the ring, and a frame
+starting at the edge wrapped that cell 360° east. That made `pacific_bioregions` 26,224
+cells instead of 26,222 until it was fixed.
+
+**Whole-circle boxes (`global`, `southern`) draw no meridian edge.** Their west and east
+sides meet, so `FieldMap.regionPolygon` keeps the polygon for the fill and outlines only the
+parallels. Without that, a seam was drawn down one meridian.
+
 #### The third state: ocean with no anomaly
 
 About **3.2% of the box's ocean has SST but no climatology** — the seasonal ice fringe,
@@ -809,7 +896,7 @@ Both containers mount `./shared` at `/app/shared`. Seven modules:
   There is one — `mhw_extent`, what `mhw` means over a region — and every timeseries
   response names its quantity in `quantity` (null at a point) so no client infers it
   from the scope.
-- **`mask.py` + `regions/*.geojson`** — the one region that is **not a box**. A region is
+- **`mask.py` + `regions/*.geojson`** — the regions that are **not boxes** (eight of 22). A region is
   normally a lat/lon rectangle; Canada's Pacific bioregions are a 200-nautical-mile arc
   closed by two negotiated lateral boundaries, and their bounding box is 55,533 cells
   against the region's 26,222 — so 53% of what a box query would average is Alaskan,
@@ -886,8 +973,8 @@ consequences, both load-bearing:
    gating `anom`, but sharper: there is no value that could signal the difference.
 
 **`region_cells`** — which grid cells a **polygon** region covers: one row per (region,
-cell), and rows only for the `domain.yml` regions that declare a `polygon`. **26,222 rows
-today**, all of them `pacific_bioregions`.
+cell), and rows only for the `domain.yml` regions that declare a `polygon`. **~11.7 M rows
+across eight regions**: 26,222 of them are `pacific_bioregions`, and 2.8 M are `indian`.
 
 A plain box needs none — its `BETWEEN` says everything there is to say about which cells
 it holds. Canada's Pacific waters are not a rectangle: `pacific_bioregions`' bounding box
@@ -915,10 +1002,10 @@ sides averaging the same cells. Verified: `/region/pacific_bioregions?variable=a
 2021-06-28 returns **1.583** against a direct cell-wise `avg(sst - clim)` over the polygon
 of **1.5827**, on the same 23,875 cells.
 
-**`region_clim`** — 8 regions × 366 MMDD = **2,928 rows**. The climatology side of a
+**`region_clim`** — 22 regions × 366 MMDD = **8,052 rows**. The climatology side of a
 region anomaly.
 
-**`region_daily`** — 8 regions × 15,212 days = **~121,700 rows**. The daily side, and the
+**`region_daily`** — 22 regions × ~15,250 days = **~335,000 rows**, ~8 MiB. The daily side, and the
 one that actually costs something.
 
 ```sql
@@ -972,16 +1059,22 @@ read as "exactly at climatology".
 **Only named regions have a rollup.** `/regionTimeseries` on an arbitrary box still
 aggregates live, and that is the only difference between the two endpoints.
 
-**`pacific` is the whole ingested box, as a region.** It exists so the basin-wide numbers
+**`pacific` is the Pacific basin, as a polygon region.** It exists so the basin-wide numbers
 the header ribbon reports are a rollup read rather than a scan, and adding it there rather
 than writing a second aggregation path means `region_daily`, `region_clim`,
-`/region/{key}`, the monthly ranking, the region box on the map and the CSV export all
-serve it with no new code. Its bounds repeat `subset`'s rather than referencing them:
-a region that silently tracked a widened box would change what every stored row means
-without changing its key, so widening is a deliberate two-line edit plus a rebuild of this
-one region. The one cost is that rebuild — 113.8 B rows for this key alone, **measured at
-6 minutes** against seconds for any of the named boxes. A single date, which is what `run`
-appends, is **2.2 s across all nine regions**.
+`/region/{key}`, the monthly ranking, the region outline on the map and the CSV export all
+serve it with no new code.
+
+**It was the old ingested box (60°S–65°N, 100°E–70°W) until 2026-10-02**, which counted the
+Gulf of Mexico, the Caribbean, Hudson Bay and the eastern Indian Ocean as Pacific: 995,980
+of the box's 7,477,923 ocean cells (13%). It is now GOaS's North + South Pacific plus its
+*South China and Eastern Archipelagic Seas* (GOaS keeps those as their own region; dropping
+them would take the warm pool out of the basin). 6,496,585 ocean cells, 14,642 of them
+outside the old box (the Bering Sea up to the strait, Drake Passage). GOaS cuts the ocean at
+the antimeridian, so the file's western halves were shifted +360 and unioned into one ring;
+its `properties` record how. The scanline mask equals shapely's count exactly (6,582,607
+cells including coastal land). Changing the outline changes what every stored row for this
+key means, so it needs `rollup --clim --region pacific --fresh`.
 
 **`ingest_status`** / **`mhw_status`** — `ReplacingMergeTree(updated_at) ORDER BY date`, one
 row per day, one table per archive. Two tables rather than one with a `product` column
@@ -1691,31 +1784,37 @@ URL is parsed into a `View` and handed over, so a link and a story step cannot d
 how a view is entered. Two more keys: `c=YYYY-MM-DD` is swipe compare's second date, and
 `story=<key>&step=<n>` opens a story at a step, whose own view wins over every other key.
 
-#### Two-point selection
+#### Two-selection compare
 
-**A second pin, B, plotted beside A on the chart, and nothing else.** The dock's stats and
-ranking stay on A, whose heading reads `A · <cell>` while B exists, so no second ranking is
-fetched. B is dropped by the time bar's Compare → `Point` button (arms the next click, crosshair cursor,
-Esc disarms; the phone path) or by **Alt-click** — Shift-drag is Mapbox's box zoom and
-Ctrl-click is a right click on a Mac. It is removed from its pin's popup, that button, or
-the × in `PointPair.vue`'s chip row under the time bar.
+**A second selection, B, plotted beside A on the chart, and nothing else.** B is a cell
+(`secondPoint`) or a named region (`secondRegion`), never both, and is **independent of A's
+scope**: point+point, point+region, region+point and region+region all work. The dock's stats
+and ranking stay on A, whose heading reads `A · <cell or region>` while B exists, so no second
+ranking is fetched. B is chosen from the time bar's Compare → `Place` menu (`Point on map`,
+which arms the next click — crosshair cursor, Esc disarms — or any region but A's own), or a
+point B by **Alt-click** — Shift-drag is Mapbox's box zoom and Ctrl-click is a right click on a
+Mac. It is removed from its pin's popup, the `Remove B` button, or the × in `PointPair.vue`'s
+chip row under the time bar.
 
-- **Store:** `secondPoint`/`secondSeries`, fetched by `refreshSecondPoint()`, which is a
-  no-op when `secondKey` (`variable|period|lat|lon`) is current. `selectPoint`, `setScope`
-  and `applyView` call it, so every refetch of A refreshes B. A B failure lands in
-  `secondError` and never touches A's state; a land cell's empty series says so there.
-- **Point scope only.** `activeSecondPoint`/`activeSecondSeries` are null in region scope,
-  which hides the pin and the line; B is kept and returns with point scope.
-- **The chart colours by point, not value, while B is drawn.** Two lines on one value ramp
+- **Store:** `secondSeries`, fetched by `refreshSecondPoint()` (`/timeseries` for a cell,
+  `/region/{key}` for a region), a no-op when `secondKey` is current. `selectPoint`,
+  `loadRegionSeries`, `setScope` and `applyView` call it, so every refetch of A refreshes B.
+  A B failure lands in `secondError` and never touches A's state; a land cell's empty series
+  says so there. A point B's land series is fetched in either scope.
+- **`mhw` refuses a mixed pair.** A cell's `mhw` is a category and a region's is an extent in
+  percent, so `secondMismatch` drops B's line and the chip says why. `sst` and `anom` are the
+  same quantity at either scope and mix freely.
+- **The chart colours by selection, not value, while B is drawn.** Two lines on one value ramp
   are the same colour wherever they agree. The visualMap and the normal line are dropped;
   A and B take `utils/points.ts`'s `PIN_COLORS` (green, violet — not amber `MAP` or sky
-  `CMP`), and the chip row is the legend. The pins carry an `A`/`B` letter, A's only while B
-  exists.
+  `CMP`), and the chip row is the legend. Pins carry an `A`/`B` letter, A's only while B
+  exists; a region B is outlined in violet beside A's green box (`FieldMap`'s `REGION_SLOTS`).
 - **A click on a pin or popup is ignored by the map's click handler.** Both sit inside the
   canvas container, so without that check opening B's popup also moved A there.
-- URL key `at2=`; `View.point2` (`null` removes, absent leaves alone). The series CSV gains
-  `<column>_a,<column>_b`, joined on bucket start, named `<A>_vs_<B>`. Events:
-  `point_added` (`source: button | alt`), `point_removed`.
+- URL keys `at2=` / `r2=`; `View.point2` / `View.region2` (`null` removes, absent leaves
+  alone). The series CSV gains `<column>_a,<column>_b`, joined on bucket start, named
+  `<A>_vs_<B>`. Events: `point_added` (`source`, `scope`), `region_added`, `point_removed`
+  (`kind`).
 
 #### Swipe compare
 
@@ -2250,7 +2349,7 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
 `baseline_note_opened` (`variable`),
 `about_opened`, `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
-`compare_toggled` (`on`), `point_added` (`source`), `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
+`compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
 range), `story_started` (`fromLink`), `story_step` (`direction`), `story_exited`
 (`step`, `of`, `completed`). `playback_started` now carries `until` for a story's bounded run.
 Server-side:

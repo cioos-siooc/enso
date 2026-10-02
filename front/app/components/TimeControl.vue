@@ -280,9 +280,13 @@ function exportSeries() {
   // B only once it has loaded; a file must not name a cell it has no column for.
   const second = store.activeSecondSeries?.dates.length ? store.activeSecondSeries : null
   const pointSlug = (s: typeof series) => (s.cell ? cellSlug(s.cell) : 'point')
-  const subject = store.scope === 'region'
+  const aSlug = store.scope === 'region'
     ? slug(store.activeRegionMeta?.label ?? store.activeRegion ?? 'region')
-    : second ? `${pointSlug(series)}_vs_${pointSlug(second)}` : pointSlug(series)
+    : pointSlug(series)
+  const bSlug = second && (store.secondRegion
+    ? slug(store.secondRegionMeta?.label ?? store.secondRegion)
+    : pointSlug(second))
+  const subject = bSlug ? `${aSlug}_vs_${bSlug}` : aSlug
   const dates = [...series.dates, ...(second?.dates ?? [])].sort()
   const span = `${dates[0]}_${dates[dates.length - 1]}`
   // Worth knowing precisely because it is the feature least visible in the UI —
