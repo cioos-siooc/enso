@@ -72,3 +72,70 @@ export function colorScale(
     return `rgb(${mix[0]}, ${mix[1]}, ${mix[2]})`
   }
 }
+
+/**
+ * The darkest a colour may be when it is drawn as INK on the app's dark panels.
+ *
+ * The ramps' extremes are near-black — RdBu_r ends at #67001f and #053061,
+ * turbo at #30123b and #7a0403, mhw's Cat 5 is #991a00 — which is right on the
+ * map, where they are filled areas over the basemap, and nearly invisible as a
+ * 1.5px chart line or a headline number on a near-black card. That is backwards
+ * for a dashboard: the extremes are what the reader is meant to notice.
+ *
+ * Relative luminance (WCAG), not HSL lightness, because the eye does not weigh
+ * hues equally: a blue needs far more lightness than a yellow to read the same.
+ * 0.16 is ~3.5:1 against slate-900, above WCAG's 3:1 for graphics.
+ */
+const MIN_INK_LUMINANCE = 0.16
+
+function luminance([r, g, b]: [number, number, number]): number {
+  const lin = (c: number) => {
+    const s = c / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const k = (n: number) => (n + h / 30) % 12
+  const a = s * Math.min(l, 1 - l)
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))
+  return [f(0), f(8), f(4)].map(v => Math.round(v * 255)) as [number, number, number]
+}
+
+function rgbToHsl([r, g, b]: [number, number, number]): [number, number, number] {
+  const [rn, gn, bn] = [r / 255, g / 255, b / 255]
+  const max = Math.max(rn, gn, bn)
+  const min = Math.min(rn, gn, bn)
+  const l = (max + min) / 2
+  const d = max - min
+  if (d === 0) return [0, 0, l]
+  const s = d / (1 - Math.abs(2 * l - 1))
+  const h = max === rn ? ((gn - bn) / d) % 6 : max === gn ? (bn - rn) / d + 2 : (rn - gn) / d + 4
+  return [(h * 60 + 360) % 360, s, l]
+}
+
+/**
+ * `color` lifted, keeping its hue and saturation, until it reads on a dark
+ * panel. Colours already bright enough come back unchanged, so only the dark
+ * ends of a ramp move and the middle still matches the map exactly.
+ */
+export function legibleOnDark(color: string): string {
+  const c = rgb(color)
+  if (luminance(c) >= MIN_INK_LUMINANCE) return color
+  const [h, s, l] = rgbToHsl(c)
+  let lo = l
+  let hi = 1
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2
+    if (luminance(hslToRgb(h, s, mid)) < MIN_INK_LUMINANCE) lo = mid
+    else hi = mid
+  }
+  const [r, g, b] = hslToRgb(h, s, hi)
+  return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`
+}
+
+/** `stops` with every colour passed through `legibleOnDark`. */
+export function legibleStops(stops: ColorStop[]): ColorStop[] {
+  return stops.map(s => ({ ...s, color: legibleOnDark(s.color) }))
+}

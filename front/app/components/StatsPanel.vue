@@ -80,7 +80,7 @@
 <script setup lang="ts">
 import type { Series } from '~/stores/main'
 import type { ColorStop } from '~/utils/colorScale'
-import { NO_CLASS_COLOR, colorScale } from '~/utils/colorScale'
+import { NO_CLASS_COLOR, colorScale, legibleStops } from '~/utils/colorScale'
 import { bucketLabel, type Period } from '~/utils/periods'
 import { ordinal, summarise, wholeClasses } from '~/utils/stats'
 
@@ -113,7 +113,7 @@ const props = defineProps<{
 }>()
 
 const stats = computed(() => summarise(props.series, props.selectedDate))
-const scale = computed(() => colorScale(props.stops, props.categorical ? NO_CLASS_COLOR : undefined))
+const scale = computed(() => colorScale(legibleStops(props.stops), props.categorical ? NO_CLASS_COLOR : undefined))
 
 const currentColor = computed(() =>
   stats.value.current ? scale.value(stats.value.current.value) : 'var(--ui-text-muted)')

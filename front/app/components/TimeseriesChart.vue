@@ -50,7 +50,7 @@
 <script setup lang="ts">
 import * as echarts from 'echarts'
 import type { Series } from '~/stores/main'
-import { NO_CLASS_COLOR, type ColorStop } from '~/utils/colorScale'
+import { NO_CLASS_COLOR, legibleStops, type ColorStop } from '~/utils/colorScale'
 import { wholeClasses } from '~/utils/stats'
 import { PIN_COLORS, type PinKey } from '~/utils/points'
 import { formatLog2Percent } from '~/utils/land'
@@ -258,7 +258,8 @@ function markLine(): echarts.SeriesOption['markLine'] {
  */
 function visualMap(): echarts.EChartsOption['visualMap'] {
   const land = primary.value?.surface === 'land'
-  const stops = (land ? props.landStops : props.stops) ?? []
+  // Lifted for the dark pane: a thin line in RdBu_r's #67001f is near-invisible.
+  const stops = legibleStops((land ? props.landStops : props.stops) ?? [])
   if (stops.length < 2 || twoPoints.value) return undefined
   if (props.categorical && !land) {
     // Piecewise, for the same reason the map's ramp is a `step`: there is no
