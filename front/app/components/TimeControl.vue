@@ -147,6 +147,7 @@
           @click="stepCompare(1)"
         />
       </template>
+      <CompareHelp :size="size" />
     </div>
 
     <!-- Exports the series the chart is drawing, at the current variable and

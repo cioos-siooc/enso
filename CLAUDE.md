@@ -2348,7 +2348,7 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
 `baseline_note_opened` (`variable`), `region_about_opened` (`region`),
 `about_opened`, `intro_closed` (`action: dismiss | guide`), `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
-`compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
+`compare_toggled` (`on`), `compare_help_opened` (`place`, `date`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
 range).
 Server-side:
 `land_point_queried` (`surface`, `buckets`), `point_queried` (including the out-of-domain 400 — where people click outside the box is
