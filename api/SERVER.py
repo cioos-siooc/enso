@@ -632,6 +632,39 @@ def named_region_geometry(key: str) -> dict:
     }
 
 
+@app.get("/region/{key}/about")
+def named_region_about(key: str) -> dict:
+    """Why a region is on the menu, how its edges are drawn, and the citations.
+
+    Out of `/domain` for the same reason as the geometry: ~20 KB of prose for 22
+    regions would nearly double a payload every page load fetches, to serve a
+    panel most visitors never open. Not instrumented here; the frontend reports
+    the opening, which is the choice.
+    """
+    region = regions().get(key)
+    if region is None:
+        raise HTTPException(404, f"unknown region {key!r}; known: {sorted(regions())}")
+    about, outline = region.about, region.outline
+    return {
+        "key": region.key,
+        "label": region.label,
+        "why": about.why,
+        "definition": about.definition,
+        "references": [
+            {"authors": r.authors, "year": r.year, "title": r.title,
+             "source": r.source, "url": r.url}
+            for r in about.references
+        ],
+        # A polygon's geometry source, from its own file. Null for a box, whose
+        # bounds (in `/domain`) are the whole definition.
+        "outline": (
+            {"source": outline.source, "url": outline.url, "retrieved": outline.retrieved}
+            if outline is not None
+            else None
+        ),
+    }
+
+
 @app.get("/region/{key}/monthlyRanking")
 def named_region_ranking(
     key: str,

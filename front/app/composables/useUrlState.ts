@@ -20,8 +20,6 @@
 import { useMainStore, type VariableName } from '~/stores/main'
 import { LAND_SOURCES, type LandMode, type LandSource } from '~/utils/land'
 import { PERIODS, type Period } from '~/utils/periods'
-import { findStory } from '~/stories'
-import { useStory } from '~/composables/useStory'
 
 /** Query keys, kept short because these links get pasted into chat and email. */
 const KEYS = {
@@ -38,9 +36,6 @@ const KEYS = {
   /** The land overlay (`tmax` | `tmin` | `precip`) and its mode; absent when off. */
   land: 'land',
   landMode: 'lm',
-  /** A guided story and its 1-based step. */
-  story: 'story',
-  step: 'step',
 } as const
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -71,20 +66,10 @@ function first(value: unknown): string | null {
 export function useUrlState() {
   const store = useMainStore()
   const route = useRoute()
-  const story = useStory()
 
-  /**
-   * Read the query into the store. A story link opens the story at its step,
-   * whose own view wins over any other key; anything else is one `applyView`.
-   */
+  /** Read the query into the store, as one `applyView`. */
   async function applyQuery() {
     const q = route.query
-    const storyKey = first(q[KEYS.story])
-    if (storyKey && findStory(storyKey)) {
-      await story.start(storyKey, Number(first(q[KEYS.step]) ?? 1) - 1, { fromLink: true })
-      return
-    }
-
     const variable = first(q[KEYS.variable]) as VariableName | null
     const period = first(q[KEYS.period]) as Period | null
     const date = first(q[KEYS.date])
@@ -117,13 +102,6 @@ export function useUrlState() {
     const q: Record<string, string> = {
       [KEYS.variable]: store.variable,
       [KEYS.period]: store.period,
-    }
-    // A story link reopens on the step, and the step's own view is what it
-    // shows; the view keys are written too, so the link still says what is on
-    // screen to someone reading it.
-    if (story.active.value) {
-      q[KEYS.story] = story.active.value.key
-      q[KEYS.step] = String(story.step.value + 1)
     }
     if (store.selectedDate) q[KEYS.date] = store.selectedDate
     if (store.compareDate) q[KEYS.compare] = store.compareDate
@@ -168,8 +146,7 @@ export function useUrlState() {
       () => [store.variable, store.period, store.selectedDate, store.compareDate, store.scope,
              store.landLayer, store.landMode,
              store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon,
-             store.secondPoint, store.secondRegion, store.secondSeries?.cell?.lat, store.secondSeries?.cell?.lon,
-             story.active.value?.key, story.step.value],
+             store.secondPoint, store.secondRegion, store.secondSeries?.cell?.lat, store.secondSeries?.cell?.lon],
       sync,
       { flush: 'post' },
     )

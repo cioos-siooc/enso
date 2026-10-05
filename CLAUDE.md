@@ -589,7 +589,7 @@ no-overlap rule geometrically, column by column.
   row's text from `noValueLabel`. The scale machinery takes `LayerName`, so each land layer
   has its own remembered range (`enso.scale.land_*`).
 - **Playback awaits the land frame as well as the ocean's.** URL keys are `land=` and `lm=`.
-  `View`/`applyView` carry them, so stories and links can set the overlay. Swipe compare needs
+  `View`/`applyView` carry them, so a link can set the overlay. Swipe compare needs
   nothing: each `FieldMap` draws its own land for its own date.
 - **One quad in both projections.** The land frame sits inside ±180, so it never needs the
   ocean raster's globe west copy, and must not cross 180 (see above).
@@ -865,6 +865,16 @@ four outlines it was compared on. **Its longitude frame is centred on the box, n
 at the west edge.** The box's first column can sit half a cell west of the ring, and a frame
 starting at the edge wrapped that cell 360° east. That made `pacific_bioregions` 26,224
 cells instead of 26,222 until it was fixed.
+
+**Every region must say why it is there, and cite it.** Each declares `about: {why,
+definition, references}` in `domain.yml`, and `regions()` raises on a missing block, an
+empty field, no references, or a reference without an https URL. A polygon region's outline
+source is read from its GeoJSON `properties`, not restated. An info button beside
+the region menu (`ScopeControl.vue`) opens it in a popover (`RegionNote.vue`), fetched on
+first open from `/region/{key}/about`, because the ~20 KB of text would nearly double `/domain`. Every DOI was
+checked against Crossref on 2026-10-05. Where a box is this project's own rather than a
+published index (`ne_pacific`, `gulf_of_alaska`, `bering_sea`), its `definition` says so,
+and `pdo_north_pacific`'s says its mean is not the PDO index.
 
 **Whole-circle boxes (`global`, `southern`) draw no meridian edge.** Their west and east
 sides meet, so `FieldMap.regionPolygon` keeps the polygon for the fill and outlines only the
@@ -1424,6 +1434,7 @@ FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is n
 | `POST /regionTimeseries` | `{lat: [a,b], lon: [a,b], ...}` → area-mean over an arbitrary box |
 | `GET /region/{key}` | same, for a named `domain.yml` region, using `region_clim` |
 | `GET /region/{key}/geometry` | a polygon region's outline as GeoJSON; 404 for a plain box |
+| `GET /region/{key}/about` | why the region matters, how its edges are drawn, its references, and a polygon's outline source |
 | `POST /monthlyRanking` | every calendar month at a cell ranked within its month-of-year, plus every year ranked against every other (`annual`) |
 | `GET /region/{key}/monthlyRanking` | the same two rankings over a named region, from `region_daily` |
 | `GET /image/{date}.webp` | one bucket as a Web-Mercator WebP |
@@ -1703,8 +1714,6 @@ app/components/StateRibbon.vue     the basin's state in one line, under the head
 app/pages/index.vue                numbers + ranks dock on the left, map over the chart
 app/components/AnomalyMap.vue      map host: projection, camera, swipe-compare divider
 app/components/FieldMap.vue        one MapboxGL map drawing the field for one date
-app/components/StoryPicker.vue     header button + list of guided stories
-app/components/StoryCard.vue       the current story step's caption and Prev/Next
 app/components/TimeControl.vue     "when": period toggle, date stepper, playback, Compare (Point / Date)
 app/components/ColorLegend.vue     gradient + the colour range control (popover)
 app/components/BaselineNote.vue    what the chart's values are measured against (+ popover)
@@ -1714,17 +1723,16 @@ app/components/ScopeControl.vue    point / named-region switch, over the map
 app/components/StatsPanel.vue      the dock's headline value and stat cards
 app/components/MonthlyRankPanel.vue  the map's month, every year ranked (under the cards)
 app/components/SideDock.vue        resizable left-hand dock (drag handle, remembered width)
+app/components/IntroCard.vue       first-visit card: three gestures + a link to the guide
 app/composables/useApi.ts          axios wrapper
 app/composables/usePlayback.ts     page-wide play/stop loop + frame prefetch for the map animation
 app/composables/useViewport.ts     the shared phone-width flag (false under SSR)
-app/composables/useStory.ts        the active story and stepping through it
 app/composables/useUrlState.ts     query params <-> store, so a view can be linked
 app/utils/periods.ts               daily/weekly/monthly bucket maths (mirrors the API)
 app/utils/ranking.ts               ranking layout + both ECharts options (pure -> testable headlessly)
 app/utils/colorScale.ts            domain.yml's colour stops evaluated at a single value
 app/utils/csv.ts                   CSV export of the plotted series and the rankings (pure text + one download)
 app/utils/mapView.ts               CameraView, ProjectionName, the globe's opening view
-app/stories/index.ts               the guided stories, as View steps with captions
 app/app.config.ts                  maps Nuxt UI's internal icons onto mdi
 app/stores/main.ts                 Pinia store
 ```
@@ -1756,6 +1764,15 @@ with `undefined` uses Node's container locale on the server and the visitor's in
 browser, which is a hydration mismatch and nothing else — three of them, found by driving
 Chromium. `utils/periods.ts` already pinned `'en-GB'`; the ribbon and `StatsPanel` now do too.
 
+#### The first-visit card
+
+**`IntroCard.vue` is a card over the map, not a modal**, because the map is what a first
+visit learns from. Three gestures (click the map, click the chart, pick a region) and a
+`Full guide` link that opens `AboutDialog`'s guide tab through `useGuide()`'s shared state.
+Dismissing it, either way, sets `enso.intro.seen`. **It never shows on a link with a query
+string**, which is read at setup, before `useUrlState` writes the defaults back: someone sent
+to a view came to see it. It is centred on the map.
+
 #### Linkable views
 
 **`useUrlState()` keeps the address bar saying what is on screen** — `?v=anom&p=weekly&d=2026-08-24&at=47.98,-127.98`,
@@ -1779,10 +1796,9 @@ Three things about it:
   having changed the variable. The URL writes the resolved **cell**, not the raw click, so
   a link reopens on the same grid cell.
 
-**Applying a view is `store.applyView(view)`, and a story step uses the same action.** The
-URL is parsed into a `View` and handed over, so a link and a story step cannot disagree about
-how a view is entered. Two more keys: `c=YYYY-MM-DD` is swipe compare's second date, and
-`story=<key>&step=<n>` opens a story at a step, whose own view wins over every other key.
+**Applying a view is `store.applyView(view)`.** The URL is parsed into a `View` and handed
+over, so there is one definition of entering a view. One more key: `c=YYYY-MM-DD` is swipe
+compare's second date.
 
 #### Two-selection compare
 
@@ -1871,31 +1887,14 @@ anything that is only styling uses Tailwind's `md:`, the same breakpoint.
 - **Playback prefetches 3 frames and holds 8 on a phone**, not 8 and 24. The frames cannot
   be made lighter instead: a smaller image tier would have to be rendered from NetCDF, and
   only the retention window is on disk.
-- A story's card takes the peek bar's place, **outside** the `UDrawer`: the drawer's default
-  slot is its trigger, so a Next button inside it would also open the sheet.
+- **`usePlayback()` is module-level state**, one playhead for the page. It does not stop
+  itself on unmount; `TimeControl` does that.
 
-#### Guided stories
-
-**`stories/index.ts` holds them, as `View` steps with a caption each**, plus an optional
-`play: { until }` that plays the map from the step's date to that bucket and stops. They are
-editorial copy, not data, so they live in the frontend rather than in `domain.yml`.
-`tests/stories.test.ts` checks every step's region key against `shared/domain.yml`, because
-`applyView` silently ignores a key it does not know.
-
-**`draft: true` stories show in dev only**, and `StoryPicker` renders nothing when there are
-no stories, so production shows no Stories button until a real one exists. **The only story
-today is a draft placeholder** (`player-check`) exercising every kind of step. The real
-stories are waiting on the user's event list.
-
-- **`useStory()` is page-wide state**, like the playhead: the picker starts a story, the
-  card steps it, and the URL writes it.
-- **Exit puts back the view from before the story, camera included.**
-  `store.mapCamera` is written on the primary map's `moveend` and once on load, since the
-  constructor's own view fires none. A story opened from a link has no prior view, so exit
-  leaves the app where the story left it.
-- **`usePlayback()` is module-level state**, one playhead for the page, so the time bar's
-  button shows a story's playback as playing. It no longer stops itself on unmount;
-  `TimeControl` does that.
+**Guided stories were built in v2.0 and removed on 2026-10-05**, before any real story was
+written (the only one was a draft placeholder). Gone with them: `StoryPicker`, `StoryCard`,
+`useStory`, `stories/index.ts`, the `story=`/`step=` URL keys, `View.camera`,
+`store.currentView()`/`mapCamera`/`cameraRequest`, and playback's `until` bound. A
+`story=` link now opens on its other keys and the story key is dropped from the URL.
 
 #### Downloading what is plotted
 
@@ -2347,11 +2346,10 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `variable_changed`, `period_changed`, `playback_started`, `color_range_changed`,
 `csv_downloaded` (`kind: series | ranking`, plus `quantity` and, on a ranking,
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
-`baseline_note_opened` (`variable`),
-`about_opened`, `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
+`baseline_note_opened` (`variable`), `region_about_opened` (`region`),
+`about_opened`, `intro_closed` (`action: dismiss | guide`), `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
 `compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
-range), `story_started` (`fromLink`), `story_step` (`direction`), `story_exited`
-(`step`, `of`, `completed`). `playback_started` now carries `until` for a story's bounded run.
+range).
 Server-side:
 `land_point_queried` (`surface`, `buckets`), `point_queried` (including the out-of-domain 400 — where people click outside the box is
 the argument for widening it, which costs only a `domain.yml` edit), `point_ranking_queried`,
@@ -2846,10 +2844,6 @@ Verified on v2.0 (Chromium, per the recipe above; desktop 1440×900 and phone 39
 - **Phone.** No horizontal overflow; the sheet opens with the stats and the ranking; the
   divider drags by touch (50% → 19%); playback advances; the chart's canvas matches its
   container after the time bar wraps.
-- **Stories.** Each placeholder step applies its view and camera. The play step starts at
-  `2015-03-02` and stops at `2015-05-04`. Finish restores the prior variable, period, date,
-  cell and camera. `story=player-check&step=2` opens on step 2. The phone card steps
-  without opening the sheet.
 - **`/health`** stays 200 with a 17-day lag; **`/health/data`** answers 503 at the default
   3 days and 200 with `STALE_AFTER_DAYS=30`.
 - **`CRW.cli check`** on the dev database fails exactly the two known problems (empty

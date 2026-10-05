@@ -98,7 +98,7 @@ class Subset:
 
 @dataclass(frozen=True)
 class Reference:
-    """One citation, for a method this project did not invent.
+    """One citation, for a method or a region this project did not invent.
 
     Kept structured rather than as a formatted string because the frontend
     renders the author/year as the link text and the full citation as its
@@ -106,10 +106,43 @@ class Reference:
     """
 
     authors: str
-    year: int
     title: str
     source: str
     url: str
+    # None for a living web page or dataset record (NOAA's ONI table, DFO's
+    # bioregions), which has no single publication year to cite.
+    year: int | None = None
+
+
+@dataclass(frozen=True)
+class RegionAbout:
+    """Why a region is on the menu, what its edges are, and who says so.
+
+    Required on every region, because a region is a claim: that this area is
+    worth an area mean, and that its boundary is the one the label names. A
+    region added without saying why, or without a source a reader can check,
+    is one nobody can defend later.
+    """
+
+    # Why the area matters, in plain words: the event or mode it is known for.
+    why: str
+    # What the boundary is and who drew it, including the caveats — "a box
+    # chosen for this dashboard", "not the index itself".
+    definition: str
+    references: tuple[Reference, ...]
+
+
+@dataclass(frozen=True)
+class Outline:
+    """Where a polygon region's geometry came from, read off its GeoJSON.
+
+    The file is the one record of this, so it is read rather than restated in
+    `domain.yml`, where a second copy could drift from the geometry it names.
+    """
+
+    source: str
+    url: str | None
+    retrieved: str | None
 
 
 @dataclass(frozen=True)
@@ -419,6 +452,9 @@ class Region:
     # the islands inside a maritime zone are land, and land is excluded by
     # `sst_daily` holding ocean cells only, not by the geometry.
     polygon: tuple[tuple[tuple[float, float], ...], ...] | None = None
+    about: RegionAbout | None = None
+    # A polygon region's provenance; None for a box, whose bounds are its definition.
+    outline: Outline | None = None
 
     @property
     def masked(self) -> bool:
@@ -688,6 +724,36 @@ def _load_polygon(filename: str) -> tuple[tuple[tuple[float, float], ...], ...]:
     return rings
 
 
+def _load_outline(filename: str) -> Outline:
+    """The provenance a polygon file records about itself, in its properties."""
+    with (_REGION_DIR / filename).open() as fh:
+        props = json.load(fh).get("properties") or {}
+    if not props.get("source"):
+        raise ValueError(f"{filename}: properties carry no `source`")
+    return Outline(
+        source=props["source"],
+        url=props.get("source_url"),
+        retrieved=props.get("retrieved"),
+    )
+
+
+def _region_about(key: str, cfg: dict | None) -> RegionAbout:
+    """Parse a region's `about` block, raising where it would not defend it."""
+    if not cfg:
+        raise ValueError(f"region {key!r}: no `about` block; say why it matters and cite it")
+    for field in ("why", "definition"):
+        if not str(cfg.get(field) or "").strip():
+            raise ValueError(f"region {key!r}: about.{field} is empty")
+    refs = tuple(Reference(**r) for r in cfg.get("references") or ())
+    if not refs:
+        raise ValueError(f"region {key!r}: about.references is empty")
+    for r in refs:
+        if not r.url.startswith("https://"):
+            raise ValueError(f"region {key!r}: reference {r.title!r} has no https url")
+    return RegionAbout(why=cfg["why"].strip(), definition=cfg["definition"].strip(),
+                       references=refs)
+
+
 def region_groups() -> dict[str, str]:
     """Region menu headings, key -> label, in menu order."""
     return dict(_raw().get("region_groups") or {})
@@ -737,5 +803,7 @@ def regions() -> dict[str, Region]:
             partial=cfg.get("partial", False),
             group=group,
             polygon=polygon,
+            about=_region_about(key, cfg.get("about")),
+            outline=_load_outline(cfg["polygon"]) if polygon is not None else None,
         )
     return out

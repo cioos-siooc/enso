@@ -28,10 +28,30 @@
         title="Area mean over a named region — pick one"
       />
     </UDropdownMenu>
+    <!-- What the region is and why it is on the menu, beside the name it
+         explains. Region scope only: a cell needs no defending. -->
+    <UPopover
+      v-if="store.scope === 'region' && store.activeRegionMeta"
+      :content="{ align: 'start', side: 'bottom' }"
+      :ui="{ content: 'w-96 max-w-[calc(100vw-2rem)]' }"
+      @update:open="(o: boolean) => o && trackEvent('region_about_opened', { region: store.activeRegion })"
+    >
+      <UButton
+        icon="i-mdi-information-outline"
+        color="primary"
+        variant="solid"
+        :aria-label="`About ${store.activeRegionMeta.label}`"
+        title="Why this region, how it is defined, and references"
+      />
+      <template #content>
+        <RegionNote :region-key="store.activeRegionMeta.key" :region-label="store.activeRegionMeta.label" />
+      </template>
+    </UPopover>
   </UFieldGroup>
 </template>
 
 <script setup lang="ts">
+import { trackEvent } from '~/composables/useAnalytics'
 import { useMainStore } from '~/stores/main'
 
 const store = useMainStore()

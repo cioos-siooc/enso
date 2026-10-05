@@ -27,7 +27,6 @@
         <!-- <UBadge v-if="store.coverage" variant="subtle" color="neutral">
           {{ store.coverage.start }} &ndash; {{ store.coverage.end }}
         </UBadge> -->
-        <StoryPicker />
         <AboutDialog />
       </header>
 

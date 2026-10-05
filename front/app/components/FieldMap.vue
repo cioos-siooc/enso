@@ -160,6 +160,18 @@ function showMarker(lat: number, lon: number) {
   marker.setLngLat([lon, lat]).addTo(map)
 }
 
+/**
+ * A's pin is drawn only in point scope. In region scope the chart and the dock
+ * read the region, so a pin left at the last clicked cell would claim a series
+ * that is no longer on screen. The cell is kept in the store and the pin comes
+ * back with point scope.
+ */
+function syncMarkerA() {
+  const point = store.selectedPoint
+  if (store.scope === 'point' && point) showMarker(point.lat, point.lon)
+  else marker?.remove()
+}
+
 function syncLetterA() {
   if (letterA) letterA.style.display = store.hasSecond ? '' : 'none'
 }
@@ -780,9 +792,8 @@ onMounted(() => {
   })
 
   // The store seeds a default cell, so the pin has to be there before the
-  // first click whenever the chart is describing it. In region scope it waits
-  // for the scope watcher below.
-  if (store.scope === 'point' && store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
+  // first click whenever the chart is describing it.
+  syncMarkerA()
   syncMarkerB()
   syncCursor()
 
@@ -835,16 +846,14 @@ watch(
 // selection drawn twice, not a layer with a toggle of its own. Flying the camera
 // to it is the host's job (`AnomalyMap.frameRegion`).
 watch(() => [store.scope, store.activeRegion, store.secondRegion], () => {
-  if (store.scope === 'point' && !marker && store.selectedPoint) showMarker(store.selectedPoint.lat, store.selectedPoint.lon)
+  syncMarkerA()
   syncRegionBox()
 })
 
 // The pin follows the selected cell however it was chosen. A click moves it
-// directly, but a deep link, a story step or the other map in compare mode
+// directly, but a deep link or the other map in compare mode
 // change the selection without a click on THIS map.
-watch(() => store.selectedPoint, (point) => {
-  if (point) showMarker(point.lat, point.lon)
-})
+watch(() => store.selectedPoint, syncMarkerA)
 
 // B the same way. A's letter follows B of either kind.
 watch(() => store.activeSecondPoint, syncMarkerB)

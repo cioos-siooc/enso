@@ -3,7 +3,7 @@
 These were proposed while v2.0 was being planned (September 2026) and deliberately left for later.
 None of them has been started. Each entry says why it is worth doing, what in the codebase it builds on, and roughly what it costs, so whoever picks one up starts from the constraints rather than rediscovering them.
 
-v2.0 takes on the rest of that list: map swipe compare, the mobile layout, guided stories, tests + CI, `CRW.cli check` and `/health/data`. See `CLAUDE.md`.
+v2.0 takes on the rest of that list: map swipe compare, the mobile layout, tests + CI, `CRW.cli check` and `/health/data`. See `CLAUDE.md`.
 
 **Cost tiers**
 - **S**: frontend only, or a query on an existing rollup.
@@ -178,7 +178,7 @@ Needs B5 first.
 
 ### E1. French / bilingual UI (M)
 - **Why:** the project sits under CIOOS, and bilingual is likely expected.
-- **Watch:** copy is spread across `AboutDialog`, `readingGuide()` in `utils/ranking.ts`, the ribbon, the story captions, and `domain.yml` labels and baseline notes. `domain.yml` needs a per-language label scheme, not a second file.
+- **Watch:** copy is spread across `AboutDialog`, `readingGuide()` in `utils/ranking.ts`, the ribbon, and `domain.yml` labels and baseline notes. `domain.yml` needs a per-language label scheme, not a second file.
 
 ### E4. Embeddable widgets (S–M)
 The ribbon, chart or map as iframes for partner sites, reusing the components under a bare layout and driven by the same deep-link query keys.

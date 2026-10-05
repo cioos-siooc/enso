@@ -238,11 +238,7 @@ async function setProjection(name: ProjectionName) {
 
 function onPrimaryReady(map: mapboxgl.Map) {
   primary = map
-  // The constructor's own view fires no `moveend`, so the opening camera is
-  // recorded here or a story started before any pan has nothing to return to.
-  store.mapCamera = cameraOf(map)
-  map.on('moveend', () => { store.mapCamera = cameraOf(map) })
-  // A deep link or a story can pick a region before the map exists.
+  // A deep link can pick a region before the map exists.
   if (store.scope === 'region') frameRegion(false)
   if (secondary) link()
 }
@@ -352,25 +348,13 @@ watch(() => Boolean(store.compareDate), (on) => {
   secondary = null
 })
 
-// --- Camera requests ---------------------------------------------------------
+// --- Framing the selected region ---------------------------------------------
 
 // The box follows the scope and the chosen region together, and the camera
 // follows the box. Leaving point scope deliberately moves nothing: the pin is
 // already where the user clicked, so a flight there would be a jolt with no
 // destination.
 watch(() => [store.scope, store.activeRegion], () => frameRegion())
-
-// A view someone else chose, a story step. The compare map follows through the link.
-watch(() => store.cameraRequest, (view) => {
-  if (!view || !primary) return
-  primary.flyTo({
-    center: view.center,
-    zoom: view.zoom,
-    bearing: view.bearing ?? 0,
-    pitch: view.pitch ?? 0,
-    duration: 1200,
-  })
-})
 
 onBeforeUnmount(() => {
   paneObserver?.disconnect()

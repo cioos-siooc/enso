@@ -1,8 +1,7 @@
 /**
- * Camera vocabulary shared by the map host, both field maps and the stories.
+ * Camera vocabulary shared by the map host and both field maps.
  *
- * Kept out of the components so a story step can name a view without importing
- * a `.vue` file, and so the globe's opening view has one definition.
+ * Kept out of the components so the globe's opening view has one definition.
  */
 
 export type ProjectionName = 'globe' | 'mercator'

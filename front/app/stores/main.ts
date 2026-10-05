@@ -5,7 +5,6 @@ import type { ColorStop } from '~/utils/colorScale'
 import type { Period } from '~/utils/periods'
 import type { MonthlyRanking } from '~/utils/ranking'
 import { bucketEnd, bucketStart } from '~/utils/periods'
-import type { CameraView } from '~/utils/mapView'
 import type { LandCoverage, LandMode, LandSource, LandVariableName } from '~/utils/land'
 import { landLayerName, landModeFor, landUnavailableReason } from '~/utils/land'
 
@@ -58,9 +57,9 @@ export type Scope = 'point' | 'region'
 /**
  * Everything that makes up "what is on screen", as data.
  *
- * A deep link and a story step are both one of these, applied by `applyView`,
- * so there is one definition of putting the app into a view. Every field is
- * optional: absent means "leave it as it is".
+ * A deep link is one of these, applied by `applyView`, so there is one
+ * definition of putting the app into a view. Every field is optional: absent
+ * means "leave it as it is".
  */
 export interface View {
   variable?: VariableName
@@ -79,7 +78,6 @@ export interface View {
   /** The land overlay; `null` turns it off. */
   landLayer?: LandSource | null
   landMode?: LandMode
-  camera?: CameraView
 }
 
 /** A variable's displayed range — what the colour ramp is spread over. */
@@ -693,18 +691,6 @@ export const useMainStore = defineStore('main', {
      * how far from normal is the question the dashboard exists for.
      */
     landMode: 'anomaly' as LandMode,
-    /**
-     * A camera move someone other than the map asked for — a story step. The
-     * map host watches it and flies there. `seq` makes asking for the same
-     * view twice still a change.
-     */
-    cameraRequest: null as (CameraView & { seq: number }) | null,
-    /**
-     * Where the main map last came to rest. Written on `moveend` only, so a pan
-     * is one write rather than sixty a second; read by `currentView()`, so
-     * leaving a story puts the camera back as well as the selection.
-     */
-    mapCamera: null as CameraView | null,
   }),
 
   getters: {
@@ -1417,7 +1403,7 @@ export const useMainStore = defineStore('main', {
      */
     async applyView(view: View) {
       const patch: { variable?: VariableName, period?: Period } = {}
-      // Gated exactly as the toggle is: a stale link or a story written before
+      // Gated exactly as the toggle is: a stale link written before
       // an archive was complete must not open on a variable the app would
       // refuse to draw, and silently falling back beats an empty map.
       if (view.variable && view.variable !== this.variable && this.variableReady(view.variable)) {
@@ -1489,31 +1475,6 @@ export const useMainStore = defineStore('main', {
       // one that only turns the land overlay on reaches nothing at all.
       void this.refreshSecondPoint()
       void this.refreshLand()
-
-      if (view.camera) this.requestCamera(view.camera)
-    },
-
-    /** The view on screen now, camera included, for putting back later. */
-    currentView(): View {
-      return {
-        ...(this.mapCamera ? { camera: { ...this.mapCamera } } : {}),
-        variable: this.variable,
-        period: this.period,
-        date: this.selectedDate ?? undefined,
-        compareDate: this.compareDate,
-        landLayer: this.landLayer,
-        landMode: this.landMode,
-        ...(this.scope === 'region' && this.activeRegion
-          ? { region: this.activeRegion }
-          : this.selectedPoint ? { point: { ...this.selectedPoint } } : {}),
-        point2: this.secondPoint ? { ...this.secondPoint } : null,
-        region2: this.secondRegion,
-      }
-    },
-
-    /** Fly the map somewhere. See `cameraRequest`. */
-    requestCamera(view: CameraView) {
-      this.cameraRequest = { ...view, seq: (this.cameraRequest?.seq ?? 0) + 1 }
     },
 
     /** Switch averaging window; re-snaps the date and reloads the point series. */

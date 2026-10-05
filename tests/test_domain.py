@@ -77,6 +77,27 @@ def test_unknown_region_group_raises(edited_domain):
         edited_domain(edit).regions()
 
 
+@pytest.mark.parametrize("edit, match", [
+    (lambda a: a.clear(), "no `about` block"),
+    (lambda a: a.update(why="  "), "about.why"),
+    (lambda a: a.update(references=[]), "references is empty"),
+    (lambda a: a["references"][0].update(url="doi.org/x"), "no https url"),
+])
+def test_region_about_required(edited_domain, edit, match):
+    """A region nobody can say why it is there, or cite, does not load."""
+    def change(raw):
+        edit(raw["regions"]["nino34"]["about"])
+    with pytest.raises(ValueError, match=match):
+        edited_domain(change).regions()
+
+
+def test_polygon_regions_carry_their_outline_source():
+    _clear()
+    for r in domain.regions().values():
+        assert r.about.references
+        assert (r.outline is not None) == r.masked, r.key
+
+
 def test_every_region_is_grouped():
     _clear()
     groups = domain.region_groups()

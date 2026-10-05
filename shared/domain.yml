@@ -659,6 +659,28 @@ regions:
     group: basins
     label: Pacific Ocean (GOaS)
     polygon: pacific.geojson
+    about:
+      why: >-
+        The ocean ENSO happens in. El Niño and La Niña reorganise sea surface
+        temperature across the whole basin, and their effects on weather reach
+        far beyond it. This is also the area the header's heatwave sentence
+        reports on.
+      definition: >-
+        The North and South Pacific of the Global Oceans and Seas dataset, plus
+        its South China and Eastern Archipelagic Seas, so the western Pacific
+        warm pool is included. From 60°S to the Bering Strait; the Gulf of
+        Mexico and the Caribbean are excluded.
+      references:
+        - authors: McPhaden, Zebiak & Glantz
+          year: 2006
+          title: "ENSO as an integrating concept in Earth science"
+          source: "Science 314, 1740-1745"
+          url: "https://doi.org/10.1126/science.1132588"
+        - authors: Flanders Marine Institute (VLIZ)
+          year: 2021
+          title: "Global Oceans and Seas, version 1"
+          source: "Marine Regions"
+          url: "https://doi.org/10.14284/542"
   # --- ENSO indices, computable for the first time now the domain reaches
   # south of the equator.
   nino34:
@@ -666,43 +688,209 @@ regions:
     label: Nino 3.4
     lat: [-5.0, 5.0]
     lon: [190.0, 240.0]
+    about:
+      why: >-
+        The standard El Niño / La Niña index region. NOAA's Oceanic Niño Index
+        is the three-month running mean of its temperature anomaly, and the
+        dashboard's ENSO phase is computed from it the same way.
+      definition: >-
+        5°S-5°N, 170°W-120°W. Barnston et al. (1997) identified it as the region
+        whose temperature tracks ENSO most closely. It straddles the boundary
+        between Niño 3 and Niño 4, overlapping both.
+      references:
+        - authors: Barnston, Chelliah & Goldenberg
+          year: 1997
+          title: "Documentation of a highly ENSO-related SST region in the equatorial Pacific"
+          source: "Atmosphere-Ocean 35(3), 367-383"
+          url: "https://doi.org/10.1080/07055900.1997.9649597"
+        - authors: Trenberth
+          year: 1997
+          title: "The Definition of El Niño"
+          source: "Bulletin of the American Meteorological Society 78(12), 2771-2777"
+          url: "https://doi.org/10.1175/1520-0477(1997)078<2771:TDOENO>2.0.CO;2"
+        - authors: NOAA Climate Prediction Center
+          title: "Oceanic Niño Index (ONI): cold and warm episodes by season"
+          source: "NOAA CPC"
+          url: "https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/ensostuff/ONI_v5.php"
   nino3:
     group: enso
     label: Nino 3
     lat: [-5.0, 5.0]
     lon: [210.0, 270.0]
+    about:
+      why: >-
+        The eastern equatorial Pacific, where the strongest eastern Pacific El
+        Niños (1982/83, 1997/98) produced their largest warming. It was the main
+        ENSO monitoring region before Niño 3.4 took over.
+      definition: >-
+        5°S-5°N, 150°W-90°W, one of the standard Niño regions in use since the
+        1980s. Trenberth (1997) reviews how the regions came about.
+      references:
+        - authors: Trenberth
+          year: 1997
+          title: "The Definition of El Niño"
+          source: "Bulletin of the American Meteorological Society 78(12), 2771-2777"
+          url: "https://doi.org/10.1175/1520-0477(1997)078<2771:TDOENO>2.0.CO;2"
+        - authors: Rasmusson & Carpenter
+          year: 1982
+          title: "Variations in tropical sea surface temperature and surface wind fields associated with the Southern Oscillation/El Niño"
+          source: "Monthly Weather Review 110(5), 354-384"
+          url: "https://doi.org/10.1175/1520-0493(1982)110<0354:VITSST>2.0.CO;2"
   nino4:
     group: enso
     label: Nino 4
     lat: [-5.0, 5.0]
     lon: [160.0, 210.0]
+    about:
+      why: >-
+        The central and western equatorial Pacific, at the edge of the warm
+        pool. When El Niño's warming is concentrated here rather than in the
+        east, it is called a central Pacific or "Modoki" El Niño, which shifts
+        rainfall around the world differently.
+      definition: >-
+        5°S-5°N, 160°E-150°W, one of the standard Niño regions.
+      references:
+        - authors: Trenberth
+          year: 1997
+          title: "The Definition of El Niño"
+          source: "Bulletin of the American Meteorological Society 78(12), 2771-2777"
+          url: "https://doi.org/10.1175/1520-0477(1997)078<2771:TDOENO>2.0.CO;2"
+        - authors: Ashok et al.
+          year: 2007
+          title: "El Niño Modoki and its possible teleconnection"
+          source: "Journal of Geophysical Research: Oceans 112, C11007"
+          url: "https://doi.org/10.1029/2006JC003798"
   nino12:
     group: enso
     label: Nino 1+2
     lat: [-10.0, 0.0]
     lon: [270.0, 280.0]
+    about:
+      why: >-
+        The waters off Ecuador and northern Peru. Warming here is the "coastal
+        El Niño" that brings heavy rain to the Peruvian coast and disrupts its
+        fisheries. Eastern Pacific warming behaves as a separate regime from
+        central Pacific warming, so it can differ from the basin-wide picture.
+      definition: >-
+        10°S-0°, 90°W-80°W, one of the standard Niño regions.
+      references:
+        - authors: Trenberth
+          year: 1997
+          title: "The Definition of El Niño"
+          source: "Bulletin of the American Meteorological Society 78(12), 2771-2777"
+          url: "https://doi.org/10.1175/1520-0477(1997)078<2771:TDOENO>2.0.CO;2"
+        - authors: Takahashi et al.
+          year: 2011
+          title: "ENSO regimes: Reinterpreting the canonical and Modoki El Niño"
+          source: "Geophysical Research Letters 38, L10704"
+          url: "https://doi.org/10.1029/2011GL047364"
   # --- North Pacific / marine-heatwave boxes.
   ne_pacific:
     group: north_pacific
     label: NE Pacific (the Blob)
     lat: [40.0, 60.0]
     lon: [200.0, 235.0]
+    about:
+      why: >-
+        The core of "the Blob", the 2014-2016 marine heatwave, one of the
+        largest on record. It persisted for more than two years and disrupted
+        fisheries, seabirds and marine mammals from California to Alaska.
+      definition: >-
+        40°N-60°N, 160°W-125°W. A box chosen for this dashboard to cover the
+        anomaly's core as mapped by Bond et al. (2015). It is not a published
+        index region.
+      references:
+        - authors: Bond et al.
+          year: 2015
+          title: "Causes and impacts of the 2014 warm anomaly in the NE Pacific"
+          source: "Geophysical Research Letters 42, 3414-3420"
+          url: "https://doi.org/10.1002/2015GL063306"
+        - authors: Di Lorenzo & Mantua
+          year: 2016
+          title: "Multi-year persistence of the 2014/15 North Pacific marine heatwave"
+          source: "Nature Climate Change 6, 1042-1047"
+          url: "https://doi.org/10.1038/nclimate3082"
   gulf_of_alaska:
     group: north_pacific
     label: Gulf of Alaska
     lat: [50.0, 60.0]
     lon: [205.0, 225.0]
+    about:
+      why: >-
+        Where the 2014-2016 heatwave's ecological damage was clearest: Gulf of
+        Alaska Pacific cod collapsed and its federal fishery was closed in 2020,
+        and around a million common murres died of starvation.
+      definition: >-
+        50°N-60°N, 155°W-135°W. A box chosen for this dashboard; it is not a
+        published index region.
+      references:
+        - authors: Piatt et al.
+          year: 2020
+          title: "Extreme mortality and reproductive failure of common murres resulting from the northeast Pacific marine heatwave of 2014-2016"
+          source: "PLOS ONE 15(1), e0226087"
+          url: "https://doi.org/10.1371/journal.pone.0226087"
+        - authors: Barbeaux, Holsman & Zador
+          year: 2020
+          title: "Marine heatwave stress test of ecosystem-based fisheries management in the Gulf of Alaska Pacific cod fishery"
+          source: "Frontiers in Marine Science 7, 703"
+          url: "https://doi.org/10.3389/fmars.2020.00703"
   bering_sea:
     group: north_pacific
     label: Bering Sea
     lat: [55.0, 65.0]
     lon: [180.0, 200.0]
+    about:
+      why: >-
+        A shallow sea whose ecosystem depends on winter sea ice. 2017-2018
+        brought record-low ice, and after the warm years that followed, the
+        eastern Bering Sea snow crab population collapsed and its fishery was
+        closed.
+      definition: >-
+        55°N-65°N, 180°-160°W. A box chosen for this dashboard; it is not a
+        published index region. In winter much of it is ice-covered, and ice-
+        covered cells have no anomaly, so the winter anomaly covers only its
+        open water.
+      references:
+        - authors: Stabeno & Bell
+          year: 2019
+          title: "Extreme conditions in the Bering Sea (2017-2018): Record-breaking low sea-ice extent"
+          source: "Geophysical Research Letters 46, 8952-8959"
+          url: "https://doi.org/10.1029/2019GL083816"
+        - authors: Szuwalski et al.
+          year: 2023
+          title: "The collapse of eastern Bering Sea snow crab"
+          source: "Science 382, 306-310"
+          url: "https://doi.org/10.1126/science.adf6035"
   pdo_north_pacific:
     group: north_pacific
     label: North Pacific (PDO domain)
     # The conventional PDO domain runs to 70N; clipped to the subset's 65N.
     lat: [20.0, 65.0]
     lon: [180.0, 250.0]
+    about:
+      why: >-
+        The Pacific Decadal Oscillation is the main pattern of North Pacific
+        temperature change over decades, first described through its link to
+        salmon catches. Its phase changes the background against which ENSO and
+        heatwaves like the Blob play out.
+      definition: >-
+        20°N-65°N, 180°-110°W: the central and eastern part of the domain the
+        PDO is defined over (the Pacific north of 20°N). The PDO index itself is
+        not an area mean: it is the leading pattern of temperature anomalies. A
+        positive PDO warms the coast and cools the central North Pacific, so
+        this box averages both halves of the pattern and does not stand in for
+        the index.
+      references:
+        - authors: Mantua et al.
+          year: 1997
+          title: "A Pacific interdecadal climate oscillation with impacts on salmon production"
+          source: "Bulletin of the American Meteorological Society 78(6), 1069-1079"
+          url: "https://doi.org/10.1175/1520-0477(1997)078<1069:APICOW>2.0.CO;2"
+        - authors: Newman et al.
+          year: 2016
+          title: "The Pacific Decadal Oscillation, revisited"
+          source: "Journal of Climate 29, 4399-4427"
+          url: "https://doi.org/10.1175/JCLI-D-15-0508.1"
   # --- The one region that is NOT a box.
   #
   # Canada's Pacific waters are not a rectangle: the bounding box is 55,533
@@ -730,6 +918,21 @@ regions:
     group: north_pacific
     label: Pacific Bioregions (DFO)
     polygon: pacific_bioregions.geojson
+    about:
+      why: >-
+        Canada's Pacific waters off British Columbia, which both the 2014-2016
+        Blob and the 2021 heat dome reached.
+      definition: >-
+        The union of the four Pacific bioregions in Fisheries and Oceans
+        Canada's Federal Marine Bioregions: Offshore Pacific, Northern Shelf,
+        Southern Shelf and Strait of Georgia. This is a marine planning
+        framework, not a legal maritime boundary, which is why it is not called
+        the EEZ.
+      references:
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
 
   # --- Added with the 2026-09-28 move to a global grid.
   #
@@ -752,14 +955,82 @@ regions:
     # here, since it scans the whole archive.
     lat: [-89.975, 89.975]
     lon: [0.025, 359.975]
+    about:
+      why: >-
+        The whole ocean as one number. Global sea surface temperature set a
+        record in 2023 by a wide margin, and marine heatwave days have increased
+        over the past century.
+      definition: >-
+        Every ocean cell in NOAA CoralTemp, poles included, averaged by area.
+        Ice-covered cells have no anomaly.
+      references:
+        - authors: Skirving et al.
+          year: 2020
+          title: "CoralTemp and the Coral Reef Watch Coral Bleaching Heat Stress Product Suite Version 3.1"
+          source: "Remote Sensing 12(23), 3856"
+          url: "https://doi.org/10.3390/rs12233856"
+        - authors: Oliver et al.
+          year: 2018
+          title: "Longer and more frequent marine heatwaves over the past century"
+          source: "Nature Communications 9, 1324"
+          url: "https://doi.org/10.1038/s41467-018-03732-9"
+        - authors: Kuhlbrodt et al.
+          year: 2024
+          title: "A glimpse into the future: The 2023 ocean temperature and sea ice extremes in the context of longer-term climate change"
+          source: "Bulletin of the American Meteorological Society 105(3), E474-E485"
+          url: "https://doi.org/10.1175/BAMS-D-23-0209.1"
   n_atlantic:
     group: basins
     label: North Atlantic (GOaS)
     polygon: n_atlantic.geojson
+    about:
+      why: >-
+        Its surface temperatures in 2023 broke the previous records by a wide
+        margin, part of the run of ocean extremes that year.
+      definition: >-
+        The North Atlantic of the Global Oceans and Seas dataset: from the
+        equator to the Arctic Ocean, including the Gulf of Mexico, the Caribbean
+        and the North Sea, excluding the Mediterranean and the Baltic.
+      references:
+        - authors: Kuhlbrodt et al.
+          year: 2024
+          title: "A glimpse into the future: The 2023 ocean temperature and sea ice extremes in the context of longer-term climate change"
+          source: "Bulletin of the American Meteorological Society 105(3), E474-E485"
+          url: "https://doi.org/10.1175/BAMS-D-23-0209.1"
+        - authors: Flanders Marine Institute (VLIZ)
+          year: 2021
+          title: "Global Oceans and Seas, version 1"
+          source: "Marine Regions"
+          url: "https://doi.org/10.14284/542"
   indian:
     group: basins
     label: Indian Ocean (GOaS)
     polygon: indian.geojson
+    about:
+      why: >-
+        Home of the Indian Ocean Dipole. Its western half warmed faster than any
+        other part of the tropical oceans over the past century, partly because
+        of El Niño.
+      definition: >-
+        The Indian Ocean of the Global Oceans and Seas dataset, north of 60°S.
+        It includes the Red Sea, the Persian Gulf and the Arabian Sea; the
+        Indonesian seas are counted in the Pacific instead.
+      references:
+        - authors: Roxy et al.
+          year: 2014
+          title: "The curious case of Indian Ocean warming"
+          source: "Journal of Climate 27, 8501-8509"
+          url: "https://doi.org/10.1175/JCLI-D-14-00471.1"
+        - authors: Saji et al.
+          year: 1999
+          title: "A dipole mode in the tropical Indian Ocean"
+          source: "Nature 401, 360-363"
+          url: "https://doi.org/10.1038/43854"
+        - authors: Flanders Marine Institute (VLIZ)
+          year: 2021
+          title: "Global Oceans and Seas, version 1"
+          source: "Marine Regions"
+          url: "https://doi.org/10.14284/542"
   southern:
     group: basins
     label: Southern Ocean (S of 60S)
@@ -771,6 +1042,27 @@ regions:
     # south of 60S.
     lat: [-89.975, -60.025]
     lon: [0.025, 359.975]
+    about:
+      why: >-
+        The ocean around Antarctica. Its surface has warmed much less than the
+        rest of the ocean, because the circumpolar current brings up deep water
+        that has not yet felt the warming. Antarctic sea ice reached record lows
+        in 2023.
+      definition: >-
+        Everything south of 60°S, the usual northern limit of the Southern
+        Ocean. Much of it is ice-covered for part of the year, and ice-covered
+        cells have no anomaly.
+      references:
+        - authors: Armour et al.
+          year: 2016
+          title: "Southern Ocean warming delayed by circumpolar upwelling and equatorward transport"
+          source: "Nature Geoscience 9, 549-554"
+          url: "https://doi.org/10.1038/ngeo2731"
+        - authors: Kuhlbrodt et al.
+          year: 2024
+          title: "A glimpse into the future: The 2023 ocean temperature and sea ice extremes in the context of longer-term climate change"
+          source: "Bulletin of the American Meteorological Society 105(3), E474-E485"
+          url: "https://doi.org/10.1175/BAMS-D-23-0209.1"
   # The Indian Ocean Dipole (Saji et al. 1999, Nature 401:360-363). The Dipole
   # Mode Index is west minus east anomaly; it is not stored, because a
   # difference of two rollups is not a third region. Both poles often move with
@@ -780,11 +1072,42 @@ regions:
     label: IOD west pole
     lat: [-10.0, 10.0]
     lon: [50.0, 70.0]
+    about:
+      why: >-
+        The western pole of the Indian Ocean Dipole, ENSO's counterpart in the
+        Indian Ocean. A positive dipole (this pole warm, the eastern one cool)
+        shifts rainfall toward East Africa and away from Indonesia, and positive
+        events often coincide with El Niño.
+      definition: >-
+        10°S-10°N, 50°E-70°E, as defined by Saji et al. (1999). The Dipole Mode
+        Index is this pole's anomaly minus the eastern pole's; the dashboard
+        shows each pole separately.
+      references:
+        - authors: Saji et al.
+          year: 1999
+          title: "A dipole mode in the tropical Indian Ocean"
+          source: "Nature 401, 360-363"
+          url: "https://doi.org/10.1038/43854"
   iod_east:
     group: enso
     label: IOD east pole
     lat: [-10.0, 0.0]
     lon: [90.0, 110.0]
+    about:
+      why: >-
+        The eastern pole of the Indian Ocean Dipole, off Sumatra and Java. It
+        cools during a positive dipole, when Indonesia and Australia tend to be
+        dry.
+      definition: >-
+        10°S-0°, 90°E-110°E, as defined by Saji et al. (1999). The Dipole Mode
+        Index is the western pole's anomaly minus this one's; the dashboard
+        shows each pole separately.
+      references:
+        - authors: Saji et al.
+          year: 1999
+          title: "A dipole mode in the tropical Indian Ocean"
+          source: "Nature 401, 360-363"
+          url: "https://doi.org/10.1038/43854"
   # Atlantic Nino (Zebiak 1993): 20W-0, 3S-3N. East edge is the last cell
   # centre west of 0, not 360.0 — that would round to gx 0 and wrap the box
   # one column onto the far side of the meridian.
@@ -793,19 +1116,95 @@ regions:
     label: Atlantic Nino (ATL3)
     lat: [-3.0, 3.0]
     lon: [340.0, 359.975]
+    about:
+      why: >-
+        The Atlantic Niño: warm events in the eastern equatorial Atlantic that
+        grow from the same kind of coupling between winds and ocean as El Niño,
+        at a smaller scale.
+      definition: >-
+        3°S-3°N, 20°W-0°, the ATL3 region of Zebiak (1993).
+      references:
+        - authors: Zebiak
+          year: 1993
+          title: "Air-sea interaction in the equatorial Atlantic region"
+          source: "Journal of Climate 6(8), 1567-1586"
+          url: "https://doi.org/10.1175/1520-0442(1993)006<1567:AIITEA>2.0.CO;2"
   # --- Marine heatwave hotspots, each with a well-studied event.
   tasman_sea:
     group: mhw
     label: Tasman Sea (IHO)
     polygon: tasman_sea.geojson
+    about:
+      why: >-
+        A marine heatwave hotspot between Australia and New Zealand, warming
+        fast as the East Australian Current pushes further south. The 2015/16
+        heatwave lasted 251 days.
+      definition: >-
+        The Tasman Sea as the International Hydrographic Organization defines it
+        (IHO S-23).
+      references:
+        - authors: Oliver et al.
+          year: 2017
+          title: "The unprecedented 2015/16 Tasman Sea marine heatwave"
+          source: "Nature Communications 8, 16101"
+          url: "https://doi.org/10.1038/ncomms16101"
+        - authors: Flanders Marine Institute (VLIZ)
+          year: 2018
+          title: "IHO Sea Areas, version 3"
+          source: "Marine Regions"
+          url: "https://doi.org/10.14284/323"
   mediterranean:
     group: mhw
     label: Mediterranean (IHO)
     polygon: mediterranean.geojson
+    about:
+      why: >-
+        A nearly enclosed sea and a heatwave hotspot. The 2003 heatwave caused
+        mass deaths of seafloor species in the northwest, and heatwaves from
+        2015 to 2019 caused them across the whole basin.
+      definition: >-
+        The nine International Hydrographic Organization (IHO S-23) sea areas
+        that make up the Mediterranean, joined. The Strait of Gibraltar, the Sea
+        of Marmara and the Black Sea are excluded.
+      references:
+        - authors: Garrabou et al.
+          year: 2009
+          title: "Mass mortality in Northwestern Mediterranean rocky benthic communities: effects of the 2003 heat wave"
+          source: "Global Change Biology 15, 1090-1103"
+          url: "https://doi.org/10.1111/j.1365-2486.2008.01823.x"
+        - authors: Garrabou et al.
+          year: 2022
+          title: "Marine heatwaves drive recurrent mass mortalities in the Mediterranean Sea"
+          source: "Global Change Biology 28, 5708-5725"
+          url: "https://doi.org/10.1111/gcb.16301"
+        - authors: Flanders Marine Institute (VLIZ)
+          year: 2018
+          title: "IHO Sea Areas, version 3"
+          source: "Marine Regions"
+          url: "https://doi.org/10.14284/323"
   gulf_of_maine:
     group: mhw
     label: Gulf of Maine (SeaVoX)
     polygon: gulf_of_maine.geojson
+    about:
+      why: >-
+        One of the fastest-warming parts of the ocean. Its 2012 heatwave upset
+        the lobster season, and warming has held back the recovery of its
+        collapsed cod fishery.
+      definition: >-
+        The Gulf of Maine, including the Bay of Fundy, from the SeaVoX sea-area
+        gazetteer on Marine Regions. The IHO has no Gulf of Maine sea area.
+      references:
+        - authors: Pershing et al.
+          year: 2015
+          title: "Slow adaptation in the face of rapid warming leads to collapse of the Gulf of Maine cod fishery"
+          source: "Science 350, 809-812"
+          url: "https://doi.org/10.1126/science.aac9819"
+        - authors: Mills et al.
+          year: 2013
+          title: "Fisheries management in a changing climate: Lessons from the 2012 ocean heat wave in the Northwest Atlantic"
+          source: "Oceanography 26(2)"
+          url: "https://doi.org/10.5670/oceanog.2013.27"
   # The Ningaloo Nino index box (Kataoka et al. 2014): 22-32S, from 108E to
   # the coast. The 2011 heatwave's footprint.
   w_australia:
@@ -813,10 +1212,61 @@ regions:
     label: Ningaloo Nino (W Australia)
     lat: [-32.0, -22.0]
     lon: [108.0, 116.0]
+    about:
+      why: >-
+        The Ningaloo Niño: warm events off Western Australia, carried south by
+        the Leeuwin Current and often forced by La Niña. The 2011 event pushed
+        the kelp forests' range back by about 100 km, a shift that has
+        persisted.
+      definition: >-
+        22°S-32°S, from 108°E to the coast: the Ningaloo Niño Index region of
+        Kataoka et al. (2014).
+      references:
+        - authors: Kataoka et al.
+          year: 2014
+          title: "On the Ningaloo Niño/Niña"
+          source: "Climate Dynamics 43, 1463-1482"
+          url: "https://doi.org/10.1007/s00382-013-1961-z"
+        - authors: Feng et al.
+          year: 2013
+          title: "La Niña forces unprecedented Leeuwin Current warming in 2011"
+          source: "Scientific Reports 3, 1277"
+          url: "https://doi.org/10.1038/srep01277"
+        - authors: Wernberg et al.
+          year: 2016
+          title: "Climate-driven regime shift of a temperate marine ecosystem"
+          source: "Science 353, 169-172"
+          url: "https://doi.org/10.1126/science.aad8745"
   coral_triangle:
     group: mhw
     label: Coral Triangle (MEOW)
     polygon: coral_triangle.geojson
+    about:
+      why: >-
+        The world's centre of marine biodiversity, with more coral species than
+        anywhere else. Its reefs are exposed to the bleaching heat stress that
+        NOAA CoralTemp was built to monitor.
+      definition: >-
+        The union of the Western and Eastern Coral Triangle provinces of Marine
+        Ecoregions of the World (Spalding et al. 2007). It is not the scientific
+        boundary of Veron et al. (2009). The provinces are coastal and shelf
+        regions, so the deep basins inside the triangle are left out.
+      references:
+        - authors: Veron et al.
+          year: 2009
+          title: "Delineating the Coral Triangle"
+          source: "Galaxea, Journal of Coral Reef Studies 11, 91-100"
+          url: "https://doi.org/10.3755/galaxea.11.91"
+        - authors: Spalding et al.
+          year: 2007
+          title: "Marine Ecoregions of the World: A bioregionalization of coastal and shelf areas"
+          source: "BioScience 57(7), 573-583"
+          url: "https://doi.org/10.1641/B570707"
+        - authors: Skirving et al.
+          year: 2020
+          title: "CoralTemp and the Coral Reef Watch Coral Bleaching Heat Stress Product Suite Version 3.1"
+          source: "Remote Sensing 12(23), 3856"
+          url: "https://doi.org/10.3390/rs12233856"
 
 # Quantities a timeseries can report that are NOT fields on the map.
 #

@@ -14,7 +14,7 @@ import {
  * Every layer name the land control can produce must be a layer `domain.yml`
  * declares — `applyView` and the map would otherwise ask `/image` for a name it
  * 422s, and the overlay would silently draw nothing. Read from the file itself,
- * as `stories.test.ts` reads the regions, so a rename there fails here.
+ * so a rename there fails here.
  */
 const domainYml = readFileSync(new URL('../../shared/domain.yml', import.meta.url), 'utf8')
 

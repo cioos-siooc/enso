@@ -89,32 +89,86 @@
                     </span>
                   </div>
 
-                  <UFieldGroup v-else-if="step.figure === 'field'" size="xs">
-                    <UButton
-                      v-for="v in FIELDS"
-                      :key="v.value"
-                      :label="v.label"
-                      :color="store.variable === v.value ? 'primary' : 'neutral'"
-                      :variant="store.variable === v.value ? 'solid' : 'subtle'"
-                      :disabled="!store.variableReady(v.value)"
-                    />
-                  </UFieldGroup>
+                  <div
+                    v-else-if="step.figure === 'field'"
+                    class="grid grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5"
+                  >
+                    <span class="text-xs text-muted">Ocean</span>
+                    <UFieldGroup size="xs">
+                      <UButton
+                        v-for="v in OCEAN_VARIABLES"
+                        :key="v.value"
+                        :label="v.label"
+                        :color="store.variable === v.value ? 'primary' : 'neutral'"
+                        :variant="store.variable === v.value ? 'solid' : 'subtle'"
+                        :disabled="!store.variableReady(v.value)"
+                      />
+                    </UFieldGroup>
+                    <span class="text-xs text-muted">Land</span>
+                    <UFieldGroup size="xs">
+                      <UButton
+                        label="Off"
+                        :color="store.landLayer === null ? 'primary' : 'neutral'"
+                        :variant="store.landLayer === null ? 'solid' : 'subtle'"
+                      />
+                      <UButton
+                        v-for="s in LAND_SOURCES"
+                        :key="s.value"
+                        :label="s.label"
+                        :color="store.landLayer === s.value ? 'primary' : 'neutral'"
+                        :variant="store.landLayer === s.value ? 'solid' : 'subtle'"
+                      />
+                    </UFieldGroup>
+                  </div>
 
-                  <UFieldGroup v-else-if="step.figure === 'place'" size="xs">
-                    <UButton
-                      icon="i-mdi-map-marker"
-                      label="Point"
-                      :color="store.scope === 'point' ? 'primary' : 'neutral'"
-                      :variant="store.scope === 'point' ? 'solid' : 'subtle'"
-                    />
-                    <UButton
-                      icon="i-mdi-vector-rectangle"
-                      trailing-icon="i-mdi-chevron-down"
-                      :label="store.activeRegionMeta?.label ?? 'Region'"
-                      :color="store.scope === 'region' ? 'primary' : 'neutral'"
-                      :variant="store.scope === 'region' ? 'solid' : 'subtle'"
-                    />
-                  </UFieldGroup>
+                  <div v-else-if="step.figure === 'place'" class="flex items-center gap-1">
+                    <UFieldGroup size="xs">
+                      <UButton
+                        icon="i-mdi-map-marker"
+                        label="Point"
+                        :color="store.scope === 'point' ? 'primary' : 'neutral'"
+                        :variant="store.scope === 'point' ? 'solid' : 'subtle'"
+                      />
+                      <UButton
+                        icon="i-mdi-vector-rectangle"
+                        trailing-icon="i-mdi-chevron-down"
+                        :label="store.activeRegionMeta?.label ?? 'Region'"
+                        :color="store.scope === 'region' ? 'primary' : 'neutral'"
+                        :variant="store.scope === 'region' ? 'solid' : 'subtle'"
+                      />
+                    </UFieldGroup>
+                    <UButton icon="i-mdi-information-outline" variant="ghost" color="neutral" size="xs" />
+                  </div>
+
+                  <!-- The time bar's Compare group, then the chip row that
+                       labels A and B under it, in the pins' own colours. -->
+                  <div v-else-if="step.figure === 'compare'" class="space-y-2">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-muted">Compare</span>
+                      <UButton
+                        icon="i-mdi-map-marker-plus"
+                        trailing-icon="i-mdi-chevron-down"
+                        label="Place"
+                        color="neutral"
+                        variant="subtle"
+                        size="xs"
+                      />
+                      <UButton icon="i-mdi-compare-horizontal" label="Date" color="neutral" variant="subtle" size="xs" />
+                    </div>
+                    <div class="flex items-center gap-3 text-xs">
+                      <span class="flex items-center gap-1.5">
+                        <span class="size-2.5 rounded-full" :style="{ background: PIN_COLORS.a }" />
+                        <span class="font-semibold">A</span>
+                        <span class="text-muted">{{ store.activeRegionMeta?.label ?? 'Niño 3.4' }}</span>
+                      </span>
+                      <span class="flex items-center gap-1.5">
+                        <span class="size-2.5 rounded-full" :style="{ background: PIN_COLORS.b }" />
+                        <span class="font-semibold">B</span>
+                        <span class="text-muted">47.98°N, 127.98°W</span>
+                        <UIcon name="i-mdi-close" class="size-3.5 text-muted" />
+                      </span>
+                    </div>
+                  </div>
 
                   <div v-else-if="step.figure === 'time'" class="flex items-center gap-2">
                     <UFieldGroup size="xs">
@@ -231,13 +285,14 @@
           <p class="text-default">
             Daily sea surface temperature, its anomaly against the 1991&ndash;2020
             climatology, and NOAA&rsquo;s marine heatwave category &mdash; which uses a
-            <em>different</em> baseline, see below &mdash; for the Pacific
-            &mdash; 60&deg;S&ndash;65&deg;N, 100&deg;E&ndash;290&deg;E &mdash; at
-            0.05&deg; resolution, from 1985 to the present.
+            <em>different</em> baseline, see below &mdash; for the global ocean at
+            0.05&deg; resolution, from 1985 to the present, with land temperature
+            and precipitation as an overlay.
           </p>
           <p class="text-muted">
-            Click the map for a cell, or pick a named region (the Ni&ntilde;o boxes,
-            the Blob, the PDO domain) to read its area mean. Every series on screen
+            Click the map for a cell, or pick a named region &mdash; the ocean basins,
+            the Ni&ntilde;o boxes, the Blob, marine heatwave hotspots such as the
+            Mediterranean &mdash; to read its area mean. Every series on screen
             can be downloaded as CSV.
           </p>
         </section>
@@ -376,6 +431,8 @@
 <script setup lang="ts">
 import { useMainStore } from '~/stores/main'
 import { trackEvent } from '~/composables/useAnalytics'
+import { LAND_SOURCES, OCEAN_VARIABLES } from '~/components/LayerRows.vue'
+import { PIN_COLORS } from '~/utils/points'
 
 /** A phone gets the guide as a full screen; a 672px dialog would not fit. */
 const { narrow } = useViewport()
@@ -410,79 +467,91 @@ const steps = [
       + 'open it in the panels below; the (i) beside it says exactly how each is calculated.',
   },
   {
-    title: 'Choose the field',
+    title: 'Choose what to draw',
     figure: 'field',
-    text: 'Temperature, Anomaly (against the 1991\u20132020 climatology) or Marine heatwave category '
-      + '(against NOAA\u2019s 1985\u20132012 90th percentile \u2014 a different baseline), in the Layers '
-      + 'panel at the map\u2019s top-left, where the Land row adds temperature or precipitation over the continents. The line under the chart always names the one in force. A field whose archive is not '
-      + 'fully loaded stays disabled and says why.',
+    text: 'The Layers card at the map’s top-left has two rows. Ocean is Anomaly (against the '
+      + '1991–2020 climatology), SST, or MHW, the marine heatwave category (against NOAA’s '
+      + '1985–2012 90th percentile — a different baseline). Land lays daily maximum or minimum '
+      + 'temperature, or precipitation, over the continents, as a value or against its own 1991–2020 '
+      + 'normal; precipitation offers that as % of normal or mm vs normal. The line under the chart '
+      + 'names the baseline in force, and a layer whose data is not fully loaded stays disabled and says why.',
   },
   {
     title: 'Choose a place',
     figure: 'place',
-    text: 'Click anywhere on the map to read that 5 km cell, or switch to Region and pick a named box '
-      + '\u2014 the Ni\u00f1o indices, the Blob, the Bering Sea, the PDO domain \u2014 to read its '
-      + 'area mean. The amber outline is exactly what is being averaged.',
+    text: 'Click anywhere on the map to read that 5 km cell, or switch to Region and pick one from the '
+      + 'menu — ocean basins, the Niño boxes and their relatives, North Pacific regions such as '
+      + 'the Blob, and marine heatwave hotspots from the Mediterranean to the Tasman Sea — to read '
+      + 'its area mean. The green outline is exactly what is being averaged, and the (i) beside the menu '
+      + 'says why that region is there, how its edges are drawn, and where they come from.',
   },
   {
     title: 'Move through time',
     figure: 'time',
     text: 'Daily, weekly or monthly frames; step with the arrows, type a date, or press play. Playback '
-      + 'runs to the end of the archive and stops there rather than looping. Compare, at the end of the '
-      + 'same bar, adds a second point to the chart or a second date beside the map.',
+      + 'runs to the end of the archive and stops there rather than looping.',
+  },
+  {
+    title: 'Compare two places, or two dates',
+    figure: 'compare',
+    text: 'Compare, at the end of the time bar, does both. Place adds a second selection, B, to the '
+      + 'chart: pick a region, or Point on map and then click (Alt-click the map does the same). A and B '
+      + 'can each be a cell or a region; the row under the chart names them and its × removes B. '
+      + 'Date splits the map in two with a divider to drag: the right half shows a second date, a year '
+      + 'earlier to start with, and Alt-clicking the chart moves it.',
   },
   {
     title: 'Read the chart, and steer with it',
     figure: 'chart',
     text: 'The chart is the whole record at the selected place. Click it to send the map to that date '
-      + '\u2014 the amber line marks the frame on screen \u2014 and drag the handles beneath it to zoom '
-      + 'into a span of years.',
+      + '— the amber line marks the frame on screen — and drag the handles beneath it to zoom '
+      + 'into a span of years. With a land layer on, a click on land charts that layer instead, on the '
+      + 'right-hand axis.',
   },
   {
     title: 'Re-colour the map',
     figure: 'colour',
     text: 'Click the legend to open the colour range: preset bands, two handles, exact numbers, Reset. '
       + 'The map recolours instantly and fetches nothing, because each frame carries values rather than '
-      + 'colours. Your range is remembered per field.',
+      + 'colours. Your range is remembered per layer. Land has a legend of its own; where the units allow, '
+      + 'Match ocean puts it on the ocean’s range, so a colour means the same value on land and sea. '
+      + 'The × hides the legend for a clean screenshot, and the Legend button beside Globe / Flat brings it back.',
   },
   {
     title: 'Compare years',
     figure: 'ranks',
-    text: 'The panel on the left ranks the years against each other \u2014 Month ranks every year\u2019s '
-      + 'version of the month the map is on, Year ranks whole calendar years. Its own \u201cHow to '
-      + 'read\u201d popover explains the dots and the whiskers; clicking a row moves the map to that year.',
+    text: 'The panel on the left ranks the years against each other — Month ranks every year’s '
+      + 'version of the month the map is on, Year ranks whole calendar years. Its own “How to '
+      + 'read” popover explains the dots and the whiskers; clicking a row moves the map to that year.',
   },
   {
     title: 'Take the numbers with you',
     figure: 'csv',
-    text: 'Two CSV buttons: one saves the series as plotted, the other the ranking \u2014 all twelve '
-      + 'months of it, or every year, following the toggle. Both export what is already on screen, so '
-      + 'the file and the chart cannot disagree.',
+    text: 'Two CSV buttons: one saves the series as plotted (with a column each for A and B while '
+      + 'comparing), the other the ranking — all twelve months of it, or every year, following the '
+      + 'toggle. Both export what is already on screen, so the file and the chart cannot disagree. '
+      + 'To share the view itself, copy the address: it carries the layers, date, place and comparison.',
   },
 ]
 
 /** The behaviours that surprise people, each of which is deliberate. */
 const notes = [
   'Weeks start on Monday and every bucket is labelled by its first day, on the map and in the CSV alike.',
-  'A weekly or monthly heatwave frame is the worst category reached in that span, not an average \u2014 '
-    + 'there is no category between two categories. A region\u2019s heatwave series is an area mean, so it '
-    + 'is a severity index rather than a class.',
+  'A weekly or monthly heatwave frame is the worst category reached in that span, not an average — '
+    + 'there is no category between two categories. Over a region the heatwave series is not a category '
+    + 'at all: it is the share of the region’s ocean area in a heatwave, in percent.',
   'The anomaly and the heatwave category use DIFFERENT baselines, and neither number shows it. '
-    + 'The anomaly is a departure from the 1991\u20132020 average for that day of the year. A heatwave '
-    + 'category is an exceedance of NOAA\u2019s 1985\u20132012 90th percentile over an 11-day window \u2014 '
+    + 'The anomaly is a departure from the 1991–2020 average for that day of the year. A heatwave '
+    + 'category is an exceedance of NOAA’s 1985–2012 90th percentile over an 11-day window — '
     + 'a threshold that is a different number in every cell. So a large anomaly does not correspond to '
     + 'any particular category, and the two are not two views of one departure.',
-  'Grey ocean has no climatology \u2014 the seasonal ice fringe \u2014 so it has a temperature but no '
-    + 'anomaly. Land is transparent, not grey.',
+  'Grey ocean has no climatology — the seasonal ice fringe — so it has a temperature but no '
+    + 'anomaly. Grey land under a land anomaly means its normal is too small to compare against, such as '
+    + 'precipitation in a desert dry season. Land with no overlay is transparent.',
+  'Precipitation anomalies are weekly and monthly only; a single day’s rainfall against normal is noise.',
   'The map opens as a globe; the Globe / Flat pair at its top-left switches, and the choice is remembered.',
-  'Drag the left dock\u2019s edge to give the panels or the map more room.',
-]
-
-/** The three field toggles, in the order TimeControl draws them. */
-const FIELDS = [
-  { value: 'anom' as const, label: 'Anomaly' },
-  { value: 'sst' as const, label: 'SST' },
-  { value: 'mhw' as const, label: 'MHW' },
+  'On a computer, drag the left dock’s edge to give the panels or the map more room. On a phone the '
+    + 'panels are a sheet that slides up from the bar at the bottom of the screen.',
 ]
 
 const PERIODS = [
@@ -517,16 +586,11 @@ const store = useMainStore()
  */
 const mhwReferences = computed(() => store.baselineFor('mhw')?.references ?? [])
 const version = useRuntimeConfig().public.version
-const open = ref(false)
-const tab = ref<'guide' | 'about'>('guide')
+// Shared, so the first-visit card can open the guide too.
+const { open, tab, openOn } = useGuide()
 
 const title = computed(() =>
   tab.value === 'guide' ? 'How to use this dashboard' : 'About this dashboard')
-
-function openOn(which: 'guide' | 'about') {
-  tab.value = which
-  open.value = true
-}
 
 /**
  * The colour-range figure is drawn from the live scale rather than a canned
