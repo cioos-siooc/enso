@@ -570,7 +570,8 @@ no-overlap rule geometrically, column by column.
 
 - **Controls: the map's top-left Layers card (`LayerControl.vue`)** holds the ocean
   variable and the land overlay as two rows, so both "what is drawn" choices sit together;
-  the time bar holds only "when", plus the Compare group (second point, second date).
+  the time bar holds only "when", plus swipe compare's second date. The second place (B)
+  sits beside the scope control on the map.
 - **State**: `store.landLayer` (`tmax` | `tmin` | `precip` | null) and `store.landMode`
   (`value` | `anomaly` | `difference`), independent of `store.variable`. `landVariable` maps the pair to a
   layer name (`utils/land.ts`). `landReasonAt(date)` says why a bucket can't be drawn: the
@@ -1809,7 +1810,7 @@ compare's second date.
 (`secondPoint`) or a named region (`secondRegion`), never both, and is **independent of A's
 scope**: point+point, point+region, region+point and region+region all work. The dock's stats
 and ranking stay on A, whose heading reads `A · <cell or region>` while B exists, so no second
-ranking is fetched. B is chosen from the time bar's Compare → `Place` menu (`Point on map`,
+ranking is fetched. B is chosen from the `Compare` menu beside the scope control on the map (`Point on map`,
 which arms the next click — crosshair cursor, Esc disarms — or any region but A's own), or a
 point B by **Alt-click** — Shift-drag is Mapbox's box zoom and Ctrl-click is a right click on a
 Mac. It is removed from its pin's popup, the `Remove B` button, or the × in `PointPair.vue`'s
@@ -2351,7 +2352,7 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
 `baseline_note_opened` (`variable`), `region_about_opened` (`region`),
 `about_opened`, `intro_closed` (`action: dismiss | guide`), `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
-`compare_toggled` (`on`), `compare_help_opened` (`place`, `date`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
+`compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
 range).
 Server-side:
 `land_point_queried` (`surface`, `buckets`), `point_queried` (including the out-of-domain 400 — where people click outside the box is

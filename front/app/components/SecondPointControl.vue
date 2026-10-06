@@ -3,9 +3,8 @@
        chart whichever A is. A menu rather than a button because B can be either
        kind: "Point on map" arms the next click (Alt-click does the same on a
        desktop), and the regions are the scope menu's own grouped list. With B
-       set the button removes it. It sits in the time bar's Compare group beside
-       swipe compare's Date: a second place and a second date are the two ways
-       to compare. -->
+       set the button removes it. It sits beside `ScopeControl` on the map: B is a
+       second "where", so it lives next to the control that picks A. -->
   <UButton
     v-if="store.hasSecond || store.addingPoint"
     :size="size"
@@ -24,11 +23,11 @@
       :size="size"
       icon="i-mdi-map-marker-plus"
       :trailing-icon="narrow ? undefined : 'i-mdi-chevron-down'"
-      :label="narrow ? undefined : 'Place'"
+      :label="narrow ? undefined : 'Compare'"
       aria-label="Compare with another place"
       color="neutral"
       variant="subtle"
-      title="Compare with a second point or region on the chart (or Alt-click the map)"
+      :title="`Compare with a second point or region, drawn beside A on the chart. Or ${alt}-click the map to drop point B.`"
     />
   </UDropdownMenu>
 </template>
@@ -41,6 +40,7 @@ defineProps<{ size: 'xs' | 'sm' }>()
 
 const store = useMainStore()
 const { narrow } = useViewport()
+const alt = useAltKey()
 
 const label = computed(() => {
   if (store.hasSecond) return 'Remove B'

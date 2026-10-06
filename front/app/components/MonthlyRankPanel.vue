@@ -161,7 +161,7 @@ import {
   readingGuide,
   xDomainOf,
 } from '~/utils/ranking'
-import { NO_CLASS_COLOR, colorScale } from '~/utils/colorScale'
+import { NO_CLASS_COLOR, colorScale, legibleStops } from '~/utils/colorScale'
 
 const props = defineProps<{
   ranking: MonthlyRanking | null
@@ -346,8 +346,11 @@ const guide = computed(() => readingGuide({
  * the domain on screen, so the sample dot is a colour actually in play rather
  * than a neutral grey that means "no class" on the heatwave scale.
  */
+// Lifted for the dark pane, like the chart line: RdBu_r's #67001f dots vanish.
+const inkStops = computed(() => legibleStops(props.stops))
+
 const glyphColor = computed(() => {
-  const scale = colorScale(props.stops, props.categorical ? NO_CLASS_COLOR : undefined)
+  const scale = colorScale(inkStops.value, props.categorical ? NO_CLASS_COLOR : undefined)
   return scale((domain.value.min + domain.value.max) / 2)
 })
 
@@ -401,7 +404,7 @@ function renderDetail() {
     detailOption({
       rows: rows.value,
       basis: activeBasis.value,
-      stops: props.stops,
+      stops: inkStops.value,
       domain: domain.value,
       pitch: pitch.value,
       topN: topN.value,

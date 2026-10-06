@@ -98,15 +98,15 @@
 
     <div class="hidden h-5 w-px bg-accented md:block" />
 
-    <!-- Both ways to compare, together: a second PLACE (B, a second line on
-         the chart) and a second DATE (swipe compare, a second map). Only the
-         date is the user's to set on the second map: variable, period and
+    <!-- Compare with a second DATE (swipe compare, a second map). The second
+         PLACE is a "where" and sits beside the scope control on the map. Each
+         button's hover text carries its own shortcut. Only the date is the user's to set on
+         the second map: variable, period and
          colour range are shared, so the legend describes both halves. The
          second stepper is sky-tinted to match the chart's CMP line and the
          right half of the divider. -->
     <div class="flex items-center gap-1">
       <span class="hidden pl-1 text-xs text-muted sm:inline">Compare</span>
-      <SecondPointControl :size="size" />
       <UButton
         icon="i-mdi-compare-horizontal"
         :label="narrow ? undefined : 'Date'"
@@ -115,7 +115,7 @@
         :variant="store.compareDate ? 'solid' : 'subtle'"
         :size="size"
         :disabled="!store.selectedDate"
-        :title="store.compareDate ? 'Stop comparing' : 'Compare this map with another date, side by side'"
+        :title="dateTitle"
         @click="store.toggleCompare()"
       />
       <template v-if="store.compareDate">
@@ -136,7 +136,7 @@
           class="w-36"
           :ui="{ base: 'ring-sky-400/70' }"
           aria-label="Compare date"
-          title="Or Alt-click the chart"
+          :title="`Or ${alt}-click the chart`"
         />
         <UButton
           icon="i-mdi-chevron-right"
@@ -147,7 +147,6 @@
           @click="stepCompare(1)"
         />
       </template>
-      <CompareHelp :size="size" />
     </div>
 
     <!-- Exports the series the chart is drawing, at the current variable and
@@ -187,6 +186,11 @@ const { narrow } = useViewport()
 // 'sm', not larger: the time bar shares the chart's pane, and every row it
 // wraps onto is a row the chart loses on a phone.
 const size = computed(() => (narrow.value ? 'sm' : 'xs'))
+
+const alt = useAltKey()
+const dateTitle = computed(() => (store.compareDate
+  ? `Stop comparing. Drag the divider to swipe between the two dates; ${alt.value}-click the chart to move the right-hand map.`
+  : `Split the map: the same view on another date, side by side. Then ${alt.value}-click the chart to set that date.`))
 
 const dateInput = computed({
   get: () => store.selectedDate ?? '',

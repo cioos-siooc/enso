@@ -59,7 +59,8 @@
 
     <!-- Everything that changes what the map is showing, in one column: how it
          is projected, WHAT is drawn (the layers card), then WHERE is being read
-         (scope). "When" — including both compare modes — is the time bar's.
+         (scope, with the second place B beside the first). "When" — including
+         the second date — is the time bar's.
          Stacked with a gap rather than positioned individually so no control
          has to know another's height. -->
     <div class="absolute left-2 top-2 z-20 flex flex-col items-start gap-2">
@@ -94,7 +95,10 @@
       </div>
 
       <LayerControl />
-      <ScopeControl />
+      <div class="flex items-center gap-2">
+        <ScopeControl />
+        <SecondPointControl :size="narrow ? 'sm' : 'xs'" class="rounded-lg shadow-lg" />
+      </div>
     </div>
 
     <div
