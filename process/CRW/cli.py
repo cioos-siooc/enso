@@ -2,11 +2,13 @@
 
     python -m CRW.cli init                          # schema + climatology + region means
     python -m CRW.cli scan     [--limit N]          # what is on disk vs. ingested
+    python -m CRW.cli fetch    [--start/--end]      # bulk download, both archives
     python -m CRW.cli backfill [--start/--end]      # ingest local files
     python -m CRW.cli render   [--start/--end]      # render images in bulk
     python -m CRW.cli rollup   [--start/--end]      # build region_daily
     python -m CRW.cli run      [--date ...]         # download + ingest + render
     python -m CRW.cli status   [--date ...]
+    python -m CRW.cli check    [--days N] [--full]  # data invariants; exit 1 on a failure
     python -m CRW.cli repartition [--table]      # one-off partition-key migration
 
 `run` is the daily job: for each date it downloads, ingests, then renders that
@@ -35,15 +37,17 @@ import calendar
 import datetime as dt
 import logging
 import sys
+import time
 
 import httpx
 from shared.ch import DATABASE, STATUS_SUCCESS, ensure_schema, get_client
-from shared.domain import regions
+from shared.domain import global_grid, regions
 from shared import fields
 from shared.periods import PERIODS, span
 from shared.render import DEFAULT_WIDTH
 
 from . import (
+    checks as checks_mod,
     climatology,
     config,
     download,
@@ -161,6 +165,59 @@ def cmd_scan(args) -> int:
     return 0
 
 
+def cmd_fetch(args) -> int:
+    """Download a date range of either or both archives, skipping files on disk.
+
+    The bulk counterpart of `run`'s per-date download: `backfill` then ingests
+    whatever landed. Files are independent, so a few run at once — the server
+    is slow per connection, not per client. A day that is not published (404)
+    is logged and skipped, not counted as a failure.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    ATTEMPTS = 4
+    products = [p for p in (download.SST, download.MHW)
+                if p.key in (args.product or ("sst", "mhw"))]
+    end = args.end or dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    days = [args.start + dt.timedelta(days=i) for i in range((end - args.start).days + 1)]
+    todo = [(d, p) for p in products for d in days
+            if not (p.directory / p.filename(d)).exists()]
+    print(f"fetch: {len(todo)} file(s) to download, "
+          f"{len(days) * len(products) - len(todo)} already on disk")
+
+    counts = {"ok": 0, "missing": 0, "failed": 0}
+
+    def one(item) -> str:
+        date, product = item
+        # The server drops connections under sustained load ("Server
+        # disconnected without sending a response"), so a failure is retried
+        # with a backoff before it counts. A 404 is an answer, not a failure.
+        for attempt in range(1, ATTEMPTS + 1):
+            try:
+                download.fetch(date, client=http, product=product)
+                return "ok"
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    log.warning("%s: %s not published", date, product.key)
+                    return "missing"
+                error = exc
+            except Exception as exc:  # noqa: BLE001 — one file must not stop the rest
+                error = exc
+            if attempt < ATTEMPTS:
+                log.warning("%s: %s attempt %d failed (%s), retrying",
+                            date, product.key, attempt, error)
+                time.sleep(10 * 3 ** (attempt - 1))
+        log.error("%s: %s failed: %s", date, product.key, error)
+        return "failed"
+
+    with download.new_client() as http, ThreadPoolExecutor(args.workers) as pool:
+        for outcome in pool.map(one, todo):
+            counts[outcome] += 1
+
+    print("fetch: {ok} downloaded, {missing} not published, {failed} failed".format(**counts))
+    return 1 if counts["failed"] else 0
+
+
 def cmd_backfill(args) -> int:
     ensure_schema()
 
@@ -204,7 +261,11 @@ def cmd_backfill(args) -> int:
             f"{files[0].date} .. {files[-1].date}"
             + (" (deleting NetCDF as it goes)" if args.delete_nc else "")
         )
-        with get_client() as client:
+        # Both timeouts raised: urllib3 bounds the request-body UPLOAD by the
+        # connect timeout (10 s default), and the server stops reading a large
+        # insert's body while it writes each block as a part, which under
+        # concurrent backfills and merges exceeds 10 s.
+        with get_client(send_receive_timeout=1800, connect_timeout=600) as client:
             counts = ingest.ingest_files(
                 client,
                 files,
@@ -304,8 +365,9 @@ def cmd_mask(args) -> int:
         print("no polygon regions selected; every named region here is a plain box")
         return 0
     for key, n in sorted(counts.items()):
-        box = regions_mod.box_of(regions()[key])
-        area = (box[1] - box[0] + 1) * (box[3] - box[2] + 1)
+        region = regions()[key]
+        gy0, gy1 = region.gy_range(global_grid())
+        area = (gy1 - gy0 + 1) * len(region.gx_columns(global_grid()))
         print(f"  {key:<20} {n:>7,} cell(s) of {area:,} in its bounding box")
     return 0
 
@@ -432,7 +494,7 @@ def _process_date(client, http, date, *, force, keep_nc, width) -> str:
             available_mhw=config.available_mhw_dates(),
         )
         # The third thing a date has to keep in step, after the two daily tables.
-        # Rebuilt for this date alone — eight small key-range reads — and rebuilt
+        # Rebuilt for this date alone — every named region, ~9 s for all 22 — and rebuilt
         # unconditionally rather than only when MHW landed, because an SST-only
         # date writes a mean_mhw of 0 that the next run has to correct once the
         # heatwave file arrives ~90 minutes later.
@@ -446,48 +508,68 @@ def _process_date(client, http, date, *, force, keep_nc, width) -> str:
     return "unpublished"
 
 
+def run_targets(client, *, date, recheck_days, max_days) -> list[dt.date]:
+    """The dates one `run` covers, sorted and unique.
+
+    Shared with `CRW.flows.daily_run`, so the scheduled run and the CLI cannot
+    disagree about which dates a run is responsible for.
+    """
+    if date:
+        return [date]
+
+    yesterday = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    # The EARLIER of the two archives' last ingested day, so a date that
+    # is SST-done but still MHW-pending — which happens whenever a run
+    # lands in the ~90 minutes between the two publications — is revisited
+    # on the next run instead of being stranded behind the SST watermark.
+    # Revisiting a complete date costs two HEAD requests and nothing else.
+    watermarks = [
+        w for w in (
+            status_mod.last_ingested(client, target.status_table)
+            for _name, _product, target in PRODUCTS
+        ) if w
+    ]
+    last = min(watermarks) if len(watermarks) == len(PRODUCTS) else None
+    # From the day after the last ingested through yesterday — one code
+    # path covering normal daily operation, a missed cron run, and the
+    # tail of a bulk download that has outrun the ingest.
+    start = (last + dt.timedelta(days=1)) if last else yesterday
+    targets = []
+    day = min(start, yesterday)
+    while day <= yesterday:
+        targets.append(day)
+        day += dt.timedelta(days=1)
+    if max_days:
+        targets = targets[:max_days]
+
+    # Then re-check the recent tail for in-place revisions.
+    recheck = [
+        yesterday - dt.timedelta(days=i)
+        for i in range(1, recheck_days + 1)
+    ]
+    targets.extend(d for d in recheck if d not in targets and (not last or d <= last))
+    return sorted(set(targets))
+
+
+def run_summary(outcomes: dict[str, int], n_targets: int) -> str:
+    return (
+        "run: " + ", ".join(f"{n} {word}" for word, n in sorted(outcomes.items()))
+        + f" (of {n_targets} target date(s))"
+    )
+
+
 def cmd_run(args) -> int:
     ensure_schema()
 
     with get_client() as client, download.new_client() as http:
-        if args.date:
-            targets = [args.date]
-        else:
-            yesterday = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
-            # The EARLIER of the two archives' last ingested day, so a date that
-            # is SST-done but still MHW-pending — which happens whenever a run
-            # lands in the ~90 minutes between the two publications — is revisited
-            # on the next run instead of being stranded behind the SST watermark.
-            # Revisiting a complete date costs two HEAD requests and nothing else.
-            watermarks = [
-                w for w in (
-                    status_mod.last_ingested(client, target.status_table)
-                    for _name, _product, target in PRODUCTS
-                ) if w
-            ]
-            last = min(watermarks) if len(watermarks) == len(PRODUCTS) else None
-            # From the day after the last ingested through yesterday — one code
-            # path covering normal daily operation, a missed cron run, and the
-            # tail of a bulk download that has outrun the ingest.
-            start = (last + dt.timedelta(days=1)) if last else yesterday
-            targets = []
-            day = min(start, yesterday)
-            while day <= yesterday:
-                targets.append(day)
-                day += dt.timedelta(days=1)
-            if args.max_days:
-                targets = targets[: args.max_days]
-
-            # Then re-check the recent tail for in-place revisions.
-            recheck = [
-                yesterday - dt.timedelta(days=i)
-                for i in range(1, args.recheck_days + 1)
-            ]
-            targets.extend(d for d in recheck if d not in targets and (not last or d <= last))
+        targets = run_targets(
+            client, date=args.date, recheck_days=args.recheck_days,
+            max_days=args.max_days,
+        )
 
         outcomes: dict[str, int] = {}
         failed = 0
-        for date in sorted(set(targets)):
+        for date in targets:
             try:
                 outcome = _process_date(
                     client, http, date, force=args.force, keep_nc=args.keep_nc,
@@ -499,10 +581,7 @@ def cmd_run(args) -> int:
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
             failed += outcome == "failed"
 
-    print(
-        "run: " + ", ".join(f"{n} {word}" for word, n in sorted(outcomes.items()))
-        + f" (of {len(set(targets))} target date(s))"
-    )
+    print(run_summary(outcomes, len(targets)))
     return 1 if failed else 0
 
 
@@ -692,6 +771,22 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_check(args) -> int:
+    """Run the data invariants and print one line per check."""
+    marks = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
+    with get_client() as client:
+        results = checks_mod.run_checks(
+            client, days=args.days, full=args.full, stale_after=args.stale_after,
+        )
+    width = max(len(r.name) for r in results)
+    for r in results:
+        print(f"{marks[r.level]}  {r.name:<{width}}  {r.detail}")
+    failed = sum(r.level == "fail" for r in results)
+    print(f"\n{failed} failed, {sum(r.level == 'warn' for r in results)} warnings, "
+          f"{len(results)} checks")
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="CRW.cli", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -717,6 +812,15 @@ def main(argv: list[str] | None = None) -> int:
     with_selection(sub.add_parser("scan", help="report disk vs. ingested")).set_defaults(
         func=cmd_scan
     )
+
+    p_fetch = sub.add_parser("fetch", help="download a date range of the daily archives")
+    p_fetch.add_argument("--start", type=_parse_date, default=dt.date(1985, 1, 1),
+                         help="first day, inclusive (default 1985-01-01)")
+    p_fetch.add_argument("--end", type=_parse_date, help="last day, inclusive (default yesterday)")
+    p_fetch.add_argument("--product", action="append", choices=("sst", "mhw"),
+                         help="repeatable; default both archives")
+    p_fetch.add_argument("--workers", type=int, default=4, help="parallel downloads (default 4)")
+    p_fetch.set_defaults(func=cmd_fetch)
 
     p_back = with_selection(sub.add_parser("backfill", help="ingest the local archive"))
     p_back.add_argument("--force", action="store_true", help="re-ingest loaded days")
@@ -808,6 +912,15 @@ def main(argv: list[str] | None = None) -> int:
         help="swap the migrated table into place (atomic, and the irreversible step)",
     )
     p_part.set_defaults(func=cmd_repartition)
+
+    p_check = sub.add_parser("check", help="data invariants; exits 1 if any fails")
+    p_check.add_argument("--days", type=int, default=45,
+                         help="how far back the daily-table checks read (default 45)")
+    p_check.add_argument("--full", action="store_true",
+                         help="scan the whole archive — a full read of mhw_daily")
+    p_check.add_argument("--stale-after", type=int, default=3,
+                         help="days behind before freshness fails (default 3)")
+    p_check.set_defaults(func=cmd_check)
 
     with_selection(sub.add_parser("status", help="summarise pipeline state")).set_defaults(
         func=cmd_status

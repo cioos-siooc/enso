@@ -22,6 +22,8 @@ data/
 # === ClickHouse local volumes ===
 clickhouse/data/
 clickhouse/logs/
+# Prefect server state (SQLite), bind-mounted into the `prefect` service.
+/prefect/
 
 # === Generated tiles / rendered imagery ===
 out_tiles/

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, v2.0]
+  pull_request:
+
+jobs:
+  python:
+    name: shared/ (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # The process image's own environment: `shared/` is exercised with exactly
+      # the dependencies it ships with, pytest from the `dev` group on top.
+      - run: uv sync --project process --group dev --python 3.13
+      - run: uv run --project process pytest tests
+
+  front:
+    name: front/ (lint, vitest, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+      # `install --legacy-peer-deps`, not `ci`: the same resolution
+      # front/Dockerfile uses, so CI builds what the image builds.
+      - run: npm install --legacy-peer-deps
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build

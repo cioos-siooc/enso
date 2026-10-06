@@ -4,7 +4,9 @@ import { useApi } from '~/composables/useApi'
 import type { ColorStop } from '~/utils/colorScale'
 import type { Period } from '~/utils/periods'
 import type { MonthlyRanking } from '~/utils/ranking'
-import { bucketStart } from '~/utils/periods'
+import { bucketEnd, bucketStart } from '~/utils/periods'
+import type { LandCoverage, LandMode, LandSource, LandVariableName } from '~/utils/land'
+import { landLayerName, landModeFor, landUnavailableReason } from '~/utils/land'
 
 /**
  * Turn a failed request into something worth showing the user.
@@ -33,6 +35,14 @@ function requestErrorMessage(error: unknown, subject: string): string {
 export type VariableName = 'sst' | 'anom' | 'mhw'
 
 /**
+ * Anything with a raster and a colour scale: an ocean variable or a land
+ * overlay layer. The scale machinery — ranges, presets, stops, persistence —
+ * takes this, because it works the same for both; the chart, stats and
+ * rankings take `VariableName`, because land has none of them.
+ */
+export type LayerName = VariableName | LandVariableName
+
+/**
  * Whether the chart and the numbers panel are reading a clicked cell or a named
  * region.
  *
@@ -44,12 +54,40 @@ export type VariableName = 'sst' | 'anom' | 'mhw'
  */
 export type Scope = 'point' | 'region'
 
+/**
+ * Everything that makes up "what is on screen", as data.
+ *
+ * A deep link is one of these, applied by `applyView`, so there is one
+ * definition of putting the app into a view. Every field is optional: absent
+ * means "leave it as it is".
+ */
+export interface View {
+  variable?: VariableName
+  period?: Period
+  /** Any day; snapped to the period's bucket. */
+  date?: string
+  /** A named region key. Wins over `point`. */
+  region?: string
+  point?: { lat: number, lon: number }
+  /** The second pin; `null` removes it, absent leaves it alone. */
+  point2?: { lat: number, lon: number } | null
+  /** The second selection as a named region; `null` removes it. Wins over `point2`. */
+  region2?: string | null
+  /** Swipe compare's second date; `null` turns compare off. */
+  compareDate?: string | null
+  /** The land overlay; `null` turns it off. */
+  landLayer?: LandSource | null
+  landMode?: LandMode
+}
+
 /** A variable's displayed range — what the colour ramp is spread over. */
 export interface ColorScaleRange { vmin: number, vmax: number }
 
 export interface DomainMeta {
   subset: { name: string, lat: [number, number], lon: [number, number], shape: [number, number], resolution: number }
   imageBounds: { west: number, south: number, east: number, north: number }
+  /** The land frames' corners: global, just inside -180..180 and 60S..85N, on the ocean frame's pixel grid. */
+  landImageBounds: { west: number, south: number, east: number, north: number }
   variables: Record<string, {
     longName: string
     shortName: string
@@ -59,6 +97,20 @@ export interface DomainMeta {
     vmax: number
     colormap: string | null
     derived: boolean
+    /** `global` for the ocean, `land` for the overlay's six layers. */
+    grid: 'global' | 'land'
+    /** The CPC variable a land layer reads, or null for the ocean. */
+    source: string | null
+    /** The periods this layer exists at. The rainfall ratio is weekly/monthly. */
+    periods: Period[]
+    /**
+     * How to LABEL a value where that differs from the number. `log2_percent`
+     * is the rainfall ratio: stored as log2 so a halving and a doubling are
+     * equidistant, printed as percent of normal. See `utils/land.ts`.
+     */
+    display: 'log2_percent' | null
+    /** What the sentinel grey means on this variable, for the legend. */
+    noValueLabel: string | null
     /**
      * What this variable's value is measured AGAINST, or null where that is not
      * a question — `sst` is an absolute temperature and has none.
@@ -191,14 +243,24 @@ export interface DomainMeta {
     lon: [number, number]
     partial: boolean
     masked: boolean
+    /** A `regionGroups` key, or null for an ungrouped region. */
+    group: string | null
   }>
+  /** Region menu headings, in menu order. */
+  regionGroups?: Array<{ key: string, label: string }>
 }
 
 export interface Coverage {
   rows: number
   days: number
   start: string | null
+  /**
+   * The last date every archive has landed for, not the SST table's edge — the
+   * API serves nothing past it, so nothing here should offer a date past it.
+   */
   end: string | null
+  /** The SST table's own last day; ahead of `end` while MHW is still to land. */
+  sstEnd: string | null
   /** Anomaly is unavailable until all 366 climatology keys are loaded. */
   climatology: { keys: number, complete: boolean } | null
   /**
@@ -215,6 +277,11 @@ export interface Coverage {
    * second-guesses it.
    */
   mhw: { rows: number, days: number, start: string | null, end: string | null, complete: boolean } | null
+  /**
+   * The land overlay: each product's dates and each layer's readiness. Null when
+   * the land tables do not exist on this server, which disables the control.
+   */
+  land?: LandCoverage | null
 }
 
 /**
@@ -281,7 +348,14 @@ export interface Series {
   dates: string[]
   values: Array<number | null>
   period?: Period
-  variable?: VariableName
+  variable?: VariableName | LandVariableName
+  /**
+   * On a land series only: which surface the clicked 0.05-degree pixel is.
+   * `ocean` comes back with no values — the land frames are cut to CoralTemp's
+   * coastline, so a click on drawn sea has no land record, even where a
+   * 0.5-degree CPC block overhangs it.
+   */
+  surface?: 'land' | 'ocean'
   /**
    * What these values ARE, when that is not simply the variable.
    *
@@ -335,15 +409,35 @@ const DEFAULT_POINT = { lat: 48, lon: -128 }
  */
 let regionRequestSeq = 0
 
+/** Which second-point request is the current one. Same job as `regionRequestSeq`. */
+let secondRequestSeq = 0
+
+/** The same for each pin's land series. */
+const landRequestSeq = { a: 0, b: 0 }
+
 /**
- * Region the app opens on. Nino 3.4 is the index the repo is named for, and it
- * is the one number this dashboard exists to show — so it is what the numbers
- * panel reads before anyone has clicked anything.
+ * One pin's land series: the land overlay's layer at that cell. Beside the
+ * ocean series rather than in place of it, because a click is answered by
+ * both and only the one whose surface it hit comes back with values.
  */
-const DEFAULT_REGION = 'nino34'
+export interface LandPin {
+  series: Series | null
+  /** `layer|period|lat|lon` the series was fetched for. */
+  key: string | null
+  loading: boolean
+  error: string | null
+}
+
+const emptyLandPin = (): LandPin => ({ series: null, key: null, loading: false, error: null })
+
+/**
+ * Region the app opens on — the app opens in region scope, so this is what the
+ * numbers panel reads before anyone has clicked anything.
+ */
+const DEFAULT_REGION = 'nino3'
 
 /** localStorage key a variable's display range is remembered under. */
-const scaleKey = (variable: VariableName) => `enso.scale.${variable}`
+const scaleKey = (variable: LayerName) => `enso.scale.${variable}`
 
 /**
  * The step the *control* moves the range in — deliberately not the encoding's.
@@ -368,11 +462,46 @@ export function quantise(value: number, step: number): number {
   return Number((Math.round(value / step) * step).toFixed(6))
 }
 
+/** localStorage key the land-follows-ocean scale link is remembered under. */
+const SCALE_LINK_KEY = 'enso.scale.link'
+
+/**
+ * Whether a land layer can honestly borrow an ocean variable's range: same
+ * units, both continuous, and the SAME colours. Compared on the served stops
+ * rather than on colormap names, so a `colormap_range` slice or a palette edit
+ * in `domain.yml` unpairs them on its own — one range over two different ramps
+ * would be the same number painted two colours, which is the opposite of what
+ * the link is for. Today: sst <-> land_tmax/tmin, anom <-> land_t*_anom.
+ */
+function scalesLinkable(domain: DomainMeta | null, land: LayerName, ocean: LayerName): boolean {
+  const a = domain?.variables?.[land]
+  const b = domain?.variables?.[ocean]
+  if (!a || !b || a.categorical || b.categorical || a.units !== b.units) return false
+  const sa = domain?.colorStops?.[land]
+  const sb = domain?.colorStops?.[ocean]
+  return !!sa?.length && sa.length === sb?.length && sa.every((s, i) => s.color === sb[i]!.color)
+}
+
+/**
+ * The layer whose range a layer is drawn on: itself, or — for the land overlay
+ * while the link is on and the pair is compatible — the ocean variable. Every
+ * scale getter resolves through this, so the map, both legends and the chart's
+ * land line cannot disagree about whether the link is in force.
+ */
+function scaleOwnerOf(
+  state: { domain: DomainMeta | null, scaleLink: boolean, variable: VariableName, landLayer: LandSource | null, landMode: LandMode },
+  variable: LayerName,
+): LayerName {
+  if (!state.scaleLink || !state.landLayer) return variable
+  if (variable !== landLayerName(state.landLayer, state.landMode)) return variable
+  return scalesLinkable(state.domain, variable, state.variable) ? state.variable : variable
+}
+
 /** The range in force: an override if there is one, else domain.yml's. */
 function resolveScale(
   domain: DomainMeta | null,
   override: ColorScaleRange | undefined,
-  variable: VariableName,
+  variable: LayerName,
 ): ColorScaleRange {
   if (override) return override
   const meta = domain?.variables?.[variable]
@@ -384,7 +513,7 @@ function resolveScale(
  * stepping over a sentinel where there is one so a user's vmin can never land
  * on the grey no-climatology entry and overwrite it with a scale colour.
  */
-function scaleBounds(domain: DomainMeta | null, variable: VariableName): ColorScaleRange {
+function scaleBounds(domain: DomainMeta | null, variable: LayerName): ColorScaleRange {
   const enc = domain?.variables?.[variable]?.encoding
   if (!enc) return { vmin: 0, vmax: 1 }
   const step = rangeStep(enc)
@@ -402,7 +531,7 @@ function scaleBounds(domain: DomainMeta | null, variable: VariableName): ColorSc
 }
 
 /** The control's step for a variable, or a safe default before /domain lands. */
-function stepFor(domain: DomainMeta | null, variable: VariableName): number {
+function stepFor(domain: DomainMeta | null, variable: LayerName): number {
   const enc = domain?.variables?.[variable]?.encoding
   return enc ? rangeStep(enc) : 0.1
 }
@@ -462,15 +591,11 @@ export const useMainStore = defineStore('main', {
     /**
      * Whether the chart and the numbers panel read a point or a region.
      *
-     * Opens on `point`. The empty "click something" state that used to argue
-     * for opening on a region is not reachable: `loadMetadata()` seeds
-     * DEFAULT_POINT before anything renders, so the app lands with a real cell
-     * charted and its monthly ranks populated rather than showing their own
-     * empty state. Both scopes now have a ranking — a region's is folded from
-     * `region_daily`'s area means — so the panel no longer goes blank on a
-     * scope switch either.
+     * Opens on `region` (DEFAULT_REGION). `loadMetadata()` still seeds
+     * DEFAULT_POINT alongside, so switching to point scope lands on a real cell
+     * charted rather than an empty state.
      */
-    scope: 'point' as Scope,
+    scope: 'region' as Scope,
     /** Named region the region scope is reading. Seeded by `loadMetadata()`. */
     activeRegion: null as string | null,
     regionSeries: null as Series | null,
@@ -501,6 +626,32 @@ export const useMainStore = defineStore('main', {
      */
     pointError: null as string | null,
     /**
+     * The second selection, B: a cell (`secondPoint`) or a named region
+     * (`secondRegion`), never both. Null on both when only A is selected.
+     *
+     * Chart-only: B gets a series and nothing else. The stats and the ranking
+     * stay on A, so the dock keeps describing one selection and no second
+     * ranking is fetched. Independent of A's scope, so a cell can be compared
+     * with a region and a region with a region.
+     */
+    secondPoint: null as { lat: number, lon: number } | null,
+    secondRegion: null as string | null,
+    secondSeries: null as Series | null,
+    /** `variable|period|lat|lon` or `variable|period|region` the current `secondSeries` was fetched for. */
+    secondKey: null as string | null,
+    loadingSecond: false,
+    /** B's own failure or out-of-box message. Never A's: B failing leaves A alone. */
+    secondError: null as string | null,
+    /** Whether the next map click drops B rather than moving A. */
+    addingPoint: false,
+    /**
+     * Each pin's land series, fetched only while the land overlay is on and
+     * only in point scope. The chart plots it on a right-hand axis of its own:
+     * land and ocean are never on one scale (±8 against ±3, mm/day against
+     * degrees), and the map's two legends already say so.
+     */
+    landPins: { a: emptyLandPin(), b: emptyLandPin() } as Record<'a' | 'b', LandPin>,
+    /**
      * Per-variable display range override; absent means domain.yml's vmin/vmax.
      *
      * The images carry data, not colour — Mapbox applies the ramp itself — so
@@ -508,13 +659,54 @@ export const useMainStore = defineStore('main', {
      * the map without refetching a single frame. That is the whole reason the
      * value is packed into the WebP rather than baked in as colour.
      */
-    scales: {} as Partial<Record<VariableName, ColorScaleRange>>,
+    scales: {} as Partial<Record<LayerName, ColorScaleRange>>,
+    /**
+     * Draw the land overlay on the ocean variable's range, so a colour means the
+     * same temperature on both sides of the coast. Only takes effect for a
+     * compatible pair (`scalesLinkable`); otherwise each keeps its own. The land
+     * layer's own override is kept, untouched, for when the link is turned off.
+     */
+    scaleLink: false,
+    /**
+     * The second map's bucket in swipe compare, or null when compare is off.
+     *
+     * Only the DATE is compared. Variable, period and colour range are shared
+     * by both maps by construction, so one legend describes both halves and a
+     * colour means the same thing either side of the divider. Snapped to
+     * `period` exactly like `selectedDate`, and re-snapped with it.
+     */
+    compareDate: null as string | null,
+    /**
+     * The land overlay: which CPC variable, or null for none.
+     *
+     * NOT a fourth value of `variable`. It is drawn over whichever ocean
+     * variable is showing, with its own legend, and the chart, stats and
+     * rankings stay ocean — so El Nino's ocean anomaly and its land response
+     * can be on one map at once. Changing it fetches nothing but the frame.
+     */
+    landLayer: null as LandSource | null,
+    /**
+     * The land layer's own Value | Anomaly choice, independent of the ocean
+     * toggle. Opens on `anomaly`, for the same reason the ocean opens on `anom`:
+     * how far from normal is the question the dashboard exists for.
+     */
+    landMode: 'anomaly' as LandMode,
   }),
 
   getters: {
     /** The range in force for a variable: the override, else domain.yml's. */
-    scaleFor: state => (variable: VariableName): ColorScaleRange =>
-      resolveScale(state.domain, state.scales[variable], variable),
+    scaleFor: state => (variable: LayerName): ColorScaleRange => {
+      const owner = scaleOwnerOf(state, variable)
+      return resolveScale(state.domain, state.scales[owner], owner)
+    },
+
+    /** The layer whose range `variable` is drawn on — see `scaleOwnerOf`. */
+    scaleOwner: state => (variable: LayerName): LayerName => scaleOwnerOf(state, variable),
+
+    /** Whether the land overlay on screen can share the ocean variable's range. */
+    scaleLinkable: (state): boolean =>
+      !!state.landLayer
+      && scalesLinkable(state.domain, landLayerName(state.landLayer, state.landMode), state.variable),
 
     /** The active variable's range. Watch this to repaint. */
     activeScale: state => resolveScale(state.domain, state.scales[state.variable], state.variable),
@@ -529,18 +721,52 @@ export const useMainStore = defineStore('main', {
      * defined in exactly one place — matplotlib, server-side. Nothing here
      * evaluates a colormap.
      */
-    stopsFor: state => (variable: VariableName): ColorStop[] =>
-      rescaleStops(
+    stopsFor: state => (variable: LayerName): ColorStop[] => {
+      const owner = scaleOwnerOf(state, variable)
+      return rescaleStops(
         state.domain?.colorStops?.[variable] ?? [],
-        resolveScale(state.domain, state.scales[variable], variable),
+        resolveScale(state.domain, state.scales[owner], owner),
         state.domain?.variables?.[variable]?.categorical,
-      ),
+      )
+    },
 
     activeStops: state => rescaleStops(
       state.domain?.colorStops?.[state.variable] ?? [],
       resolveScale(state.domain, state.scales[state.variable], state.variable),
       state.domain?.variables?.[state.variable]?.categorical,
     ),
+
+    /** The land overlay's layer name, or null when the overlay is off. */
+    landVariable: (state): LandVariableName | null =>
+      state.landLayer ? landLayerName(state.landLayer, state.landMode) : null,
+
+    /**
+     * Why the land layer cannot be drawn on a bucket, or null if it can.
+     *
+     * Takes the date so the swipe-compare map can ask about its own. When this
+     * is non-null the map REMOVES the land layer rather than leaving it on its
+     * last frame — see `landUnavailableReason` — and the legend prints it.
+     */
+    landReasonAt: state => (date: string | null): string | null => {
+      if (!state.landLayer) return null
+      const layer = landLayerName(state.landLayer, state.landMode)
+      if (!date) return 'No date selected'
+      return landUnavailableReason(
+        layer,
+        state.domain?.variables?.[layer],
+        state.coverage?.land,
+        state.period,
+        date,
+        bucketEnd(date, state.period),
+      )
+    },
+
+    /** Whether a land choice is on offer at all (for the control's buttons). */
+    landModeReady: state => (source: LandSource, mode: LandMode): boolean => {
+      const land = state.coverage?.land
+      if (!land) return false
+      return land.layers[landLayerName(source, mode)] !== false
+    },
 
     /**
      * Whether a variable can be offered at all, given what is loaded.
@@ -580,6 +806,80 @@ export const useMainStore = defineStore('main', {
     activeSeriesLoading: state =>
       state.scope === 'region' ? state.loadingRegion : state.loadingPoint,
 
+    /** Whether a second selection, of either kind, exists. */
+    hasSecond: (state): boolean => !!(state.secondPoint || state.secondRegion),
+
+    /** B's pin, when B is a cell. */
+    activeSecondPoint: (state): { lat: number, lon: number } | null => state.secondPoint,
+
+    /** B's region metadata from /domain, when B is a region. */
+    secondRegionMeta: state =>
+      state.secondRegion ? state.domain?.regions?.find(r => r.key === state.secondRegion) ?? null : null,
+
+    /**
+     * Why B draws no line although it has loaded, when the reason is the pairing
+     * rather than B itself.
+     *
+     * Only `mhw` has one: at a cell it is a category and over a region an
+     * extent in percent, so a point against a region would be two quantities on
+     * one axis. `sst` and `anom` are the same quantity at either scope.
+     */
+    secondMismatch(state): string | null {
+      if (state.variable !== 'mhw' || !this.hasSecond) return null
+      const aRegion = state.scope === 'region'
+      const bRegion = !!state.secondRegion
+      if (aRegion === bRegion) return null
+      return 'a heatwave category and a heatwave extent are not comparable'
+    },
+
+    /** B's series, when the chart should draw it. */
+    activeSecondSeries(state): Series | null {
+      if (!this.hasSecond || this.secondMismatch) return null
+      return state.secondSeries
+    },
+
+    /** A's land series, when the chart should draw it: point scope, overlay on, values present. */
+    activeLandSeries: (state): Series | null => {
+      const series = state.landPins.a.series
+      return state.scope === 'point' && state.landLayer && series?.dates.length ? series : null
+    },
+
+    /** B's, when B is a cell — in either scope, since B does not follow A's. */
+    activeSecondLandSeries: (state): Series | null => {
+      const series = state.landPins.b.series
+      return state.landLayer && state.secondPoint && series?.dates.length
+        ? series
+        : null
+    },
+
+    /**
+     * Why the chart has no land line although the overlay is on, or null.
+     *
+     * Only the reasons that hold for every cell — the rainfall ratio at a daily
+     * period, a climatology not built yet — since those are about the layer,
+     * not the click. The API gives the same answer in its 400; this is what
+     * saves the request.
+     */
+    landChartReason(state): string | null {
+      if (state.scope !== 'point') return null
+      return this.landLayerReason
+    },
+
+    /** `landChartReason` without the scope test: B's land line follows B, not A's scope. */
+    landLayerReason: (state): string | null => {
+      if (!state.landLayer) return null
+      const layer = landLayerName(state.landLayer, state.landMode)
+      const meta = state.domain?.variables?.[layer]
+      if (!state.coverage?.land) return 'Land data is not loaded on this server'
+      if (meta && !meta.periods.includes(state.period)) {
+        return `${meta.shortName} is charted ${meta.periods.join(' or ')} only`
+      }
+      if (state.coverage.land.layers[layer] === false) {
+        return 'The 1991-2020 land climatology has not been built yet'
+      }
+      return null
+    },
+
     /**
      * The ranking the panel draws, for whichever scope is active.
      *
@@ -601,7 +901,7 @@ export const useMainStore = defineStore('main', {
       state.scope === 'region' ? state.regionError : state.pointError,
 
     /** Whether a variable is an ordinal class rather than a measurement. */
-    isCategorical: state => (variable: VariableName): boolean =>
+    isCategorical: state => (variable: LayerName): boolean =>
       state.domain?.variables?.[variable]?.categorical ?? false,
 
     /**
@@ -683,7 +983,7 @@ export const useMainStore = defineStore('main', {
      * NOT share a baseline, and three components each fetching their own would
      * be three chances to print the other variable's years.
      */
-    baselineFor: state => (variable: VariableName) =>
+    baselineFor: state => (variable: LayerName) =>
       state.domain?.variables?.[variable]?.baseline ?? null,
 
     /** The baseline of the variable currently on screen. */
@@ -713,7 +1013,7 @@ export const useMainStore = defineStore('main', {
      * chart tooltip, the legend title and the ranking rows all used to hard-code
      * the degree sign.
      */
-    unitLabelFor: state => (variable: VariableName): string =>
+    unitLabelFor: state => (variable: LayerName): string =>
       state.domain?.variables?.[variable]?.units === 'degC' ? '\u00B0C' : '',
 
     activeUnitLabel: state =>
@@ -729,7 +1029,7 @@ export const useMainStore = defineStore('main', {
      * display range. One without spends all 256 entries on the display range,
      * which is where they are useful, so `sst`'s does follow.
      */
-    colorRangeFor: state => (variable: VariableName): [number, number] => {
+    colorRangeFor: state => (variable: LayerName): [number, number] => {
       const meta = state.domain?.variables?.[variable]
       const enc = meta?.encoding
       if (!enc) return [0, 1]
@@ -738,7 +1038,8 @@ export const useMainStore = defineStore('main', {
       // `mhw` so that code k is entry k. Tabulating mhw's five classes over 1..5
       // would put code 2 at entry 63.75, where a Cat 2 picks up Cat 1's colour.
       if (enc.sentinel !== null || meta?.categorical) return enc.range
-      const { vmin, vmax } = resolveScale(state.domain, state.scales[variable], variable)
+      const owner = scaleOwnerOf(state, variable)
+      const { vmin, vmax } = resolveScale(state.domain, state.scales[owner], owner)
       return [vmin, vmax]
     },
 
@@ -748,7 +1049,7 @@ export const useMainStore = defineStore('main', {
      * user's vmin can never land on the grey no-climatology entry and overwrite
      * it with a scale colour.
      */
-    scaleBoundsFor: state => (variable: VariableName): ColorScaleRange =>
+    scaleBoundsFor: state => (variable: LayerName): ColorScaleRange =>
       scaleBounds(state.domain, variable),
 
     /**
@@ -759,14 +1060,14 @@ export const useMainStore = defineStore('main', {
      * colour stops and `limits` are already served this way to avoid. Empty for
      * a categorical variable.
      */
-    presetsFor: state => (variable: VariableName): Array<{ label: string, vmin: number, vmax: number }> =>
+    presetsFor: state => (variable: LayerName): Array<{ label: string, vmin: number, vmax: number }> =>
       state.domain?.variables?.[variable]?.presets ?? [],
 
     /** The increment the range control moves in. See `rangeStep`. */
-    scaleStepFor: state => (variable: VariableName): number => stepFor(state.domain, variable),
+    scaleStepFor: state => (variable: LayerName): number => stepFor(state.domain, variable),
 
     /** True when the variable is showing something other than domain.yml's range. */
-    scaleIsCustom: state => (variable: VariableName): boolean => state.scales[variable] !== undefined,
+    scaleIsCustom: state => (variable: LayerName): boolean => state.scales[variable] !== undefined,
   },
 
   actions: {
@@ -831,7 +1132,7 @@ export const useMainStore = defineStore('main', {
      * All clamping lives here rather than in the control, so a value typed into
      * the number field and one dragged on the slider are constrained the same.
      */
-    setScale(variable: VariableName, vmin: number, vmax: number) {
+    setScale(variable: LayerName, vmin: number, vmax: number) {
       const meta = this.domain?.variables?.[variable]
       const enc = meta?.encoding
       if (!enc || !Number.isFinite(vmin) || !Number.isFinite(vmax)) return
@@ -863,10 +1164,23 @@ export const useMainStore = defineStore('main', {
     },
 
     /** Drop the override, back to domain.yml's vmin/vmax. */
-    resetScale(variable: VariableName) {
-      delete this.scales[variable]
+    resetScale(variable: LayerName) {
+      // Rebuilt rather than `delete`d: a new object is also what Pinia's
+      // `activeScale` watchers see as a change.
+      this.scales = Object.fromEntries(
+        Object.entries(this.scales).filter(([key]) => key !== variable),
+      ) as typeof this.scales
       try {
         localStorage.removeItem(scaleKey(variable))
+      }
+      catch { /* see setScale */ }
+    },
+
+    /** Turn the land-follows-ocean range link on or off, and remember it. */
+    setScaleLink(on: boolean) {
+      this.scaleLink = on
+      try {
+        localStorage.setItem(SCALE_LINK_KEY, on ? '1' : '0')
       }
       catch { /* see setScale */ }
     },
@@ -879,7 +1193,7 @@ export const useMainStore = defineStore('main', {
      * written.
      */
     loadScales() {
-      for (const variable of Object.keys(this.domain?.variables ?? {}) as VariableName[]) {
+      for (const variable of Object.keys(this.domain?.variables ?? {}) as LayerName[]) {
         try {
           const raw = localStorage.getItem(scaleKey(variable))
           if (!raw) continue
@@ -890,6 +1204,10 @@ export const useMainStore = defineStore('main', {
         }
         catch { /* unparseable or unreadable: fall back to the default range */ }
       }
+      try {
+        this.scaleLink = localStorage.getItem(SCALE_LINK_KEY) === '1'
+      }
+      catch { /* unreadable: stays off */ }
     },
 
     /**
@@ -922,6 +1240,10 @@ export const useMainStore = defineStore('main', {
 
       this.loadingRegion = true
       this.regionError = null
+      // B rides along, as it does with `selectPoint`: a variable or period
+      // change made in region scope is one B needs too.
+      void this.refreshSecondPoint()
+      void this.refreshLand()
       try {
         const [series, ranking] = await Promise.all([
           api.get<Series>(`/region/${key}`, {
@@ -1024,6 +1346,10 @@ export const useMainStore = defineStore('main', {
       trackEvent('scope_changed', { scope, from: this.scope })
       this.scope = scope
       if (scope === 'region' && !this.regionSeries) return this.loadRegionSeries()
+      // B may have been left behind by a variable or period change made while
+      // the other scope's series was being refetched; a no-op when it is current.
+      void this.refreshSecondPoint()
+      void this.refreshLand()
       if (scope === 'point' && !this.pointSeries && this.selectedPoint) {
         const { lat, lon } = this.selectedPoint
         // The scope change is already reported; the cell it returns to was
@@ -1037,12 +1363,127 @@ export const useMainStore = defineStore('main', {
       this.selectedDate = bucketStart(date, this.period)
     },
 
+    /** Set the compare map's date, snapped the same way. */
+    setCompareDate(date: string) {
+      this.compareDate = bucketStart(date, this.period)
+    },
+
+    /**
+     * Turn swipe compare on or off.
+     *
+     * On, it opens on the same bucket a year earlier — the comparison people
+     * reach for first ("this August against last August"), and one that keeps
+     * the season constant so the difference is the year. Clamped to the start
+     * of coverage, where a year earlier does not exist.
+     */
+    toggleCompare() {
+      if (this.compareDate) {
+        trackEvent('compare_toggled', { on: false, variable: this.variable, period: this.period })
+        this.compareDate = null
+        return
+      }
+      if (!this.selectedDate) return
+      const d = new Date(`${this.selectedDate}T00:00:00Z`)
+      d.setUTCFullYear(d.getUTCFullYear() - 1)
+      let target = d.toISOString().slice(0, 10)
+      const start = this.coverage?.start
+      if (start && target < start) target = start
+      this.setCompareDate(target)
+      trackEvent('compare_toggled', { on: true, variable: this.variable, period: this.period })
+    },
+
+    /**
+     * Put the app into `view`, in one pass and with one fetch.
+     *
+     * `variable` and `period` are written straight into state rather than
+     * through `setVariable`/`setPeriod`, which would each fire their own refetch
+     * of a selection that is about to be replaced anyway — three requests for
+     * one view. They are also the two actions that report an analytics event,
+     * and arriving at a view is not the same gesture as pressing a toggle.
+     */
+    async applyView(view: View) {
+      const patch: { variable?: VariableName, period?: Period } = {}
+      // Gated exactly as the toggle is: a stale link written before
+      // an archive was complete must not open on a variable the app would
+      // refuse to draw, and silently falling back beats an empty map.
+      if (view.variable && view.variable !== this.variable && this.variableReady(view.variable)) {
+        patch.variable = view.variable
+      }
+      if (view.period && view.period !== this.period) patch.period = view.period
+      const changed = Object.keys(patch).length > 0
+      if (changed) {
+        this.$patch(patch)
+        // Both cached series are for the old field or window. Dropped, not
+        // refetched: the selection below fetches the one on screen.
+        this.pointSeries = null
+        this.monthlyRanking = patch.variable ? null : this.monthlyRanking
+        this.regionSeries = null
+        this.regionRanking = patch.variable ? null : this.regionRanking
+      }
+
+      // After the period is in force, so the date snaps to the right bucket —
+      // and ALWAYS, not only when the view names one. The `$patch` above skips
+      // `setPeriod`, which is also what re-snaps the current date; without this
+      // a monthly view with no date keeps the weekly bucket it had.
+      const target = view.date ?? this.selectedDate
+      if (target) this.setDate(target)
+      if (view.compareDate === null) this.compareDate = null
+      else if (view.compareDate) this.setCompareDate(view.compareDate)
+      else if (this.compareDate) this.setCompareDate(this.compareDate)
+      // Written directly, like `variable`: arriving at a view is not pressing
+      // the land control, so it reports nothing.
+      if (view.landLayer !== undefined) this.landLayer = view.landLayer
+      if (view.landMode) this.landMode = view.landMode
+      this.landMode = landModeFor(this.landLayer, this.landMode)
+      // Before the selection below, which refreshes B alongside A.
+      const region2 = view.region2 && this.domain?.regions?.some(r => r.key === view.region2)
+        ? view.region2
+        : null
+      if (region2) {
+        if (region2 !== this.secondRegion) this.clearSecondPoint()
+        this.secondRegion = region2
+      }
+      else if (view.point2) {
+        if (this.secondRegion) this.clearSecondPoint()
+        this.secondPoint = { ...view.point2 }
+      }
+      else if (view.point2 === null || view.region2 === null) this.clearSecondPoint()
+
+      // One selection, one fetch. `track: false` on the point for the same
+      // reason the patch skips the actions: this is not a click on the map.
+      const region = view.region && this.domain?.regions?.some(r => r.key === view.region)
+        ? view.region
+        : null
+      if (region) {
+        const same = region === this.activeRegion && this.scope === 'region' && this.regionSeries
+        this.activeRegion = region
+        this.scope = 'region'
+        if (!same) await this.loadRegionSeries()
+      }
+      else if (view.point) {
+        await this.selectPoint(view.point.lat, view.point.lon, { track: false })
+      }
+      else if (changed) {
+        if (this.scope === 'region') await this.loadRegionSeries()
+        else if (this.selectedPoint) {
+          const { lat, lon } = this.selectedPoint
+          await this.selectPoint(lat, lon, { track: false })
+        }
+      }
+
+      // A view that names B but leaves A alone reaches no selection above, and
+      // one that only turns the land overlay on reaches nothing at all.
+      void this.refreshSecondPoint()
+      void this.refreshLand()
+    },
+
     /** Switch averaging window; re-snaps the date and reloads the point series. */
     setPeriod(period: Period) {
       if (period === this.period) return
       trackEvent('period_changed', { period, from: this.period, variable: this.variable, scope: this.scope })
       this.period = period
       if (this.selectedDate) this.setDate(this.selectedDate)
+      if (this.compareDate) this.setCompareDate(this.compareDate)
       // Both series are bucketed by the API, so both are stale. The inactive
       // one is dropped rather than refetched — switching scope reloads it, and
       // fetching a series nobody is looking at is a request for nothing.
@@ -1059,6 +1500,37 @@ export const useMainStore = defineStore('main', {
         // indistinguishable in the numbers.
         return this.selectPoint(lat, lon, { track: false })
       }
+    },
+
+    /**
+     * Turn the land overlay on, switch its variable, or turn it off (null).
+     *
+     * Fetches nothing: the map asks for the frame itself. Reports the resulting
+     * layer rather than the button, so the numbers read as "what was drawn".
+     */
+    setLandLayer(source: LandSource | null) {
+      if (source === this.landLayer) return
+      this.landLayer = source
+      // Leaving precipitation's mm mode for a temperature lands on its anomaly.
+      this.landMode = landModeFor(source, this.landMode)
+      void this.refreshLand()
+      trackEvent('land_layer_changed', {
+        layer: source,
+        mode: this.landMode,
+        variable: source ? landLayerName(source, this.landMode) : null,
+      })
+    },
+
+    /** Switch the land overlay between its values and its departures from normal. */
+    setLandMode(mode: LandMode) {
+      if (mode === this.landMode) return
+      this.landMode = mode
+      void this.refreshLand()
+      trackEvent('land_layer_changed', {
+        layer: this.landLayer,
+        mode,
+        variable: this.landLayer ? landLayerName(this.landLayer, mode) : null,
+      })
     },
 
     /**
@@ -1130,6 +1602,11 @@ export const useMainStore = defineStore('main', {
       this.loadingPoint = true
       try {
         const api = useApi()
+        // B rides along: every refetch of A (variable, period, a link) is one
+        // B needs too, and a no-op for B when it is already current. So do
+        // both pins' land series, which a period change also invalidates.
+        void this.refreshSecondPoint()
+        void this.refreshLand()
         const [series, ranking] = await Promise.all([
           api.post<Series>('/timeseries', { lat, lon, period: this.period, variable: this.variable }),
           sameCell
@@ -1162,6 +1639,149 @@ export const useMainStore = defineStore('main', {
       }
       finally {
         this.loadingPoint = false
+      }
+    },
+
+    /**
+     * Fetch each pin's land series where it is missing or stale; clear it where
+     * the overlay is off or the layer cannot be charted at this period.
+     *
+     * One action for both pins, because everything that invalidates one —
+     * layer, mode, period — invalidates the other. A pin whose key is current
+     * is left alone, so calling this from every refresh path costs nothing.
+     */
+    async refreshLand() {
+      const layer = this.landLayer ? landLayerName(this.landLayer, this.landMode) : null
+      await Promise.all((['a', 'b'] as const).map(async (pin) => {
+        const point = pin === 'a' ? this.selectedPoint : this.secondPoint
+        if (!point || !layer || this.landLayerReason) {
+          landRequestSeq[pin]++
+          this.landPins[pin] = emptyLandPin()
+          return
+        }
+        // A in region scope keeps what it has for the trip back, and fetches
+        // nothing. B is drawn in either scope, so it always fetches.
+        if (pin === 'a' && this.scope !== 'point') return
+        const key = `${layer}|${this.period}|${point.lat}|${point.lon}`
+        const current = this.landPins[pin]
+        if (key === current.key && (current.series || current.loading)) return
+        const seq = ++landRequestSeq[pin]
+        // The previous line stays up while the new one loads, like the ocean's.
+        this.landPins[pin] = { ...current, key, loading: true, error: null }
+        try {
+          const series = await useApi().post<Series>('/landTimeseries', {
+            lat: point.lat, lon: point.lon, period: this.period, variable: layer,
+          })
+          if (seq !== landRequestSeq[pin]) return
+          this.landPins[pin] = { series, key, loading: false, error: null }
+        }
+        catch (error: unknown) {
+          if (seq !== landRequestSeq[pin]) return
+          const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          console.error(`[enso] /landTimeseries failed for point ${pin.toUpperCase()}`, error)
+          // Key cleared so the next refresh retries rather than trusting it.
+          this.landPins[pin] = {
+            series: null,
+            key: null,
+            loading: false,
+            error: detail ?? requestErrorMessage(error, `land at point ${pin.toUpperCase()}`),
+          }
+        }
+      }))
+    },
+
+    /** Arm or disarm "the next map click drops B". */
+    setAddingPoint(on: boolean) {
+      this.addingPoint = on
+    },
+
+    /**
+     * Drop (or move) the second pin and load its series.
+     *
+     * Leaves A's scope alone: B is drawn beside a cell or a region alike.
+     */
+    async selectSecondPoint(lat: number, lon: number, { source = 'button' }: { source?: 'button' | 'alt' } = {}) {
+      if (this.secondRegion) this.clearSecondPoint()
+      this.addingPoint = false
+      trackEvent('point_added', { lat, lon, variable: this.variable, source, scope: this.scope })
+      this.secondPoint = { lat, lon }
+      void this.refreshLand()
+      await this.refreshSecondPoint()
+    },
+
+    /** Make B a named region and load its series. Like a point B, scope-independent. */
+    async selectSecondRegion(key: string) {
+      this.clearSecondPoint()
+      trackEvent('region_added', { region: key, variable: this.variable, scope: this.scope })
+      this.secondRegion = key
+      await this.refreshSecondPoint()
+    },
+
+    /** Remove B, of either kind. The chart goes back to one line, coloured by value. */
+    removeSecondPoint() {
+      if (!this.hasSecond) return
+      trackEvent('point_removed', { variable: this.variable, kind: this.secondRegion ? 'region' : 'point' })
+      this.clearSecondPoint()
+    },
+
+    /** Forget B without reporting it — a view that has no B, not a gesture. */
+    clearSecondPoint() {
+      secondRequestSeq++
+      this.secondPoint = null
+      this.secondRegion = null
+      this.secondSeries = null
+      this.secondKey = null
+      this.secondError = null
+      this.loadingSecond = false
+      this.addingPoint = false
+      landRequestSeq.b++
+      this.landPins.b = emptyLandPin()
+    },
+
+    /**
+     * Fetch B's series when it is missing or for another variable, period,
+     * cell or region than the one on screen; otherwise nothing. A region B is
+     * `/region/{key}`, the same rollup read A makes in region scope.
+     *
+     * Only the series: the dock stays on A, so B needs no ranking. A failure
+     * lands in `secondError` and never touches A's state — one bad pin must not
+     * blank the chart the other is still drawing.
+     */
+    async refreshSecondPoint() {
+      const point = this.secondPoint
+      const region = this.secondRegion
+      if (!point && !region) return
+      const key = region
+        ? `${this.variable}|${this.period}|${region}`
+        : `${this.variable}|${this.period}|${point!.lat}|${point!.lon}`
+      if (key === this.secondKey && (this.secondSeries || this.loadingSecond)) return
+      const seq = ++secondRequestSeq
+      this.secondKey = key
+      this.secondError = null
+      this.loadingSecond = true
+      try {
+        const api = useApi()
+        const series = region
+          ? await api.get<Series>(`/region/${region}`, { period: this.period, variable: this.variable })
+          : await api.post<Series>('/timeseries', {
+            lat: point!.lat, lon: point!.lon, period: this.period, variable: this.variable,
+          })
+        if (seq !== secondRequestSeq) return
+        this.secondSeries = series
+      }
+      catch (error: unknown) {
+        if (seq !== secondRequestSeq) return
+        const body = (error as { response?: { data?: { error?: { code?: string }, detail?: string } } }).response?.data
+        if (body?.error?.code !== 'outside_domain') console.error('[enso] series for B failed', error)
+        this.secondSeries = null
+        // Cleared so the next refresh retries rather than trusting the key.
+        this.secondKey = null
+        this.secondError = body?.error?.code === 'outside_domain'
+          ? 'Point B is outside the ingested domain'
+          : requestErrorMessage(error, region ? `the ${region} series` : 'point B')
+      }
+      finally {
+        if (seq === secondRequestSeq) this.loadingSecond = false
       }
     },
   },

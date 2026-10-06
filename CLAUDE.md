@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The app is the **Ocean Surface Temperature Atlas (OSTA)**: full name on first mention, OSTA
+thereafter. The repo, compose project, database and `enso.*` storage keys keep the old name.
+
 Modelled on the `ocean-acidification-dashboard` project next door — same four-service
 compose shape (`front` / `api` / `db-ch` / `process`), same ClickHouse-as-sole-database
 approach, same conventions for env files and Dockerfiles. Where this project differs,
@@ -24,7 +27,9 @@ ports you'll actually hit:
 | `front` | Nuxt 4 frontend | 9020 |
 | `api` | FastAPI backend | 9021 |
 | `db-ch` | ClickHouse | 9023 (HTTP), 9024 (native) |
-| `process` | NetCDF → ClickHouse ingest + image rendering | — |
+| `process` | NetCDF → ClickHouse ingest + image rendering (the CLI) | — |
+| `prefect` | Prefect server: the daily `run`'s schedule and run-history UI (**dev only**; prod uses the shared server at `pipelines.cioospacific.ca`) | 9025 |
+| `scheduler` | the `process` image serving `CRW/flows.py` to the Prefect server | — |
 
 Ports are deliberately offset from the ocean-acidification-dashboard's 9010–9014 so both
 stacks can run at once.
@@ -43,7 +48,7 @@ api 4000) and can recreate dependent services on the wrong ports.
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 `docker-compose.prod.yml` carries its own header comment explaining every divergence from
-the dev file; `.env.prod.example` is the template. The six that matter:
+the dev file; `.env.prod.example` is the template. The seven that matter:
 
 - **`name: enso-prod`.** Both compose files would otherwise take the project name `enso`
   from the directory and clobber each other's containers, network and volumes.
@@ -95,13 +100,19 @@ the dev file; `.env.prod.example` is the template. The six that matter:
     --profile maintenance down maintenance
   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
   ```
-- **`process` sits behind the `tools` profile**, so `up -d` starts three services and not a
-  fourth idling on `sleep infinity`. Drive it the same way as dev, which is also the shape
-  a cron entry wants:
+- **`process` sits behind the `tools` profile**, so `up -d` does not start a container
+  idling on `sleep infinity`. Drive it the same way as dev:
   ```bash
   docker compose -f docker-compose.prod.yml --env-file .env.prod \
     run --rm process python -m CRW.cli run
   ```
+- **`scheduler` runs the daily `run` on a schedule, against a Prefect server that is not
+  in this stack.** Prod registers with the shared server at `https://pipelines.cioospacific.ca`
+  (the [cioos-pacific-pipeline](https://github.com/cioos-siooc/cioos-pacific-pipeline) stack,
+  serving other projects' flows too), with its history in that UI — see "Prefect" under the
+  process pipeline. `scheduler` starts with a plain `up -d`. Prod **requires** `PREFECT_API_URL`
+  (`https://pipelines.cioospacific.ca/api`) and `PREFECT_AUTH_STRING` (that server's
+  `user:password`).
 
 `api` runs without `--reload` (it would watch source that is no longer mounted) on
 `--workers ${API_WORKERS:-4}` — separate *processes*, so the per-thread ClickHouse client
@@ -123,9 +134,30 @@ python -m CRW.cli mask     [--region KEY]                  # region_cells, for p
 python -m CRW.cli rollup   [--start|--end] [--region KEY] [--fresh] [--clim]  # region_daily
 python -m CRW.cli run      [--date] [--keep-nc] [--recheck-days N]
 python -m CRW.cli status                                  # per-status day/row counts, per archive
+python -m CRW.cli check    [--days N] [--full] [--stale-after N]  # data invariants, exit 1 on failure
 python -m CRW.cli repair-mhw-land [--date]                # re-do the leap days (see below)
 python -m CRW.cli repartition [--table] [--dry-run] [--optimize] [--finish]  # one-off
 ```
+
+**The land pipeline is a second CLI, `python -m CPC.cli`**, because NOAA CPC is a different
+program from Coral Reef Watch and its files are one per **year**, not per date:
+```bash
+python -m CPC.cli init                                    # the two land tables
+python -m CPC.cli fetch    [--year|--start-year|--end-year] [--variable] [--force]
+python -m CPC.cli backfill [--year ...] [--product temp|precip] [--start|--end] [--fresh]
+python -m CPC.cli run      [--recheck-days N] [--keep-nc] # fetch + ingest + re-render + prune
+python -m CPC.cli clim     [--source]                     # the 1991-2020 land climatology
+python -m CPC.cli render   [--variable|--period|--start|--end] [--workers N] [--force]
+python -m CPC.cli prune    [--year ...] [--product] [--dry-run]  # delete used year files
+python -m CPC.cli ocean-mask --date YYYY-MM-DD            # rebuild the coastline land frames are cut to
+python -m CPC.cli scan                                    # year files on disk, per variable
+python -m CPC.cli status                                  # per-status day/row counts, per product
+```
+It has no `rollup`. Order on a fresh box: `fetch` → `backfill` → `clim` → `render` →
+`prune`. `render` refuses while a year file is missing mid-range, since it would cache short
+weeks and months that can't be told apart from good ones once the neighbours are pruned.
+`run` re-renders every bucket its recheck window touches, open or closed, because a CPC
+revision lands inside a year file, then prunes what it fetched.
 
 **There are two daily archives and every command covers both by default.** CoralTemp SST
 and the Marine Heatwave category are separate products with separate URLs, separate
@@ -173,9 +205,9 @@ re-downloading 9.7 GB. **Order is: backfill MHW → `render --variable mhw` → 
 `run` prune.** Until that render has finished, pass `--keep-nc`.
 
 `render` and `run` are the same code path — both go through `shared.buckets.bucket_field()`,
-so a change to how a week is reduced cannot apply to one and not the other. **The API's
-on-demand render goes through it too**: that used to be a second copy in
-`api/modules/render.py`, and it would have kept averaging the MHW category, which is
+so a change to how a week is reduced cannot apply to one and not the other. **The API no
+longer renders at all** (see the `/image` gotcha); it used to, through a second copy of
+this in `api/modules/render.py` that would have kept averaging the MHW category, which is
 reduced by max. `run` renders
 the date it just ingested; `render` walks history in a `spawn` pool. It touches neither
 ClickHouse nor the network (hence `--no-deps`), so it is safe to run against a
@@ -290,6 +322,314 @@ with only the leap day on disk would replace a good seven-day max with a one-day
 date it fetches the CoralTemp file plus every MHW file the leap day's week and month span,
 re-ingests, re-renders the three `mhw` buckets and rebuilds `region_daily` for that date.
 
+#### The land archive: NOAA CPC Global Unified
+
+**A fourth archive, from a different NOAA program**, added so the dashboard can show what
+an El Niño does *on land* beside what it does to the ocean — a dry Indonesia and northern
+Australia, a wet Peru and Ecuador, a warm winter in western Canada. It is the Climate
+Prediction Center's gauge-and-station analysis, not Coral Reef Watch's, which is why it
+lives in its own package (`process/CPC/`, `python -m CPC.cli`) rather than under `CRW`.
+
+```
+https://downloads.psl.noaa.gov/Datasets/cpc_global_precip/precip.{YYYY}.nc
+https://downloads.psl.noaa.gov/Datasets/cpc_global_temp/{tmax,tmin}.{YYYY}.nc
+```
+
+Public domain, no login. `psl.noaa.gov/thredds/fileServer/Datasets/...` serves
+byte-identical files and is the fallback host.
+
+**ONE NETCDF PER YEAR, not per date**, and that is the structural difference everything
+else follows from. `precip.2015.nc` holds all 365 days as `(time, lat, lon)` float32, ~63 MB;
+`tmax`/`tmin` are ~58–90 MB. So `CPC.cli` takes **years** where `CRW.cli` takes dates,
+`shared.fields.read_land_year` opens a file once and the ingest slices days out of the
+resulting stack, and `run` has **no catch-up watermark**: "what is new" is simply the dates
+in the current year's file that status does not have, so a missed run, a late publication
+and a normal day are one code path with no argument.
+
+**The year files are a staging area, not an archive.** Every map frame is pre-rendered and
+the API never renders, so a file is needed only until its days are in ClickHouse and every
+frame they feed is in the image cache. `CPC.cli prune` (and the end of every `run`) deletes
+a `(product, year)` only once **both are checked**: status has every day in the file, and
+the cache has every bucket of every layer the product feeds, at each declared period,
+including the week that starts in the previous December and the anomaly layers. So nothing
+is pruned before `clim` has been built and rendered from. A kept year is logged with its
+first missing day or frame. `CPC/prune.py` holds the check.
+
+**The current year's file is rewritten in place** as days are appended (`history: Updated
+2026-09-17`), at ~2 days' latency. A past year is immutable — `tmax.2015.nc` was last
+modified in 2020. So `run` downloads the current year afresh each day (~60–90 MB a
+variable), plus the previous one while the recheck window's week or month still reaches
+into it, and deletes them again at the end.
+
+**What pruning costs:** rebuilding the climatology needs 1991–2020 back on disk, and
+re-rendering old history (a palette-independent change such as the encoding or the coastline
+cut) needs its years. Both are a re-fetch, ~9.5 GB for the whole record. The
+`climatology/*.clim.nc` files are never pruned.
+
+##### Its two orientation conventions are the opposite of CoralTemp's
+
+Both are applied in `shared/fields.py`, like the ocean's, and `_check_land_axes` verifies
+both against the **file's own `lat`/`lon` variables on every read** rather than trusting
+either. That is exact where the ocean side's `check_orientation()` is heuristic, and it is
+warranted, because these two are easy to get backwards:
+
+1. **Longitude: already 0–360** (`lon 0.25 … 359.75`). This is the one source in the project
+   that must **not** be rolled. Copying the habit every other reader here has would draw the
+   Pacific over Africa.
+2. **Latitude: north-up** (`lat[0] = +89.75`), so it **must** be flipped — the same flip the
+   CoralTemp climatology files get, and the opposite of the CoralTemp dailies.
+
+The grid is `domain.yml`'s **third** block, `land`: 0.5°, 360×720, south-up on the project's
+convention. **Land is global; the Pacific `subset` is the ocean's box and does not apply.**
+The tables, the climatology and every array `shared/fields.py` returns cover the whole grid
+(`domain.land_shape()`); only the land **image** is cropped, by `land_image` (60°S–85°N).
+
+Measured globally: **~62,900 cells/day carry temperature (55°S–83°N) and ~93,000 carry
+precipitation**, a quarter of it Antarctica, which is stored and not drawn. The two are not
+the same land — Darwin has rainfall and no temperature — which is why there are two tables
+and not one. (It was the Pacific box until 2026-09-18: 20,878 and 22,952.)
+
+**Some days are empty, and that is the source, not a bug.** Measured over 1985–2026:
+temperature has **16 days with no cells at all** (10 in 1985, 5 in 1986, 1992-07-31), and on
+those same days rain drops from ~93,000 cells to ~15,600. Rain is empty on one day,
+2007-02-26. They ingest as `success_ingest` with `n_rows = 0` (or few), so `prune`'s
+status check passes, and their daily frames render **fully transparent**: the layer shows
+nothing and no reason is printed. Weekly and monthly means simply average the days present.
+`render._bleed` returns zeros for a frame with nothing opaque; it used to take the median of
+an empty set and kill the whole render pool on 1985-01-01.
+
+##### `land_temp_daily` and `land_precip_daily`
+
+**`gy`/`gx` in these two tables index the LAND grid, not the global 0.05° one.** Same column
+names, entirely different meaning: `gy = 60` is 59.75°S here and 86.975°S in `sst_daily`.
+This is the most likely way for someone to read them wrong. Nothing joins a land table to an
+ocean one and nothing should.
+
+| | |
+|---|---|
+| `land_temp_daily` | `tmax_raw`, `tmin_raw` Int16 at 0.01 °C; `tmean` ALIAS `(tmax_raw + tmin_raw) * 0.005` |
+| `land_precip_daily` | `precip_raw` UInt16 at **0.1 mm** |
+| rows | **1.00 B and 1.41 B** over 1985→ (global), against `sst_daily`'s 113.7 B |
+| on disk | **3.14 GiB and 629 MiB** — 3.8 GiB together, against 1.3 GiB for the Pacific box |
+| ingest cost | ~40 s per year for temperature, ~75 s for rain with a render running; a full `backfill --fresh` was ~85 min |
+
+**Both temperature columns are stored and the mean is derived.** An ALIAS costs no storage,
+`tmin` has to be downloaded to compute a mean anyway, and the two questions ENSO actually
+raises on land are a `tmin` one (a warm winter in western Canada) and a `tmax` one (a heat
+extreme) — neither survives the average. Temperature ingests only cells valid in **both**;
+measured, the two masks are byte-identical on every day checked, and a day where they
+diverge is logged rather than half-stored.
+
+**Precip is 0.1 mm in a UInt16, deliberately not 0.01.** At 0.01 mm a UInt16 caps at
+**655.35 mm** against a measured global maximum of **666.69 mm** and a declared `valid_range`
+of 1000 — it would have clipped real values, at exactly the extremes a rainfall map is read
+for. `to_precip_counts` raises on an overflow rather than clipping, for the same reason
+`shared/render.py` clamps rather than wraps.
+
+**Both tables are dense, and a stored 0 is a real reading.** A dry day over Darwin is 0.0 mm
+and belongs in the table. A sparse precip table would save about half the rows (42–56% of
+land cells are wet on a given day, measured) and would buy that by making an absent row mean
+"dry", "outside the gauge network" or "never ingested" indistinguishably — `mhw_daily`'s
+trap, with no `sst_daily` equivalent to LEFT JOIN against for the answer.
+
+**Unlike CoralTemp, `remote_size`/`remote_modified` in `land_*_status` describe the YEAR
+FILE**, not the date's own file. Every date in 2026 shares one pair, and that pair changes
+daily. They answer "is this year worth fetching again", not "was this date revised" — a
+revision inside an unchanged-length year file is invisible to them, which is what
+`run --recheck-days` (default 14) exists for.
+
+##### The download host fails at HTTP 200
+
+`downloads.psl.noaa.gov` served a **497-byte nginx "currently unavailable" page** in place of
+`tmin.2026.nc` during development; the next request for the same URL returned the real 58 MB
+body. `raise_for_status()` does not catch that, and `.part`-and-rename alone would have
+promoted the page to a real filename, where it would have surfaced days later as an
+unreadable NetCDF blaming the ingest. So `CPC/download.py` **validates the body before the
+rename** — HDF5/NetCDF magic bytes, then length against `Content-Length` — retries with a
+backoff, and falls back to the THREDDS host. These files are HDF5 (`\x89HDF`), not classic
+NetCDF.
+
+##### The land overlay: seven layers, drawn over the ocean
+
+**A map overlay, not a fourth ocean variable.** It is drawn over whichever ocean variable
+is showing, with its own legend, so El Niño's ocean anomaly and its land response are on one
+map. The stats and rankings stay ocean. **The chart does not**: with the overlay on, a pin
+on land plots the overlay's layer at that cell from `POST /landTimeseries` (see below).
+`/timeseries?variable=land_*` still 422s by design (`LandVariable` is its own Literal).
+
+| layer | source | bucket | encoding | periods |
+|---|---|---|---|---|
+| `land_tmax` / `land_tmin` | tmax / tmin | mean of the dailies | G,B · 0.01 °C · −100 | d/w/m |
+| `land_precip` | precip | mean **mm/day** | G,B · 0.01 mm · 0 | d/w/m |
+| `land_tmax_anom` / `land_tmin_anom` | tmax / tmin | mean of (value − normal) | G,B · 0.01 °C · −327.68 | d/w/m |
+| `land_precip_ratio` | precip | **log2(mean ÷ normal)** | R · 1/32 · −4, sentinel 0 | **w/m** |
+| `land_precip_anom` | precip | mean of (value − normal), mm/day | G,B · 0.01 mm · −327.68 | **w/m** |
+
+**What a layer is made of is declared, not coded.** `domain.yml` gives each `grid: land`,
+`source`, `transform` (`none` | `difference` | `log2_ratio`), `periods`, `resampling:
+nearest`, and for the ratio `min_normal` and `display: log2_percent`. `shared/buckets.py`
+reads those fields, so there's no name table to drift. `_check_layer` in `shared/domain.py`
+rejects a declaration that would fail far away: an unknown transform, a land layer with no
+source, a ratio with no sentinel.
+
+Decisions, each measured first (see ROADMAP.md B6 for the numbers):
+
+- **Rain's anomaly is log2(actual ÷ normal), printed as percent** (`utils/land.ts`:
+  −1 → 50%, +1 → 200%). The absolute departure's middle 50% is −17…+12 mm/month with a tail
+  to 7,812 mm, so no one scale works. Linear percent squeezes every drought into 0–100%. A
+  bone-dry bucket is floored at 2⁻⁴, not sent to −∞.
+- **A normal below 0.1 mm/day draws the sentinel grey**, 7% of the box's land in January.
+  It's the ocean's `NO_CLIM_RGBA` third state, and it means the same thing: a value exists,
+  a meaningful departure doesn't. `noValueLabel` in `/domain` says which reason applies,
+  because the colour is shared.
+- **Precipitation has two anomalies, and the ratio is the default.** The Layers card offers
+  `% of normal` and `mm vs normal` beside `Value` (`landMode` `anomaly` / `difference`; a
+  temperature has only the first, and `landModeFor` maps `difference` onto it). The ratio says
+  how unusual a bucket is for that place; the mm departure says how much water went missing,
+  which the ratio hides in a desert at 300% of almost nothing. Measured, a month's departure is
+  within ±1.6 mm/day over 90% of land cells, so it opens at ±3.
+- **It is precipitation, not rain**, in every label: CPC's gauge analysis counts snow as its
+  liquid-water equivalent.
+- **Precipitation anomalies are weekly and monthly only.** A daily rainfall anomaly is noise; a daily
+  temperature anomaly (a heatwave day) isn't. `/image` answers **400** for a period outside
+  `periods`, not 404, because it's a request error rather than a missing frame.
+- **Land anomalies are wider than the ocean's**: ±8 by default against ±3. The within-month
+  spread of tmax is ~5 °C north of 45°N. Two legends, never one.
+
+##### The land climatology: computed here, smoothed, and self-describing
+
+`CPC.cli clim` builds `data/land/climatology/{tmax,tmin,precip}.clim.nc` from the year
+files for 1991–2020. It never reads ClickHouse, and it takes minutes. **It needs those 30
+years on disk, so build it before `prune`**, which refuses anyway while anomaly frames are
+missing. The shape is `(366 MMDD keys incl. 0229, 360, 720)`, south-up, ~80–106 MB a file,
+~100 s for all three.
+
+- **Smoothed over the day of year**, by each layer's `baseline.window_days`: **15 for
+  tmax/tmin, 7 for rain**. Temperature needs it because a raw per-calendar-day mean over 30
+  years flickers into every daily anomaly. Rain is only drawn weekly and monthly, where the
+  bucket already smooths, so 7 days blurs a month's normal by only ±3 days and a monsoon onset
+  keeps its month.
+- **Sums and counts are windowed separately**, so the mean is sample-weighted: 0229 has 8
+  years of data, not 30. The window is circular, so 31 December's window reaches January.
+- **A missing baseline year raises.** A 29-year "1991–2020" is a different baseline under
+  the same label.
+- **The file records its period and window, and `read_land_clim` raises on a mismatch** with
+  `domain.yml`. Edit a window, rebuild with `CPC.cli clim`, then re-render. Otherwise the
+  anomaly layers refuse to render rather than serve the old normal under the new label.
+  `/coverage.land.layers` reports each anomaly layer as not ready until the file matches, and
+  the frontend disables the button.
+
+##### The land frames are cut to CoralTemp's coastline
+
+**This is how the land and ocean rasters avoid overlapping.** Layer order can't do it. The
+Mapbox style is `background → country-boundaries → boundary lines → labels`, and
+`country-boundaries` is a **fill**: the style's only land. The ocean raster sits below it,
+which is what clips the ocean to the coast and keeps `mhw`'s calm-ocean fill off the
+continents. The land raster has to sit **above** it or it's hidden (`landBeforeId()` puts it
+directly above, below the lines and labels). There, its 0.5° blocks would paint ~55 km out to
+sea along every coast, and on open water under `mhw`.
+
+So `render.encode()` ANDs a land layer's alpha with CoralTemp's own land at 0.05°, and inside
+the Pacific box with **the complement of the ocean rasters' own footprint** too. Both come
+from `shared/masks/coraltemp_ocean.npz`, a committed **global** artifact (116 KB, 17,193,140
+ocean cells, of which the box's 7,477,923 are bit-identical to the old box-only mask), rebuilt
+by `CPC.cli ocean-mask`. CoralTemp's land is constant (byte-identical across three days
+checked), so one day's mask is every day's. It's committed rather than computed because land
+frames are rendered long after the CoralTemp dailies have been pruned.
+
+**The footprint, not a nearest-sampled mask.** The continuous ocean layers resample
+bilinearly with a fallback that keeps the real neighbour, so their coast sits one pixel
+landward. A nearest cut overlapped them in **11,987 pixels**; the footprint cut overlaps in
+**0**, measured on real frames under both `sst` and `mhw`. `mhw`'s nearest footprint leaves a
+one-pixel seam of basemap land, which reads as a coastline, not an overlap.
+
+##### The land frame is the ocean frame's pixel grid, carried round the globe
+
+`render.land_canvas()` builds it: the ocean frame's pixel width in degrees, its Mercator row
+pitch and its south edge, stepped out to just inside ±180° and up to just under 85°N. At
+`w2048` that's **3,880 × 2,747 px**, `landImageBounds` in `/domain` (−179.99…179.97,
+−60…84.995). The cache key's width is the **ocean** frame's, so a `w2048` land frame is 3,880
+px wide. The land field is sampled nearest onto it (`land_to_canvas`), so 0.5° cells draw as
+blocks.
+
+**Why the grids have to agree:** the no-overlap cut works pixel for pixel, and west of the
+dateline the two grids are the same grid, so the cut tiles the rasters exactly (0 overlap).
+
+**Why the frame stops at ±180° anyway, and what that costs.** The obvious design, the ocean
+frame extended in both directions to ~−30…330°, keeps the grids identical everywhere, but
+**Mapbox draws a 360°-wide image source only in the world copy nearest the camera** —
+measured in flat projection: with the camera on Asia the Americas were missing, and explicit
+copies at ±360 changed nothing. A frame inside ±180 draws whole everywhere and needs no globe
+west copy. But 360° isn't a whole number of the ocean's pixels, so **east of the dateline the
+two grids are offset by a fixed fraction of a pixel**. There `_land_cut` makes a land pixel
+clear **both** ocean pixels it straddles, leaving at most a one-pixel strip of basemap land
+along the Americas' Pacific coast. Not visible at zoom 5 over Peru. `test_land.py` checks the
+no-overlap rule geometrically, column by column.
+
+##### The frontend overlay
+
+- **Controls: the map's top-left Layers card (`LayerControl.vue`)** holds the ocean
+  variable and the land overlay as two rows, so both "what is drawn" choices sit together;
+  the time bar holds only "when", plus swipe compare's second date. The second place (B)
+  sits beside the scope control on the map.
+- **State**: `store.landLayer` (`tmax` | `tmin` | `precip` | null) and `store.landMode`
+  (`value` | `anomaly` | `difference`), independent of `store.variable`. `landVariable` maps the pair to a
+  layer name (`utils/land.ts`). `landReasonAt(date)` says why a bucket can't be drawn: the
+  period isn't declared, the climatology isn't built, or the date is past **that product's**
+  coverage, since temperature and rain end on different days.
+- **When a bucket can't be drawn, the layer is REMOVED, not left on its last frame.**
+  Mapbox's image source keeps the previous image on a 404, which would show last week's rain
+  under this week's date. The land legend prints the reason in its place.
+- **`Match ocean` puts land on the ocean's colour range** (the land legend's link toggle,
+  `store.scaleLink`, remembered as `enso.scale.link`). Offered only where `scalesLinkable`
+  holds — same units, both continuous, **identical served stop colours** — so today
+  `sst` ↔ `land_tmax`/`land_tmin` and `anom` ↔ `land_t*_anom`, never precipitation. Every
+  scale getter resolves through `scaleOwner()`, so the map, both legends and the chart's
+  land line follow it together; while linked the land popover edits the ocean's range
+  (bounded by the ocean's `limits`), and the land layer's own override is kept for when
+  the link is turned off. Event `color_scale_linked` (`on`, `land`, `ocean`).
+- **`ColorLegend` takes a `variable` prop.** The land instance is labelled "Land", formats
+  `log2_percent` ticks and number fields as percent while ranging in log2, and reads its grey
+  row's text from `noValueLabel`. The scale machinery takes `LayerName`, so each land layer
+  has its own remembered range (`enso.scale.land_*`).
+- **Playback awaits the land frame as well as the ocean's.** URL keys are `land=` and `lm=`.
+  `View`/`applyView` carry them, so a link can set the overlay. Swipe compare needs
+  nothing: each `FieldMap` draws its own land for its own date.
+- **One quad in both projections.** The land frame sits inside ±180, so it never needs the
+  ocean raster's globe west copy, and must not cross 180 (see above).
+- **Cost, measured** (global): reduce 0.01–0.5 s, encode ~0.5–2 s alone, **~120 KB (rain) to
+  ~190 KB (temperature)** a frame. The whole archive, measured: **92,230 frames, 16 GB, 6 h**
+  on 24 workers (with the global re-ingest running for the first hour and a half). For the
+  Pacific box it was 27–56 KB a frame.
+
+##### Charting a land cell
+
+**`POST /landTimeseries`** (`api/modules/land.py`) takes the overlay's layer name and
+returns a point series on the **land** grid. Three things about it:
+
+- **"Land" is CoralTemp's land at 0.05°**, via `global_ocean_mask()`, not "a CPC cell with
+  data". A click on drawn sea answers 200 with no values and `surface: "ocean"`, even where
+  a 0.5° block overhangs it. So a click's ocean and land series partition it: exactly one
+  has values, and the frontend fetches both and plots whichever came back.
+- **A bucket is `_land_bucket`'s, cell for cell** (mean, mean of differences, log2 of the
+  ratio of means with the floor and the `min_normal` null), reduced in Python because the
+  normal lives in the `.clim.nc` file, not ClickHouse. Verified against `bucket_field` on
+  four layer/period cases, equal to the layer's precision. `read_land_clim_cell` reads one
+  column of the file; it is chunked a day per chunk, so a cold cell is ~0.9 s and the API
+  caches 512 cells per worker.
+- **An undeclared period or an unbuilt climatology is a 400** with the reason in `detail`;
+  the store's `landChartReason` says the same without the request.
+
+In the store, `landPins.{a,b}` hold each pin's land series, refreshed by `refreshLand()`
+from every path that refreshes the ocean ones plus the land control. `TimeseriesChart`
+draws land on a **right-hand y-axis** (`Land °C`, `Land mm/day`, `Land % of normal`),
+ocean on the left, and only the right one when every line is land. One line is coloured by
+its own layer's ramp; two are coloured by pin, as before.
+
+**Not built yet on the land side:** land stats cards and rankings, a `land_clim` table,
+region rollups, SPI, the 1979 extension, and a more compact two-legend layout on a
+phone, where the pair covers about half the map. See ROADMAP.md B6.
+
 #### Two baselines, and they are not reconcilable
 
 **`anom` and `mhw` are measured against different climatologies, and nothing in
@@ -400,9 +740,10 @@ entirely plausible when wrong, which is why `check_orientation()` raises rather 
 Widening it needs no re-ingest: `gy`/`gx` index the *global* grid, so only `domain.yml`'s
 `subset` block changes.
 
-#### One named region is a polygon, not a box
+#### The first polygon region: `pacific_bioregions`
 
-Every named region is a lat/lon rectangle except **`pacific_bioregions`**, which declares a
+Eight named regions are polygons now (see "The global regions" below). This one came first
+and set the rules. Like the others, **`pacific_bioregions`** declares a
 `polygon:` and no bounds — `shared/domain.py` derives its box from the ring, so a
 hand-written box cannot go stale behind a changed geometry, and `shared/mask.py` cuts that
 box down to the 26,222 cells actually inside. See `region_cells` below for the cost
@@ -455,6 +796,94 @@ unsimplified ring, and takes 11,131 vertices to 4,573 (104 KB). The union is a
 **MultiPolygon of two** parts — the second is a 20-vertex sliver of Boundary Bay at
 49.0–49.09°N, detached from the main body by the Point Roberts peninsula.
 
+#### The global regions (added 2026-10-02)
+
+Twelve regions came with the global grid. There are 22 in all, listed in the region menu
+under four headings that `domain.yml`'s `region_groups` declares; each region names its
+heading in `group:`, and `regions()` raises on a heading that isn't declared.
+
+| group | box (a convention, so a box by definition) | polygon (a published outline) |
+|---|---|---|
+| Ocean basins | `global`, `southern` (S of 60°S) | `pacific`, `n_atlantic`, `indian` — Marine Regions *Global Oceans and Seas* v1 |
+| ENSO and its relatives | `iod_west`, `iod_east` (Saji 1999), `atl3` (20°W–0, 3°S–3°N) | |
+| Marine heatwave hotspots | `w_australia` (Ningaloo Niño, 22–32°S 108–116°E) | `tasman_sea`, `mediterranean` (IHO S-23 via Marine Regions), `gulf_of_maine` (SeaVoX), `coral_triangle` (MEOW) |
+
+The rule is the one `pacific_bioregions` set: an index box is a convention anyone can write
+down, so it is a box; a named sea is someone's outline, so it is a polygon whose file records
+its source, licence, retrieval date and simplification, and whose label names that source.
+
+- **`southern` is a box although GOaS publishes it.** GOaS's Southern Ocean is everything
+  between 60°S and the Antarctic coast, and the coast is land, which `sst_daily` already
+  excludes. The polygon would select the same cells, and its ring is cut at the antimeridian.
+- **`mediterranean` is nine IHO sea areas unioned**: the Western and Eastern Basins plus
+  Alboran, Balearic, Ligurian, Tyrrhenian, Adriatic, Ionian and Aegean. GOaS's
+  "Mediterranean Region" was not used because it includes the Black Sea.
+- **`coral_triangle` is not the Coral Triangle Initiative's boundary.** Neither the Veron
+  et al. scientific boundary nor the CTI implementation area is published as a downloadable
+  polygon. This is the union of MEOW's (Spalding et al. 2007) Western and Eastern Coral
+  Triangle provinces, which are shelf bioregions, so it omits the deep basins inside the
+  triangle. That is why the label says `(MEOW)`. **MEOW's licence was not checked**; the
+  file says so.
+- **The outlines are simplified at 0.05° for the two basins and 0.005–0.01° for the seas.**
+  The cells that moves, measured against the unsimplified ring, are 0.25% (North Atlantic),
+  0.12% (Indian) and ≤0.2% elsewhere, mostly coastal. Each file's properties record the
+  tolerance and the count. Without API gzip the North Atlantic outline is 200 KB.
+- **The masks were cross-checked against shapely**: `CRW.cli mask`'s counts (n_atlantic
+  1,703,875, indian 2,823,600, coral_triangle 286,146, tasman_sea 140,617, mediterranean
+  106,240, gulf_of_maine 4,213) equal shapely's `contains_xy` on the same rings, cell for
+  cell. There is no build script in the repo; the scratch script that made the files is
+  described by their `properties`.
+
+**Rollup cost, measured on dev (NVMe):** `rollup --clim --fresh` took 33 min for all
+twelve new regions, 21 of them for `global` alone, which scans all 262 B `sst_daily` rows.
+The small boxes take seconds each and the two basin polygons 3–5 min. One date across all
+22 regions, which is what `run` appends daily, takes **9.4 s** including container start.
+Expect the full rebuild to be much slower on the production HDD.
+
+##### A region can cross the prime meridian, and its longitudes then wrap
+
+**`Region.gx_range()` returns `(west, east)`, not a sorted pair, and `west > east` means
+two column ranges.** The Mediterranean (−5.4…36.2) and the North Atlantic (−98…12) cross
+0°. While every region was Pacific, `gx_range` sorted its pair, and for these it would
+have **selected the complement**: every longitude the region does *not* cover, as a
+plausible-looking area mean. So:
+
+- **Longitudes are written unwrapped, west before east** (`-6..36`, not `354..36`), and
+  `regions()` raises on a pair that runs the wrong way, so a typo can't pass as a wrap.
+- **`region.gx_sql(grid)` writes the `gx` half of every region `WHERE`**:
+  `gx BETWEEN` for a normal box, `(gx >= west OR gx <= east)` for a wrapping one. Use it,
+  never a bare BETWEEN. ClickHouse turns either into key ranges within each `gy`.
+- `gx_columns()` lists the columns west to east across the wrap. That is what
+  `shared/mask.py` meshes over.
+- **`atl3`'s east edge is 359.975, not 360.0.** 360.0 rounds to gx 0 and would wrap the
+  box one column across the meridian.
+- Verified on 2023-07-25 for `mediterranean`: the rollup's 28.151 °C, 102,752 cells and
+  91.4% heatwave extent equal a direct query with no `gx` prefilter at all, and 3,794 of
+  those cells are west of 0°.
+
+**`shared/mask.py` is a scanline fill, not matplotlib's `contains_points`.** The old test
+costs cells × vertices, which was milliseconds for `pacific_bioregions` and would have
+been hours for the North Atlantic (3 M cells, ~9,000 vertices). The scanline gives the same
+centre-in-ring answer, decided per row; it matches the matplotlib result exactly on all
+four outlines it was compared on. **Its longitude frame is centred on the box, not started
+at the west edge.** The box's first column can sit half a cell west of the ring, and a frame
+starting at the edge wrapped that cell 360° east. That made `pacific_bioregions` 26,224
+cells instead of 26,222 until it was fixed.
+
+**Every region must say why it is there, and cite it.** Each declares `about: {why,
+definition, references}` in `domain.yml`, and `regions()` raises on a missing block, an
+empty field, no references, or a reference without an https URL. A polygon region's outline
+source is read from its GeoJSON `properties`, not restated. An info button beside
+the region menu (`ScopeControl.vue`) opens it in a popover (`RegionNote.vue`), fetched on
+first open from `/region/{key}/about`, because the ~20 KB of text would nearly double `/domain`. Every DOI was
+checked against Crossref on 2026-10-05. Where a box is this project's own rather than a
+published index (`ne_pacific`, `gulf_of_alaska`, `bering_sea`), its `definition` says so,
+and `pdo_north_pacific`'s says its mean is not the PDO index.
+
+**Whole-circle boxes (`global`, `southern`) draw no meridian edge.** Their west and east
+sides meet, so `FieldMap.regionPolygon` keeps the polygon for the fill and outlines only the
+parallels. Without that, a seam was drawn down one meridian.
+
 #### The third state: ocean with no anomaly
 
 About **3.2% of the box's ocean has SST but no climatology** — the seasonal ice fringe,
@@ -481,7 +910,7 @@ Both containers mount `./shared` at `/app/shared`. Seven modules:
   There is one — `mhw_extent`, what `mhw` means over a region — and every timeseries
   response names its quantity in `quantity` (null at a point) so no client infers it
   from the scope.
-- **`mask.py` + `regions/*.geojson`** — the one region that is **not a box**. A region is
+- **`mask.py` + `regions/*.geojson`** — the regions that are **not boxes** (eight of 22). A region is
   normally a lat/lon rectangle; Canada's Pacific bioregions are a 200-nautical-mile arc
   closed by two negotiated lateral boundaries, and their bounding box is 55,533 cells
   against the region's 26,222 — so 53% of what a box query would average is Alaskan,
@@ -498,9 +927,8 @@ Both containers mount `./shared` at `/app/shared`. Seven modules:
 - **`periods.py`** — daily/weekly/monthly buckets, shared by query and render.
 - **`buckets.py`** — **the single definition of what a bucket's field is.** Reads the days
   on disk and reduces them: mean for `sst`/`anom`, **max for `mhw`**. It lives here rather
-  than in `process` because `api/modules/render.py` renders the retention window's buckets
-  on demand and had grown a second copy of it — the exact drift retiring `api/prerender.py`
-  was meant to end.
+  than in `process` because the API once rendered on demand and had grown a second copy of
+  it — the exact drift retiring `api/prerender.py` was meant to end.
 - **`ch.py`** — the ClickHouse client factory and the **single definition of the schema**
   (`DDL`, applied idempotently by `ensure_schema()`). No `.sql` file; keeping the DDL in
   one Python constant is what stops `api` and `process` drifting apart.
@@ -519,7 +947,7 @@ sst       Float32 ALIAS sst_raw * 0.01
 lat       Float32 ALIAS -89.975 + gy * 0.05
 lon       Float32 ALIAS 0.025 + gx * 0.05
 ENGINE = MergeTree ORDER BY (gy, gx, date)
-PARTITION BY if(toYear(date) >= 2024, toString(toYear(date)),
+PARTITION BY if(toYear(date) >= 2026, toString(toYear(date)),
                 toString(intDiv(toYear(date), 10) * 10))    -- decades, then years
 ```
 
@@ -536,7 +964,7 @@ cat   UInt8   -- 1..5, the source's own ordinal class; no scale factor to undo
 lat   Float32 ALIAS -89.975 + gy * 0.05
 lon   Float32 ALIAS 0.025 + gx * 0.05
 ENGINE = MergeTree ORDER BY (gy, gx, date)
-PARTITION BY if(toYear(date) >= 2024, toString(toYear(date)),
+PARTITION BY if(toYear(date) >= 2026, toString(toYear(date)),
                 toString(intDiv(toYear(date), 10) * 10))    -- decades, then years
 ```
 
@@ -559,8 +987,8 @@ consequences, both load-bearing:
    gating `anom`, but sharper: there is no value that could signal the difference.
 
 **`region_cells`** — which grid cells a **polygon** region covers: one row per (region,
-cell), and rows only for the `domain.yml` regions that declare a `polygon`. **26,222 rows
-today**, all of them `pacific_bioregions`.
+cell), and rows only for the `domain.yml` regions that declare a `polygon`. **~11.7 M rows
+across eight regions**: 26,222 of them are `pacific_bioregions`, and 2.8 M are `indian`.
 
 A plain box needs none — its `BETWEEN` says everything there is to say about which cells
 it holds. Canada's Pacific waters are not a rectangle: `pacific_bioregions`' bounding box
@@ -588,10 +1016,10 @@ sides averaging the same cells. Verified: `/region/pacific_bioregions?variable=a
 2021-06-28 returns **1.583** against a direct cell-wise `avg(sst - clim)` over the polygon
 of **1.5827**, on the same 23,875 cells.
 
-**`region_clim`** — 8 regions × 366 MMDD = **2,928 rows**. The climatology side of a
+**`region_clim`** — 22 regions × 366 MMDD = **8,052 rows**. The climatology side of a
 region anomaly.
 
-**`region_daily`** — 8 regions × 15,212 days = **~121,700 rows**. The daily side, and the
+**`region_daily`** — 22 regions × ~15,250 days = **~335,000 rows**, ~8 MiB. The daily side, and the
 one that actually costs something.
 
 ```sql
@@ -645,16 +1073,22 @@ read as "exactly at climatology".
 **Only named regions have a rollup.** `/regionTimeseries` on an arbitrary box still
 aggregates live, and that is the only difference between the two endpoints.
 
-**`pacific` is the whole ingested box, as a region.** It exists so the basin-wide numbers
+**`pacific` is the Pacific basin, as a polygon region.** It exists so the basin-wide numbers
 the header ribbon reports are a rollup read rather than a scan, and adding it there rather
 than writing a second aggregation path means `region_daily`, `region_clim`,
-`/region/{key}`, the monthly ranking, the region box on the map and the CSV export all
-serve it with no new code. Its bounds repeat `subset`'s rather than referencing them:
-a region that silently tracked a widened box would change what every stored row means
-without changing its key, so widening is a deliberate two-line edit plus a rebuild of this
-one region. The one cost is that rebuild — 113.8 B rows for this key alone, **measured at
-6 minutes** against seconds for any of the named boxes. A single date, which is what `run`
-appends, is **2.2 s across all nine regions**.
+`/region/{key}`, the monthly ranking, the region outline on the map and the CSV export all
+serve it with no new code.
+
+**It was the old ingested box (60°S–65°N, 100°E–70°W) until 2026-10-02**, which counted the
+Gulf of Mexico, the Caribbean, Hudson Bay and the eastern Indian Ocean as Pacific: 995,980
+of the box's 7,477,923 ocean cells (13%). It is now GOaS's North + South Pacific plus its
+*South China and Eastern Archipelagic Seas* (GOaS keeps those as their own region; dropping
+them would take the warm pool out of the basin). 6,496,585 ocean cells, 14,642 of them
+outside the old box (the Bering Sea up to the strait, Drake Passage). GOaS cuts the ocean at
+the antimeridian, so the file's western halves were shifted +360 and unioned into one ring;
+its `properties` record how. The scanline mask equals shapely's count exactly (6,582,607
+cells including coastal land). Changing the outline changes what every stored row for this
+key means, so it needs `rollup --clim --region pacific --fresh`.
 
 **`ingest_status`** / **`mhw_status`** — `ReplacingMergeTree(updated_at) ORDER BY date`, one
 row per day, one table per archive. Two tables rather than one with a `product` column
@@ -684,7 +1118,7 @@ Five decisions worth not undoing:
 4. **`has_clim` is per (cell, date), not per cell.** The ice edge moves through the year,
    so it cannot be a static property. It is what makes the region identity below exact.
 
-5. **Partitioning is by decade for the archive and by year from 2024 on, and the point
+5. **Partitioning is by decade for the archive and by year from 2026 on, and the point
    query is the whole reason.** `ORDER BY (gy, gx, date)` makes one cell's 15k-row history
    a single contiguous key range — which is exactly what the chart asks for on every map
    click — and a partition key cuts that range into one piece per partition. The cost is
@@ -697,7 +1131,12 @@ Five decisions worth not undoing:
    | | partitions | parts | file opens | cold TTFB |
    |---|---|---|---|---|
    | `PARTITION BY toYear(date)` | 42 | 196 | ~790 | **~3.4 s** |
-   | this expression | 8 | 8 | ~32 | **~0.14 s** |
+   | this expression (boundary 2024) | 8 | 8 | ~32 | **~0.14 s** |
+
+   On dev after the 2026-09 global rebuild (boundary 2026, 6 partitions, each merged to one
+   part, `sst_clim` merged to one): an `anom` point query selects **7 parts** (6 + 1) and
+   makes **34 file opens**. Before `sst_clim` was merged it was 17 parts and ~70 opens —
+   the climatology table counts too.
 
    **The symptom this fixes is "only the first click is slow."** A second query on the same
    cell is ~0.18 s under either scheme, because the granules are in the page cache by then —
@@ -705,21 +1144,35 @@ Five decisions worth not undoing:
    marks are only 89 MiB and were already resident; the cost is the *data* granules,
    scattered over 129 GB, which nothing can hold.
 
-   **2024 onward stays per-year deliberately.** `ingest.delete_day()` replaces a revised
-   date with an `ALTER ... DELETE`, a mutation that rewrites every part it touches, and
-   folding the recent years into a decade would take that from ~3 GB to ~31 GB. The source
-   only ever revises the recent end (`--recheck-days`), so splitting the key at that
-   boundary buys the fast read without paying for it on ingest.
+   **The current year stays per-year deliberately.** `ingest.delete_day()` replaces a
+   revised date with an `ALTER ... DELETE`, a mutation that rewrites every part it
+   touches, and folding the current year into a decade would take that from ~7 GiB to
+   ~40–65 GiB (global). The source only ever revises the recent end (`--recheck-days`),
+   so splitting the key at that boundary buys the fast read without paying for it on
+   ingest. **Only the year still being revised needs its own partition**, which is why the
+   boundary moved from 2024 to 2026 in the 2026-09 rebuild and 2024–2025 folded into the
+   2020s.
 
-   **It is also sized to the disk it runs on.** Merges are capped by free space, so one
-   ~120 GB `archive` partition would never merge down on a box with 90 GB free — it would
-   settle at a dozen parts instead, silently, which is the thing being fixed. Decade
-   buckets top out at **31.35 GiB** (the 2010s), which merges in that headroom.
+   **It is also sized to the disk it runs on, and the rule is 2× free, not 1×.** Merges are
+   capped by free space: ClickHouse will only select a merge (including `OPTIMIZE FINAL`)
+   when free space, less what running merges have reserved, is about **twice** the
+   partition's size — below that `OPTIMIZE` returns immediately and merges nothing, with no
+   error. Globally the decades are **~62–65 GiB** (the 2020s ~38 GiB), so merging one needs
+   ~130 GB free; one ~250 GiB `archive` partition would never merge at all.
 
-   Bumping `shared.ch.PARTITION_BOUNDARY_YEAR` is the maintenance this needs: years past it
-   accumulate one partition each, so around 2034 it is worth moving it forward and
-   re-running the migration. Nothing breaks meanwhile — a point query just picks up one
-   more part per elapsed year.
+   Bumping `shared.ch.PARTITION_BOUNDARY_YEAR` is the maintenance this needs, each January
+   or so: years past it accumulate one partition each. Nothing breaks meanwhile — a point
+   query just picks up one more part per elapsed year.
+
+   **Moving a partition between keys, without rewriting it.** `ATTACH PARTITION ... FROM`
+   refuses across differing partition keys, even for a partition whose value is the same
+   under both. What works is `DETACH PARTITION` (with `SETTINGS max_partition_size_to_drop
+   = 0` above 50 GB), `mv` the part directories into the new table's `detached/`, and
+   `ATTACH PARTITION` — a rename, seconds for 60 GiB. **ClickHouse does not validate a
+   moved part against the new key**: a 2024 part attached under the 2026 key kept partition
+   `2024` silently. So move only partitions whose value is unchanged, copy the rest with
+   `INSERT ... SELECT`, and check every part's `min_date`/`max_date` against the new
+   expression with `partitionId()` before `EXCHANGE TABLES`.
 
    **Changing the DDL does not change an existing database.** `ensure_schema()` is
    `CREATE TABLE IF NOT EXISTS`, so `CRW.cli repartition` is what actually rewrites the
@@ -765,6 +1218,25 @@ Entry point `process/CRW/cli.py` (`python -m CRW.cli`). Modules:
 - `imaging.py` — day/week/month × sst/anom/mhw rendering, and the retention window
 - `status.py` — the `ingest_status` table
 - `repartition.py` — the one-off partition-key migration (`CRW.cli repartition`)
+
+**`process/CPC/` is a second package, not a subdirectory of the first** (`python -m CPC.cli`),
+for the land layers. Same module names, same shapes, importing the same `shared/` contract:
+- `config.py` — `YearFile` (a `(variable, year)` pair, not a date), `scan()`, `ARCHIVE_START`
+- `download.py` — a `Product` per variable (`PRECIP`, `TMAX`, `TMIN`); validates the body
+  before the rename, retries, and falls back to a second host
+- `ingest.py` — a `Target` per table (`TEMP_TARGET`, `PRECIP_TARGET`); `ingest_year` walks
+  time indices **inside** a year file rather than walking files
+- `status.py` — a **binding**, not a copy: `CRW/status.py` is already table-parameterised, so
+  the land products import its functions and bind them to `land_temp_status` /
+  `land_precip_status`
+
+The naming is deliberate and worth keeping: CPC is the Climate Prediction Center, a different
+NOAA program, and a CPC product inside a package named for Coral Reef Watch would be the same
+class of misnaming as calling a bioregion an EEZ. Its `run` is also a genuinely different
+shape — yearly files, no watermark — rather than a flag on the ocean one.
+
+Land inserts are **one per year** (~23 M temperature rows, ~34 M rain rows), not batched by
+day: a land day is only ~63–93 k rows, so finer batching would only create parts.
 
 Inserts are batched across days (`--batch`, default **5** — a day is ~7.5 M rows now, not
 OISST's 96 k, so the old default of 30 was a 225 M-row insert).
@@ -838,9 +1310,9 @@ through ClickHouse, so it needs `db-ch` up — unlike `render`, which is the com
 flag exists for. Without it compose starts `db-ch` and waits on its healthcheck; with it
 you get `Connection refused` on `db-ch:8123` and nothing else to go on.
 
-**Rebuild `process` first, with `--profile tools`.** `up -d --build` skips it — see the
-gotcha below — so a migration run against a freshly deployed server will fail with
-argparse's `invalid choice: 'repartition'` until `--profile tools build process` has run.
+**Stop `scheduler` first**, alongside `front` and `api`. A scheduled `run` would ingest into
+the partitions the migration is moving, and the UI's pause toggle does not survive a
+container restart — see "Prefect" below.
 
 **Run it detached** — `run -d --name ...`, then `docker logs -f`. A `docker compose run`
 container **outlives the client that started it**, so a terminal closing does not stop the
@@ -881,6 +1353,15 @@ that is SST-done but MHW-pending — which happens whenever a run lands in the ~
 between the two publications — is picked up on the next run rather than stranded behind
 the SST watermark.
 
+**The API serves nothing past the last date both archives have landed for**
+(`timeseries.data_through()`), and `/coverage`'s `end` is that date, with the SST table's own
+edge in `sstEnd`. An SST-only date is not visibly incomplete: the sparse LEFT JOIN reads it
+as category 0 everywhere, and `run` has already rolled it into `region_daily` with an
+`mhw_area_frac` of 0 — which the ribbon printed as "0% of the Pacific". `_date_filter()`
+clamps every series, `_ranked_periods()` every ranking, and `/state` both of its rollup
+reads. Only while `mhw.complete`; a half-backfilled MHW archive would otherwise pin the whole
+dashboard to wherever the backfill had reached.
+
 #### The retention window
 
 A weekly frame is the mean over seven days, but `run` deletes each `.nc` after ingesting
@@ -891,21 +1372,73 @@ frame is a max over the same span of days and needs its own files kept for exact
 and at ~640 KB a file the second window costs ~24 MB. Losing that window does not corrupt anything, but
 it freezes weekly and monthly frames at whatever was last rendered.
 
+#### Prefect: the schedule and the run history
+
+**`run` is scheduled by Prefect, and it adds nothing else.**
+`CRW/flows.py` wraps `cli.run_targets()` (which dates a run covers) and `cli._process_date()`
+(what happens to one) unchanged, so the scheduled run and `python -m CRW.cli run` are the
+same job. It is the only module that imports Prefect, and the CLI never imports it.
+Prefect 3.8.6.
+
+**Prod and dev use different servers, deliberately.** Prod's `scheduler` registers with the
+shared server at `https://pipelines.cioospacific.ca` (`PREFECT_API_URL`), which is not part of
+this repo: it is the [cioos-pacific-pipeline](https://github.com/cioos-siooc/cioos-pacific-pipeline)
+stack, whose README documents this flow beside its own pipelines. Dev keeps its own local `prefect` service on SQLite, because dev and prod
+registering the same deployment on one server would overwrite each other's schedule. **The
+client pin in `pyproject.toml` must match both**: the shared server's version and dev's
+`PREFECT_IMAGE_TAG`. So a Prefect upgrade means upgrading the shared server first, which
+affects every project on it.
+
+```bash
+docker compose -f docker-compose.dev.yml --env-file .env.dev \
+  --profile prefect up -d prefect scheduler          # dev: http://localhost:9025, admin:admin
+```
+
+- **What the UI shows**: flow `enso-daily-run`, deployment `daily`, tag `enso`, one flow
+  run per firing and
+  **one task run per date**, named after the date. Each date's task ends in a state named
+  for its outcome: `Ingested`, `Skipped`, `Unpublished` or `Failed`. So on a normal day the
+  thirty recheck dates show as `Skipped` and the one new date as `Ingested`. The flow ends
+  `Failed` if any date did, with `cli.run_summary()`'s line as its message. The pipeline's
+  own log lines (`CRW.*`, `shared.*`) appear in each task's log tab.
+- **An ad-hoc run** is *Run → Custom run* on the deployment: `date` for one day, `force`,
+  `keep_nc`, `recheck_days`, `max_days`. `width` is deliberately absent: a cached frame at
+  any other width is a 404 and a blank map.
+- **Schedule** `RUN_CRON`, default `30 16 * * *` UTC, after both products have published.
+  `limit=1`, so two runs never overlap. **No retries**, because `run` is a range and the
+  next firing is the retry.
+- **Dev opens paused with `keep_nc` on** (`RUN_SCHEDULE_PAUSED`, `RUN_KEEP_NC`). A dev run
+  that prunes deletes the local archive back to the open week. Prod defaults to live and
+  pruning, so **leave `RUN_KEEP_NC=true` until `render --variable mhw` has finished.**
+
+Verified in dev, through the API the UI reads:
+
+- A run for 2026-09-20 ingested both products, rendered 9 frames and rolled up nine
+  regions. The task ended `Ingested`, and all 25 log lines (download, ingest, imaging,
+  regions) reached the run.
+- With the NetCDF directory unwritable, the date's task failed with the traceback and the
+  flow ended `Failed`, reading `run: 1 failed`.
+- Requests without the auth string get a 401, and `/api/health` answers without it.
+- `CRW.cli run --date 2026-09-20` still works, with `prefect` never imported.
+
 ### API (`api/`)
 
 FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is not.**
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | liveness + ClickHouse reachability |
+| `GET /health` | liveness + ClickHouse reachability, plus each archive's last ingested date and lag (never fails over staleness) |
+| `GET /health/data` | 503 once either archive is more than `STALE_AFTER_DAYS` (default 3) behind — for an external monitor |
 | `GET /domain` | grid extent, image bounds, variable metadata, per-variable colour stops and `encoding` (mix, ranges, `limits`), `noClimColor`, region list |
-| `GET /coverage` | ingested date range, row count, climatology completeness, MHW archive range and completeness |
+| `GET /coverage` | served date range (`end` = last date both archives have), row count, climatology completeness, MHW archive range and completeness |
 | `GET /state` | the header ribbon's two findings: ENSO phase from Nino 3.4, and basin marine-heatwave extent against the date's normal |
 | `GET /variables` | variable list, with `derived` on `anom` |
 | `POST /timeseries` | `{lat, lon, start?, end?, period?, variable?}` → record at the nearest cell |
+| `POST /landTimeseries` | `{lat, lon, start?, end?, period?, variable: land_*}` → the land overlay layer at the nearest CPC cell; empty on CoralTemp ocean |
 | `POST /regionTimeseries` | `{lat: [a,b], lon: [a,b], ...}` → area-mean over an arbitrary box |
 | `GET /region/{key}` | same, for a named `domain.yml` region, using `region_clim` |
 | `GET /region/{key}/geometry` | a polygon region's outline as GeoJSON; 404 for a plain box |
+| `GET /region/{key}/about` | why the region matters, how its edges are drawn, its references, and a polygon's outline source |
 | `POST /monthlyRanking` | every calendar month at a cell ranked within its month-of-year, plus every year ranked against every other (`annual`) |
 | `GET /region/{key}/monthlyRanking` | the same two rankings over a named region, from `region_daily` |
 | `GET /image/{date}.webp` | one bucket as a Web-Mercator WebP |
@@ -1183,22 +1716,27 @@ same stack as the ocean-acidification dashboard.
 app/app.vue                        header + coverage badge; awaits store.loadMetadata()
 app/components/StateRibbon.vue     the basin's state in one line, under the header
 app/pages/index.vue                numbers + ranks dock on the left, map over the chart
-app/components/AnomalyMap.vue      MapboxGL + the field image source
-app/components/TimeControl.vue     variable + period toggles, date stepper, playback
+app/components/AnomalyMap.vue      map host: projection, camera, swipe-compare divider
+app/components/FieldMap.vue        one MapboxGL map drawing the field for one date
+app/components/TimeControl.vue     "when": period toggle, date stepper, playback, Compare (Point / Date)
 app/components/ColorLegend.vue     gradient + the colour range control (popover)
 app/components/BaselineNote.vue    what the chart's values are measured against (+ popover)
 app/components/TimeseriesChart.vue ECharts line with dataZoom
+app/components/LayerControl.vue    "what": the map's Layers card, Ocean + Land rows (LayerRows.vue); a popover on a phone
 app/components/ScopeControl.vue    point / named-region switch, over the map
 app/components/StatsPanel.vue      the dock's headline value and stat cards
 app/components/MonthlyRankPanel.vue  the map's month, every year ranked (under the cards)
 app/components/SideDock.vue        resizable left-hand dock (drag handle, remembered width)
+app/components/IntroCard.vue       first-visit card: three gestures + a link to the guide
 app/composables/useApi.ts          axios wrapper
-app/composables/usePlayback.ts     play/stop loop + frame prefetch for the map animation
+app/composables/usePlayback.ts     page-wide play/stop loop + frame prefetch for the map animation
+app/composables/useViewport.ts     the shared phone-width flag (false under SSR)
 app/composables/useUrlState.ts     query params <-> store, so a view can be linked
 app/utils/periods.ts               daily/weekly/monthly bucket maths (mirrors the API)
 app/utils/ranking.ts               ranking layout + both ECharts options (pure -> testable headlessly)
 app/utils/colorScale.ts            domain.yml's colour stops evaluated at a single value
 app/utils/csv.ts                   CSV export of the plotted series and the rankings (pure text + one download)
+app/utils/mapView.ts               CameraView, ProjectionName, the globe's opening view
 app/app.config.ts                  maps Nuxt UI's internal icons onto mdi
 app/stores/main.ts                 Pinia store
 ```
@@ -1230,6 +1768,15 @@ with `undefined` uses Node's container locale on the server and the visitor's in
 browser, which is a hydration mismatch and nothing else — three of them, found by driving
 Chromium. `utils/periods.ts` already pinned `'en-GB'`; the ribbon and `StatsPanel` now do too.
 
+#### The first-visit card
+
+**`IntroCard.vue` is a card over the map, not a modal**, because the map is what a first
+visit learns from. Three gestures (click the map, click the chart, pick a region) and a
+`Full guide` link that opens `AboutDialog`'s guide tab through `useGuide()`'s shared state.
+Dismissing it, either way, sets `enso.intro.seen`. **It never shows on a link with a query
+string**, which is read at setup, before `useUrlState` writes the defaults back: someone sent
+to a view came to see it. It is centred on the map.
+
 #### Linkable views
 
 **`useUrlState()` keeps the address bar saying what is on screen** — `?v=anom&p=weekly&d=2026-08-24&at=47.98,-127.98`,
@@ -1252,6 +1799,106 @@ Three things about it:
   pressing a toggle, so a deep link looks like a page view rather than like the visitor
   having changed the variable. The URL writes the resolved **cell**, not the raw click, so
   a link reopens on the same grid cell.
+
+**Applying a view is `store.applyView(view)`.** The URL is parsed into a `View` and handed
+over, so there is one definition of entering a view. One more key: `c=YYYY-MM-DD` is swipe
+compare's second date.
+
+#### Two-selection compare
+
+**A second selection, B, plotted beside A on the chart, and nothing else.** B is a cell
+(`secondPoint`) or a named region (`secondRegion`), never both, and is **independent of A's
+scope**: point+point, point+region, region+point and region+region all work. The dock's stats
+and ranking stay on A, whose heading reads `A · <cell or region>` while B exists, so no second
+ranking is fetched. B is chosen from the `Compare` menu beside the scope control on the map (`Point on map`,
+which arms the next click — crosshair cursor, Esc disarms — or any region but A's own), or a
+point B by **Alt-click** — Shift-drag is Mapbox's box zoom and Ctrl-click is a right click on a
+Mac. It is removed from its pin's popup, the `Remove B` button, or the × in `PointPair.vue`'s
+chip row under the time bar.
+
+- **Store:** `secondSeries`, fetched by `refreshSecondPoint()` (`/timeseries` for a cell,
+  `/region/{key}` for a region), a no-op when `secondKey` is current. `selectPoint`,
+  `loadRegionSeries`, `setScope` and `applyView` call it, so every refetch of A refreshes B.
+  A B failure lands in `secondError` and never touches A's state; a land cell's empty series
+  says so there. A point B's land series is fetched in either scope.
+- **`mhw` refuses a mixed pair.** A cell's `mhw` is a category and a region's is an extent in
+  percent, so `secondMismatch` drops B's line and the chip says why. `sst` and `anom` are the
+  same quantity at either scope and mix freely.
+- **The chart colours by selection, not value, while B is drawn.** Two lines on one value ramp
+  are the same colour wherever they agree. The visualMap and the normal line are dropped;
+  A and B take `utils/points.ts`'s `PIN_COLORS` (green, violet — not amber `MAP` or sky
+  `CMP`), and the chip row is the legend. Pins carry an `A`/`B` letter, A's only while B
+  exists; a region B is outlined in violet beside A's green box (`FieldMap`'s `REGION_SLOTS`).
+- **A click on a pin or popup is ignored by the map's click handler.** Both sit inside the
+  canvas container, so without that check opening B's popup also moved A there.
+- URL keys `at2=` / `r2=`; `View.point2` / `View.region2` (`null` removes, absent leaves
+  alone). The series CSV gains `<column>_a,<column>_b`, joined on bucket start, named
+  `<A>_vs_<B>`. Events: `point_added` (`source`, `scope`), `region_added`, `point_removed`
+  (`kind`).
+
+#### Swipe compare
+
+**Only the date differs between the two halves.** Variable, period, colour range, scope and
+region are shared by construction, so one legend describes both and a colour means the same
+thing either side of the divider. Comparing anom against MHW was deliberately not built (see
+`ROADMAP.md`, A7).
+
+That is why the map was split in two. **`FieldMap.vue` holds all the Mapbox drawing and takes
+`date` as a prop**: everything else it reads from the store, so two instances can only differ
+in the date. **`AnomalyMap.vue` is the host**: it owns the projection, the camera and the
+divider, because two components each deciding where to fly would fight. Framing (`frame()`,
+`frameRegion()`) and `store.cameraRequest` go to the primary map; the compare map follows.
+
+- **The second map mounts only while compare is on.** It is a second WebGL context.
+- **It is stacked on the first and clipped with `clip-path: inset(0 0 0 X%)`.** A clip path
+  clips hit-testing too, so each half takes the drags and clicks for the map it shows.
+- **`FieldMap`'s root is a wrapper around the Mapbox container, and must stay one.** Mapbox
+  adds `.mapboxgl-map { position: relative }` to its container, unlayered, which beats the
+  host's layered Tailwind `absolute`. With the class on the container itself the compare map
+  sat below the primary, hidden by `overflow: hidden`, and both halves showed the primary's
+  date. Nothing errored and both maps reported their own image URL.
+- **The cameras are locked both ways** with `jumpTo` inside a re-entrancy guard, since
+  `jumpTo` fires the other map's `move` synchronously. Hand-rolled; no `mapbox-gl-compare`.
+- **`toggleCompare()` opens on the same bucket a year earlier**, clamped to coverage, and
+  `setPeriod()` re-snaps `compareDate` with `selectedDate`. Playback moves the main date
+  only.
+- **The field maps are created after the host mounts.** The saved projection is read in
+  the host's `onMounted`. Reading it during setup would render the projection buttons
+  differently on the server, and a child's `onMounted` runs before its parent's, so the
+  map would open on the wrong projection.
+- **Alt-click on the chart sets the compare date**, while compare is on — the same modifier
+  that drops pin B on the map, so "the second one" is one gesture everywhere. With
+  compare off the modifier is ignored, so a click never opens a second map. It reports
+  `compare_date_changed` with `source: 'chart'` and no debounce, since one click is one
+  choice.
+- The chart marks the compare bucket with a dashed sky `CMP` line beside `MAP`. Each half's
+  date label is dropped when that half is too narrow to hold it.
+
+#### The phone layout
+
+**`useViewport()` is one shared `narrow` flag (below 768px), false under SSR and set on
+mount.** The server cannot know the viewport, so it renders desktop and a phone switches
+once after hydration. Reading `matchMedia` in setup would be a hydration mismatch. Use the
+flag only where CSS cannot help (which component tree mounts, a prop, a number in script);
+anything that is only styling uses Tailwind's `md:`, the same breakpoint.
+
+- **The dock becomes a `UDrawer` bottom sheet** behind a peek bar naming the selection.
+  Exactly one of dock or sheet is mounted, so `MonthlyRankPanel`'s chart never initialises
+  in a hidden, zero-sized box. Both mount the panels through one `statsProps`/`rankProps`.
+- **The time bar wraps** (`flex-wrap`), on desktop too once compare's second stepper is
+  open. On a phone it uses `sm` controls, icon-only labels and no fps slider, because every
+  wrapped row comes out of the chart's pane.
+- **Playback prefetches 3 frames and holds 8 on a phone**, not 8 and 24. The frames cannot
+  be made lighter instead: a smaller image tier would have to be rendered from NetCDF, and
+  only the retention window is on disk.
+- **`usePlayback()` is module-level state**, one playhead for the page. It does not stop
+  itself on unmount; `TimeControl` does that.
+
+**Guided stories were built in v2.0 and removed on 2026-10-05**, before any real story was
+written (the only one was a draft placeholder). Gone with them: `StoryPicker`, `StoryCard`,
+`useStory`, `stories/index.ts`, the `story=`/`step=` URL keys, `View.camera`,
+`store.currentView()`/`mapCamera`/`cameraRequest`, and playback's `until` bound. A
+`story=` link now opens on its other keys and the story key is dropped from the URL.
 
 #### Downloading what is plotted
 
@@ -1355,8 +2002,13 @@ and a control it does not mention is one nobody looks for.
 imagery is for.** Clicking the legend opens a popover (`ColorLegend.vue`) with a
 two-handle slider, exact min/max number fields, and Reset. **The affordance is
 spelled out rather than left to the cursor** — a gradient reads as a legend, a
-thing you consult, so the trigger carries a `Customize` chip beside the title and
-the whole block (title, chip, bar, ticks) is one button. Categorical variables
+thing you consult, so the trigger ends in a ringed tune icon and the whole row
+(title, end values, bar, icon) is one button. The legend is **one line**, not a
+stacked block — it sits bottom-centre over the map, and every row of height is
+ocean it hides; `mhw`'s key is the same row of named swatches. An `×` at its end
+hides it outright (for screenshots); the way back is a `Legend` button beside the
+Globe/Flat toggle, shown only while it is hidden — the legend cannot carry its own
+restore control. Shared through `useLegend()`, remembered as `enso.legend.hidden`. Categorical variables
 keep a plain title: there is no range to edit. Narrowing `sst` to 20–30 recolours
 the map instantly and **issues no network request at all** — verified in Chromium, zero
 `/image` fetches — because the frame on screen carries the value and Mapbox re-applies the
@@ -1698,10 +2350,12 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `variable_changed`, `period_changed`, `playback_started`, `color_range_changed`,
 `csv_downloaded` (`kind: series | ranking`, plus `quantity` and, on a ranking,
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
-`baseline_note_opened` (`variable`),
-`about_opened`, `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`.
+`baseline_note_opened` (`variable`), `region_about_opened` (`region`),
+`about_opened`, `intro_closed` (`action: dismiss | guide`), `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
+`compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
+range).
 Server-side:
-`point_queried` (including the out-of-domain 400 — where people click outside the box is
+`land_point_queried` (`surface`, `buckets`), `point_queried` (including the out-of-domain 400 — where people click outside the box is
 the argument for widening it, which costs only a `domain.yml` edit), `point_ranking_queried`,
 `region_queried`, `region_box_queried`, `region_ranking_queried`.
 
@@ -1712,6 +2366,38 @@ reached only from the region menu, so picking the region already active is still
 menu, pick the default region — report nothing. Found in the browser, not by reading.
 
 
+### Tests and CI
+
+`.github/workflows/ci.yml` runs two jobs on push and PR: **pytest** over `shared/` and
+`CRW.checks` (`uv run --project process pytest tests`), and, in `front/`, **lint, vitest and
+`nuxt build`**. Type checking is not gated: `vue-tsc` reports ~100 errors on the existing
+code (mostly `mapbox-gl` having no bundled types, and Pinia getters losing inference in
+`main.ts`).
+
+- **`shared/testdata/periods_cases.json` is asserted by both** `tests/test_periods.py` and
+  `front/tests/periods.test.ts`. That turns "change one and change the other" into a failing
+  test; editing only the TypeScript week rule fails 20 cases.
+- **The Python tests use synthetic arrays, never NetCDF.** The orientation and leap-day
+  tests build 3600×7200 grids in memory and monkeypatch `_read_raw`.
+- **CI installs with `npm install --legacy-peer-deps`, not `npm ci`**, the same as
+  `front/Dockerfile`. The committed lock had drifted out of sync with `package.json` and
+  was regenerated that way.
+- **Running front tooling on the host:** `front/node_modules` on the host is an empty,
+  root-owned mount point left by Docker, so `npm install` there fails with EACCES. Copy
+  `front/` (without `node_modules`) to a scratch directory and install there.
+
+### `CRW.cli check`
+
+One line per invariant, exit 1 if any fails. Each one is a failure this project has already
+had, and none of them was reported at the time. It checks: freshness per archive, 366
+climatology keys, **`mhw_status` saying "ingested" while `mhw_daily` is empty** (a
+repartition in flight, which `/coverage` cannot see), category range and leap-day land over
+the last `--days` (default 45), every region rolled up through the last ingested date, and
+any region whose heatwave extent is zero on every day.
+
+**`--full` read 0 rows on dev.** ClickHouse 26.5 answered the whole-archive category count
+over 17.6 B rows from per-part metadata in 6 ms. Not verified on prod.
+
 ## Gotchas
 
 - **`--env-file .env.dev` is required** on every compose invocation, as above.
@@ -1719,29 +2405,45 @@ menu, pick the default region — report nothing. Found in the browser, not by r
   `ensure_schema()` is `CREATE TABLE IF NOT EXISTS`, so a changed `PARTITION BY` applies to
   a fresh deploy and is silently inert on the one that matters. `CRW.cli repartition` is
   the migration; `shared.ch.is_repartitioned()` is what answers "is this server on the new
-  key". Pause the cron for the duration — `run`'s ingest and the migration would otherwise
-  contend for the same partitions.
-- **`up -d --build` does NOT rebuild `process`, and nothing says so.** It is behind the
-  `tools` profile, and compose skips services outside the active profiles when building —
-  verified: a bare `config --services` on the prod file lists `api`, `db-ch` and `front`
-  only, and `process` appears solely under `--profile tools`. So a deploy that rebuilds the
-  API and the frontend leaves the **pipeline image on whatever code it was last built
-  with**, and `docker compose run` reuses that image rather than rebuilding it. A deploy is
-  therefore two commands, not one:
-
-  ```bash
-  docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-  docker compose -f docker-compose.prod.yml --env-file .env.prod --profile tools build process
-  ```
-
-  **The loud symptom is the lucky one**: a new subcommand fails with argparse's
-  `invalid choice: 'repartition'`, which is unmistakable. The quiet one is what to worry
-  about — a *changed* code path in `ingest.py`, `download.py` or `shared/` keeps running the
-  old version under cron, silently, for as long as nobody rebuilds. `shared/` is baked into
-  both images and mounted into neither in prod, so `api` can be on new code while `process`
-  is on old, which is exactly the drift that directory exists to prevent. Check with
-  `docker compose ... run --rm --no-deps process python -c "import CRW, pathlib; print(pathlib.Path(CRW.__file__).stat().st_mtime)"`,
-  or just rebuild — it is cached and cheap when nothing changed.
+  key". Stop `scheduler` for the duration — `run`'s ingest and the migration would
+  otherwise contend for the same partitions.
+- **`process` and `scheduler` share one `image:` name, and that is what gets `process`
+  rebuilt.** `process` is behind the `tools` profile, and compose skips services outside
+  the active profiles when building — so before `scheduler` existed, `up -d --build` left
+  the pipeline image on whatever code it was last built with, `api` could be on new
+  `shared/` while `process` was on old, and a new subcommand failed with argparse's
+  `invalid choice`. `scheduler` is not behind a profile and builds the same image
+  (`enso-prod-process`), so one `up -d --build` now covers both — verified with
+  `--dry-run`. **Give them different `image:` names, or put `scheduler` behind a profile,
+  and that silent drift comes back.**
+- **Pausing in the Prefect UI is undone by the next restart.** `serve()` applies
+  `RUN_SCHEDULE_PAUSED` every time it starts, and pauses the schedule when it stops.
+  Verified: unpause in the UI, `stop scheduler`, and the deployment reads paused. Unpause
+  again, `start scheduler`, and it is paused again. A host reboot restarts the
+  container too. **To hold the pipeline, `stop scheduler`.** That is the only pause that
+  lasts.
+- **`PREFECT_AUTH_STRING` must never be blank.** Prefect treats an empty string as a
+  password of `""`, not as "no auth": the server enables auth, the client sends no header,
+  and every call 401s — the scheduler dies on start registering its deployment. Dev
+  defaults to `admin:admin` for that reason.
+- **Three Prefect container details, each found by it failing** (the first two are about
+  the server container, so they apply to dev's local `prefect` and to the shared server's
+  own compose file, not to anything in prod here):
+  - The server's state mounts at `/var/lib/prefect`, **not `/opt/prefect`**. The image
+    keeps its `entrypoint.sh` in `/opt/prefect`, so a mount there leaves tini with no file
+    to run.
+  - Run as `UID`, the server cannot copy its UI bundle out of root-owned site-packages.
+    `PREFECT_UI_STATIC_DIRECTORY` must point somewhere writable, or the API comes up and the
+    UI is simply not served.
+  - `flows.py` cannot use `from __future__ import annotations`. Prefect builds a pydantic
+    model from the flow's signature, and a string `dt.date` fails every run at parameter
+    validation.
+- **`PREFECT_LOGGING_EXTRA_LOGGERS` attaches a handler but sets no level**, so `CRW.*` would
+  inherit the root's WARNING and every INFO line would be dropped before reaching the UI.
+  `daily_run` sets them to INFO itself.
+- **`PREFECT_UI_API_URL` is what the browser calls**, and left unset it defaults to
+  `http://0.0.0.0:4200/api` — the UI loads and then fails every request. It is
+  `PREFECT_PUBLIC_URL` + `/api`.
 - **`CH_IMAGE_TAG` must be >= the version that wrote `CH_DATA_DIR`.** ClickHouse has no
   downgrade path. Dev runs `clickhouse-server:latest`, so a data directory copied from a
   dev box to prod carries whatever major was current — 26.5.1.882 for the first copy —
@@ -1767,9 +2469,8 @@ menu, pick the default region — report nothing. Found in the browser, not by r
   bind-mounted `./data`. Set them to your own `id -u` / `id -g`.
 - **The `process` venv lives at `/opt/venv`, not `/app/.venv`** — compose bind-mounts
   `./process` over `/app`, which would hide anything installed under it.
-- **`api` needs `netCDF4` too.** It renders the head of the archive (buckets still inside
-  the retention window) from file. Historical frames come from the image cache, never from
-  ClickHouse.
+- **`api` still imports `netCDF4`**, but only to read the land climatology files' attributes
+  for `/coverage.land.layers`. It renders nothing; every frame comes from the image cache.
 - **The MHW category's on-disk encoding changes on 2024-07-01**, at a URL and filename that
   do not. Anything reading `heatwave_category` must bound the value at 1..5 rather than
   testing a sign or a fill value — see the source section above for what a floor alone
@@ -1880,13 +2581,31 @@ menu, pick the default region — report nothing. Found in the browser, not by r
   198.51.100.0/24, 203.0.113.0/24) — Python's `ipaddress` counts them as private. Real
   public IPv4 and IPv6 pass; a test with `203.0.113.7` looks like geoip is broken when it
   is not.
-- **`/image` renders on demand but never caches** (`api/modules/render.py`). Only
-  `process` writes the cache, because only it knows whether the retention window still
-  holds days that have yet to land in a bucket. So an unrendered bucket costs ~2.9 s
-  (daily) to ~8.7 s (monthly) on **every** request, and the browser's playback prefetch
-  warms 8 frames at a time — enough to saturate the API's thread pool and stall unrelated
-  requests behind it. Symptom: the map is slow, `data/images/` is empty, and a `curl` to
-  the API appears to hang. Fix is to run `CRW.cli render`.
+- **Lossless WebP rewrites the RGB of fully transparent pixels.** Without `exact=True`,
+  libwebp may replace the value channels under alpha 0, so `_bleed()`'s coastline fill does
+  not fully survive encoding. Measured on a cached 1996 frame: 1,784 of 23,279 coastal land
+  texels decode as code 0. `raster-resampling: nearest` keeps it off screen, and passing
+  `exact=True` would only fix frames rendered from now on.
+- **`TimeseriesChart`'s resize observer must watch the template ref.** The plot sits in
+  `<ClientOnly>`, so `container` is null at `onMounted`. For its whole life before v2.0 the
+  chart never followed its container, and it only showed once the time bar started wrapping
+  and the canvas spilled over the note below.
+- **Every NetCDF read in a process takes `shared/fields.py`'s `_NC_LOCK`, and a new reader
+  must too.** netCDF4-python releases the GIL around HDF5 calls, and the HDF5 it links isn't
+  thread-safe. Two FastAPI pool threads inside HDF5 at once **deadlock the whole API**: 0%
+  CPU, `/health` included, no log line, because a request is only logged when it completes.
+  Found when swipe compare asked for two uncached land frames at the same instant (back when
+  the API rendered on demand, which it no longer does — `process`'s threads are the exposure now);
+  reproduced with three concurrent `/image` requests, and fixed by the lock (six concurrent
+  renders plus an ocean one, all 200, `/health` in 25 ms during). The ocean path always had
+  the exposure and rarely hit it, because its frames are cached. `test_land.py` fails if a
+  `netCDF4.Dataset(` appears outside `_open`.
+- **`/image` serves the cache and nothing else** (`api/modules/render.py`). It used to render
+  a bucket on demand when its NetCDF was still on disk, which cost ~1–9 s of an API thread
+  per miss (playback's prefetch could saturate the pool) and hid a missing frame for exactly
+  as long as a source file happened to exist. Now a frame `process` hasn't written is a fast
+  404. Symptom of an unrendered range: the map keeps showing the previous frame (Mapbox's
+  image source keeps it on a 404). Fix is `CRW.cli render` or `CPC.cli render`.
 
 ## Status / not yet built
 
@@ -2117,4 +2836,28 @@ Verified on the baseline labelling (Chromium, per the recipe above):
   (`vue/no-multiple-template-root` in `index.vue`, `no-dynamic-delete` in
   `main.ts`) are pre-existing.
 
-Not built yet: a cron entry for `run`, tests.
+Verified on v2.0 (Chromium, per the recipe above; desktop 1440×900 and phone 390×844):
+
+- **Compare.** December 2015 against December 2010 over Nino 3.4 shows El Nino red left of
+  the divider and La Nina blue right of it, and a chart click moves only the left half. The
+  first v2.0 check missed the stacking bug above because the two dates it used looked alike.
+  On the globe and on Mercator both halves draw, and the region outline shows
+  on both. Dragging either half moves both cameras to the same centre and zoom. Monthly
+  re-snaps both dates (`2026-08-01` / `2025-08-01`). A `c=` link with `r=ne_pacific`
+  reopens both dates and the region. No page errors.
+- **Phone.** No horizontal overflow; the sheet opens with the stats and the ranking; the
+  divider drags by touch (50% → 19%); playback advances; the chart's canvas matches its
+  container after the time bar wraps.
+- **`/health`** stays 200 with a 17-day lag; **`/health/data`** answers 503 at the default
+  3 days and 200 with `STALE_AFTER_DAYS=30`.
+- **`CRW.cli check`** on the dev database fails exactly the two known problems (empty
+  `mhw_daily` mid-repartition, and `pacific_bioregions`' all-zero extent).
+- **The leap-day repair is not in the dev copy of the MHW archive.** In
+  `mhw_daily_repart`, every 29 February from 1988 to 2024 carries ~2,022,000 Cat 5 cells,
+  the unrepaired signature. After `repartition --finish`, `check` will fail
+  `mhw.leap_day_land` until `CRW.cli repair-mhw-land` has run.
+- **Not verified:** that each new analytics event fires exactly once. Dev runs with no
+  PostHog key, so `trackEvent` is a no-op and the events were read from code, not observed.
+
+Ideas deliberately deferred, with their costs and
+constraints, are in [ROADMAP.md](ROADMAP.md) — read it before proposing a feature.

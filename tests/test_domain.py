@@ -1,0 +1,165 @@
+"""`domain.yml` validation, and the grid arithmetic every cell identity rests on."""
+
+import pytest
+import yaml
+
+from shared import domain
+
+from conftest import ROOT
+
+
+def _clear():
+    for fn in (domain._raw, domain.global_grid, domain.subset, domain.variables,
+               domain.quantities, domain.regions):
+        fn.cache_clear()
+
+
+@pytest.fixture
+def edited_domain(tmp_path, monkeypatch):
+    """Load a copy of the real `domain.yml` with an edit applied."""
+    def load(edit):
+        raw = yaml.safe_load((ROOT / "shared/domain.yml").read_text())
+        edit(raw)
+        path = tmp_path / "domain.yml"
+        path.write_text(yaml.safe_dump(raw))
+        monkeypatch.setenv("ENSO_DOMAIN_YML", str(path))
+        _clear()
+        return domain
+    yield load
+    monkeypatch.delenv("ENSO_DOMAIN_YML", raising=False)
+    _clear()
+
+
+def test_real_domain_loads():
+    _clear()
+    assert {"sst", "anom", "mhw"} <= set(domain.variables())
+    assert "pacific_bioregions" in domain.regions()
+
+
+def test_preset_outside_limits_raises(edited_domain):
+    def edit(raw):
+        raw["variables"]["sst"]["presets"].append({"label": "Boiling", "vmin": 20.0, "vmax": 120.0})
+    with pytest.raises(ValueError, match="Boiling"):
+        edited_domain(edit).variables()
+
+
+@pytest.mark.parametrize("field, value", [
+    ("statistic", "median"),
+    ("computed_by", "someone"),
+    ("window_days", 10),
+])
+def test_bad_baseline_raises(edited_domain, field, value):
+    def edit(raw):
+        raw["variables"]["anom"]["baseline"][field] = value
+    with pytest.raises(ValueError, match="anom"):
+        edited_domain(edit).variables()
+
+
+def test_polygon_region_with_bounds_raises(edited_domain):
+    def edit(raw):
+        raw["regions"]["pacific_bioregions"]["lat"] = [40, 60]
+    with pytest.raises(ValueError, match="both a polygon"):
+        edited_domain(edit).regions()
+
+
+def test_region_east_of_west_required(edited_domain):
+    """A pair written the wrong way round must not be read as a wrap."""
+    def edit(raw):
+        raw["regions"]["nino34"]["lon"] = [240.0, 190.0]
+    with pytest.raises(ValueError, match="west to east"):
+        edited_domain(edit).regions()
+
+
+def test_unknown_region_group_raises(edited_domain):
+    def edit(raw):
+        raw["regions"]["nino34"]["group"] = "nowhere"
+    with pytest.raises(ValueError, match="nowhere"):
+        edited_domain(edit).regions()
+
+
+@pytest.mark.parametrize("edit, match", [
+    (lambda a: a.clear(), "no `about` block"),
+    (lambda a: a.update(why="  "), "about.why"),
+    (lambda a: a.update(references=[]), "references is empty"),
+    (lambda a: a["references"][0].update(url="doi.org/x"), "no https url"),
+])
+def test_region_about_required(edited_domain, edit, match):
+    """A region nobody can say why it is there, or cite, does not load."""
+    def change(raw):
+        edit(raw["regions"]["nino34"]["about"])
+    with pytest.raises(ValueError, match=match):
+        edited_domain(change).regions()
+
+
+def test_polygon_regions_carry_their_outline_source():
+    _clear()
+    for r in domain.regions().values():
+        assert r.about.references
+        assert (r.outline is not None) == r.masked, r.key
+
+
+def test_every_region_is_grouped():
+    _clear()
+    groups = domain.region_groups()
+    assert all(r.group in groups for r in domain.regions().values())
+
+
+def test_prime_meridian_box_wraps():
+    """The Mediterranean crosses 0: two column ranges, not the complement."""
+    _clear()
+    grid = domain.global_grid()
+    med = domain.regions()["mediterranean"]
+    assert med.wraps(grid)
+    west, east = med.gx_range(grid)
+    cols = med.gx_columns(grid)
+    assert cols[0] == west and cols[-1] == east
+    # ~42 degrees of longitude, not the ~318 sorting the pair would select.
+    assert 40 / 0.05 < len(cols) < 44 / 0.05
+    assert "OR" in med.gx_sql(grid)
+    # And a Pacific box is still one BETWEEN.
+    assert not domain.regions()["nino34"].wraps(grid)
+    assert "BETWEEN" in domain.regions()["nino34"].gx_sql(grid)
+
+
+def test_atl3_stops_short_of_the_meridian():
+    """359.975 is the last cell west of 0; 360.0 would round to gx 0 and wrap."""
+    _clear()
+    grid = domain.global_grid()
+    atl3 = domain.regions()["atl3"]
+    assert not atl3.wraps(grid)
+    assert atl3.gx_range(grid)[1] == grid.nlon - 1
+
+
+def test_antimeridian_cells_coincide():
+    """180.025E and -179.975E are one cell; 179.975E is its western neighbour."""
+    grid = domain.global_grid()
+    assert grid.gx(180.025) == grid.gx(-179.975)
+    assert grid.gx(179.975) == grid.gx(180.025) - 1
+
+
+def test_grid_round_trip():
+    grid = domain.global_grid()
+    for lat, lon in [(0.025, 200.025), (-59.975, 100.025), (64.975, 289.975)]:
+        assert grid.lat(grid.gy(lat)) == pytest.approx(lat)
+        assert grid.lon(grid.gx(lon)) == pytest.approx(lon)
+
+
+def test_subset_shape_matches_declared():
+    grid, box = domain.global_grid(), domain.subset()
+    gy0, gy1 = box.gy_range(grid)
+    gx0, gx1 = box.gx_range(grid)
+    assert (gy1 - gy0 + 1, gx1 - gx0 + 1) == (box.nlat, box.nlon)
+
+
+def test_mix_decodes_packed_bytes():
+    """`raster-color-mix` applied to normalised bytes recovers the value."""
+    enc = domain.variable("sst").encoding
+    code = 3456
+    hi, lo = code >> 8, code & 0xFF
+    r, g, b, offset = enc.mix()
+    idx = {"R": 0, "G": 1, "B": 2}
+    channels = [0.0, 0.0, 0.0]
+    channels[idx[enc.channels[0].upper()]] = hi / 255
+    channels[idx[enc.channels[1].upper()]] = lo / 255
+    value = r * channels[0] + g * channels[1] + b * channels[2] + offset
+    assert value == pytest.approx(code * enc.scale + enc.offset)

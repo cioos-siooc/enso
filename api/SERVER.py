@@ -1,9 +1,9 @@
-"""FastAPI service for the CoralTemp Pacific SST dashboard.
+"""FastAPI service for the Ocean Surface Temperature Atlas (OSTA).
 
 Timeseries are read live from ClickHouse. **Imagery is not**: map frames are
 rendered by `process` from the daily NetCDF and served from the cache here, so
-`/image` 404s on a bucket it has neither cached nor a source file for. See
-`modules/render.py` for why that is deliberate rather than a limitation.
+`/image` 404s on a bucket `process` has not rendered — the API never renders.
+See `modules/render.py` for why.
 
 Blocking work runs in the default thread pool via FastAPI's sync endpoints
 rather than blocking the event loop.
@@ -20,9 +20,12 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from shared.domain import global_grid, quantities, regions, subset, variable, variables
+from shared.domain import global_grid, quantities, region_groups, regions, subset, variable, variables
+from shared.domain import variable as variable_meta  # `variable` is a query param name in /image
 
 from modules import render, state
+from modules.land import LandLayerError, land_point_timeseries
+from modules.freshness import data_freshness
 from modules.clickhouse_helpers import client, reset
 from modules.periods import Period
 from modules.posthog_helpers import capture_event
@@ -40,6 +43,22 @@ from modules.timeseries import (
 # A Literal so FastAPI rejects an unknown name with a 422 before it reaches the
 # query builder, and documents the choice in /docs.
 Variable = Literal["sst", "anom", "mhw"]
+
+# What `/image` can draw: the ocean variables and the seven land overlay layers.
+# A SEPARATE Literal, deliberately — the land layers have a point series of
+# their own (`/landTimeseries`, a different grid and table) but no ranking or
+# region path, so widening `Variable` itself would let
+# `/timeseries?variable=land_tmax` through validation to code that cannot serve
+# it. This keeps that a 422.
+LandVariable = Literal[
+    "land_tmax", "land_tmin", "land_precip",
+    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio", "land_precip_anom",
+]
+ImageVariable = Literal[
+    "sst", "anom", "mhw",
+    "land_tmax", "land_tmin", "land_precip",
+    "land_tmax_anom", "land_tmin_anom", "land_precip_ratio", "land_precip_anom",
+]
 
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 
@@ -71,7 +90,7 @@ def _timestamp_uvicorn_logs() -> None:
 
 _timestamp_uvicorn_logs()
 
-app = FastAPI(title="CoralTemp Pacific SST API", version="0.2.0")
+app = FastAPI(title="OSTA API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -112,6 +131,15 @@ class PointRequest(BaseModel):
     variable: Variable = "sst"
 
 
+class LandPointRequest(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-360, le=360)
+    start: dt.date | None = None
+    end: dt.date | None = None
+    period: Period = "daily"
+    variable: LandVariable = "land_tmax"
+
+
 class RankingRequest(BaseModel):
     lat: float = Field(..., ge=-90, le=90)
     lon: float = Field(..., ge=-360, le=360)
@@ -133,12 +161,47 @@ class BoxRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
+    """Liveness. Always 200 while the API is up — the container healthcheck.
+
+    Carries how far behind the archive is, as information only: a stale archive
+    is still a site worth serving. `/health/data` is the one that fails.
+    """
     try:
         client().query("SELECT 1")
     except Exception as exc:  # noqa: BLE001 — health must report, not raise
         reset()
         return {"status": "degraded", "clickhouse": str(exc)}
-    return {"status": "ok", "clickhouse": "ok"}
+    try:
+        data = data_freshness()
+    except Exception as exc:  # noqa: BLE001 — see above
+        data = {"error": str(exc)}
+    return {"status": "ok", "clickhouse": "ok", "data": data}
+
+
+@app.get("/health/data")
+def health_data() -> JSONResponse:
+    """503 when either archive is more than `STALE_AFTER_DAYS` behind.
+
+    For an external uptime monitor, and never for Docker: see
+    `modules/freshness.py` for why staleness is not liveness.
+    """
+    try:
+        data = data_freshness()
+    except Exception as exc:  # noqa: BLE001 — unreachable data is not fresh data
+        reset()
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Could not read the ingest status.", "error": {"code": "status_unreadable", "message": str(exc)}},
+        )
+    if data["stale"]:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": f"The archive is more than {data['staleAfterDays']} days behind.",
+                "error": {"code": "data_stale", **data},
+            },
+        )
+    return JSONResponse(content=data)
 
 
 @app.get("/domain")
@@ -154,6 +217,11 @@ def domain() -> dict:
             "resolution": global_grid().resolution,
         },
         "imageBounds": render.bounds(),
+        # The land frames are global, so they have corners of their own. They
+        # carry the ocean frame's pixel grid round the globe
+        # (`render.land_canvas`), so the edges fall on that grid: a fraction of
+        # a pixel inside -180..180, 60S..~85N.
+        "landImageBounds": render.land_bounds(),
         "variables": {
             name: {
                 "longName": v.long_name,
@@ -172,6 +240,23 @@ def domain() -> dict:
                 ],
                 # `anom` is computed as sst - climatology, not stored.
                 "derived": v.derived,
+                # `global` for the ocean, `land` for the overlay layers — which
+                # control a layer belongs to, and which corners its image takes:
+                # `imageBounds` or `landImageBounds`.
+                "grid": v.grid,
+                # The CPC variable a land layer reads, or null for the ocean.
+                "source": v.source,
+                # The periods this layer exists at. The rainfall ratio is weekly
+                # and monthly only, and `/image` 400s on any other.
+                "periods": list(v.periods),
+                # How to LABEL a value where that differs from the number:
+                # `log2_percent` is the rainfall ratio, stored as log2 so a
+                # halving and a doubling are equidistant, printed as percent.
+                "display": v.display,
+                # What the sentinel grey means on this variable — ocean with no
+                # climatology, or land too dry for a ratio. Same colour, two
+                # different statements, so the legend reads it from here.
+                "noValueLabel": v.no_value_label,
                 # WHAT THIS VARIABLE IS MEASURED AGAINST, or null where that is
                 # not a question (`sst` is an absolute temperature).
                 #
@@ -278,7 +363,10 @@ def domain() -> dict:
         # mapping rather than a second one — a consumer looks up whichever key
         # the series named, and the two namespaces do not collide.
         "colorStops": {
-            **{name: render.colormap_stops(name) for name in VARIABLES},
+            # Every declared variable, the land layers included — iterated from
+            # `domain.yml` rather than the ocean's timeseries tuple, which would
+            # leave the land legends with no stops to draw.
+            **{name: render.colormap_stops(name) for name in variables()},
             **{name: render.quantity_stops(name) for name in quantities()},
         },
         "defaultVariable": "sst",
@@ -301,9 +389,13 @@ def domain() -> dict:
                 "lon": list(r.lon),
                 "partial": r.partial,
                 "masked": r.masked,
+                "group": r.group,
             }
             for r in regions().values()
         ],
+        # Menu headings, in order. A region whose group is not listed here (or
+        # has none) is listed after them, ungrouped.
+        "regionGroups": [{"key": k, "label": v} for k, v in region_groups().items()],
     }
 
 
@@ -416,6 +508,44 @@ def timeseries(request: PointRequest, http_request: Request):
     return result
 
 
+@app.post("/landTimeseries")
+def land_timeseries(request: LandPointRequest, http_request: Request):
+    """One land layer's record at the CPC cell nearest a point.
+
+    Global, unlike `/timeseries`: land is not cut to the Pacific box. A click on
+    CoralTemp OCEAN answers 200 with an empty series and `surface: "ocean"` —
+    the land frames are cut to that coastline, so a block overhanging the sea
+    is not something the map shows. See `modules/land.py`.
+
+    400 for a period the layer is not declared at (the rainfall ratio is weekly
+    and monthly only) or an anomaly layer whose climatology is not built, with
+    the reason in `detail`, same as `/image`.
+    """
+    try:
+        result = land_point_timeseries(
+            request.lat,
+            request.lon,
+            request.start,
+            request.end,
+            request.period,
+            request.variable,
+        )
+    except LandLayerError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc), "error": {"code": "land_unavailable"}},
+        )
+    capture_event(http_request, "land_point_queried", {
+        "variable": request.variable,
+        "period": request.period,
+        "lat": request.lat,
+        "lon": request.lon,
+        "surface": result["surface"],
+        "buckets": len(result["dates"]),
+    })
+    return result
+
+
 @app.post("/regionTimeseries")
 def region_timeseries_endpoint(request: BoxRequest, http_request: Request) -> dict:
     """cos(lat)-weighted mean anomaly over an arbitrary box, per `period` bucket."""
@@ -502,6 +632,39 @@ def named_region_geometry(key: str) -> dict:
     }
 
 
+@app.get("/region/{key}/about")
+def named_region_about(key: str) -> dict:
+    """Why a region is on the menu, how its edges are drawn, and the citations.
+
+    Out of `/domain` for the same reason as the geometry: ~20 KB of prose for 22
+    regions would nearly double a payload every page load fetches, to serve a
+    panel most visitors never open. Not instrumented here; the frontend reports
+    the opening, which is the choice.
+    """
+    region = regions().get(key)
+    if region is None:
+        raise HTTPException(404, f"unknown region {key!r}; known: {sorted(regions())}")
+    about, outline = region.about, region.outline
+    return {
+        "key": region.key,
+        "label": region.label,
+        "why": about.why,
+        "definition": about.definition,
+        "references": [
+            {"authors": r.authors, "year": r.year, "title": r.title,
+             "source": r.source, "url": r.url}
+            for r in about.references
+        ],
+        # A polygon's geometry source, from its own file. Null for a box, whose
+        # bounds (in `/domain`) are the whole definition.
+        "outline": (
+            {"source": outline.source, "url": outline.url, "retrieved": outline.retrieved}
+            if outline is not None
+            else None
+        ),
+    }
+
+
 @app.get("/region/{key}/monthlyRanking")
 def named_region_ranking(
     key: str,
@@ -572,9 +735,8 @@ def monthly_ranking_endpoint(request: RankingRequest, http_request: Request):
 def image(
     date: dt.date,
     width: int = Query(render.DEFAULT_WIDTH, ge=180, le=8192),
-    nocache: bool = False,
     period: Period = "daily",
-    variable: Variable = "sst",
+    variable: ImageVariable = "sst",
 ) -> Response:
     """One bucket's field as a Web-Mercator WebP, for a Mapbox image source.
 
@@ -586,25 +748,33 @@ def image(
     **This does not render from the database.** `process` produces every frame
     from the daily NetCDF, and `sst_daily` carries no `by_date` projection, so
     rebuilding an old bucket here would be a partition scan over billions of
-    rows. A cache miss with no NetCDF left on disk is a 404 — deliberately, so
-    a missing frame is a fast error rather than a hung request. Re-rendering
-    history means re-downloading the range and running `CRW.cli render`.
+    rows, and it does not render from NetCDF either: a cache miss is a 404,
+    so a missing frame is a fast error rather than a hung request. Re-rendering
+    history means re-downloading the range and running `CRW.cli render` or
+    `CPC.cli render`.
 
     There is no tile pyramid; the Pacific box is one image, and a pyramid can be
     added behind the same URL shape later.
     """
+    # A layer that does not exist at this period is a request error, not a
+    # missing frame: the rainfall ratio is weekly and monthly only, because a
+    # daily rainfall anomaly is noise. A 404 would read as "not rendered yet".
+    declared = variable_meta(variable).periods
+    if period not in declared:
+        raise HTTPException(
+            400,
+            f"{variable} is drawn at {', '.join(declared)} periods only, not {period}",
+        )
     payload = render.render(
         date,
         width=width,
-        use_cache=not nocache,
         period=period,
         variable_name=variable,
     )
     if payload is None:
         raise HTTPException(
             404,
-            f"no cached {variable} image for {date} ({period}, w{width}) and no "
-            "NetCDF on disk to render one from",
+            f"no {variable} image rendered for {date} ({period}, w{width})",
         )
     return Response(
         content=payload,

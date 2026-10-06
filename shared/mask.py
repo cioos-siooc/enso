@@ -27,7 +27,6 @@ interior rings for the islands.
 from __future__ import annotations
 
 import numpy as np
-from matplotlib.path import Path
 
 from .domain import GlobalGrid, Region
 
@@ -40,24 +39,62 @@ def cells_in(region: Region, grid: GlobalGrid) -> tuple[np.ndarray, np.ndarray]:
     is expressible as a `BETWEEN` and a polygon is not.
     """
     gy0, gy1 = region.gy_range(grid)
-    gx0, gx1 = region.gx_range(grid)
     gy = np.arange(gy0, gy1 + 1)
-    gx = np.arange(gx0, gx1 + 1)
+    gx = region.gx_columns(grid)
     GY, GX = np.meshgrid(gy, gx, indexing="ij")
 
     if region.polygon is None:
         return GY.ravel(), GX.ravel()
 
-    # matplotlib rather than shapely: it is already a dependency of both services
-    # (shared/render.py), `contains_points` is vectorised, and a mask is 55,533
-    # tests for `pacific_bioregions` -- milliseconds. A geometry library would be a new
-    # wheel in two images for one predicate.
-    lat = grid.lat(GY).ravel()
-    lon = grid.lon(GX).ravel()
-    points = np.column_stack([lon, lat])
+    # Onto the ring's own frame. The grid answers 0-360; a ring crossing the
+    # prime meridian is stored continuous (-98..12 for the North Atlantic), and a
+    # cell at 5 degrees east must be tested as 5, not as 365 — or at 350 as -10.
+    # `gx_columns` runs west to east, so these come out increasing — provided
+    # the frame is centred on the box, not started at its west edge: the box's
+    # first column is the cell NEAREST that edge and can sit half a cell west of
+    # it, which a frame starting at the edge would wrap 360 degrees east.
+    ref = 0.5 * (region.lon[0] + region.lon[1]) - 180.0
+    lats = grid.lat(gy)
+    lons = (grid.lon(gx) - ref) % 360.0 + ref
 
-    inside = np.zeros(len(points), bool)
+    inside = np.zeros(GY.shape, bool)
     for ring in region.polygon:
-        inside |= Path(np.asarray(ring, dtype="float64")).contains_points(points)
+        inside |= _scanline(np.asarray(ring, dtype="float64"), lats, lons)
 
-    return GY.ravel()[inside], GX.ravel()[inside]
+    return GY[inside], GX[inside]
+
+
+def _scanline(ring: np.ndarray, lats: np.ndarray, lons: np.ndarray) -> np.ndarray:
+    """Even-odd fill of one ring at the given cell centres, `(len(lats), len(lons))`.
+
+    A scanline rather than a point-in-polygon test per cell, because the cost of
+    the latter is cells x vertices: 55,533 x 4,573 for `pacific_bioregions` was
+    milliseconds, but the North Atlantic is ~3 M cells against tens of
+    thousands of vertices. Here each row costs one pass over the edges, then a
+    `searchsorted` over the crossings — the same centre-in-ring rule, decided
+    per row instead of per cell. No geometry library, for the reason
+    matplotlib was used before it: one predicate is not worth a wheel in the
+    image.
+
+    Half-open in latitude (`y1 <= y < y2`), so a vertex exactly on a row is
+    counted once, not twice.
+    """
+    if not np.array_equal(ring[0], ring[-1]):
+        ring = np.vstack([ring, ring[:1]])
+    x1, y1 = ring[:-1, 0], ring[:-1, 1]
+    x2, y2 = ring[1:, 0], ring[1:, 1]
+    out = np.zeros((len(lats), len(lons)), bool)
+    for i, y in enumerate(lats):
+        crosses = (y1 <= y) != (y2 <= y)
+        if not crosses.any():
+            continue
+        a, b, c, d = x1[crosses], y1[crosses], x2[crosses], y2[crosses]
+        xs = np.sort(a + (y - b) * (c - a) / (d - b))
+        # Pairs of crossings bound the inside: (x0, x1), (x2, x3), ...
+        lo = np.searchsorted(lons, xs[0::2], side="right")
+        hi = np.searchsorted(lons, xs[1::2], side="left")
+        row = np.zeros(len(lons) + 1, np.int32)
+        np.add.at(row, lo, 1)
+        np.add.at(row, hi, -1)
+        out[i] = np.cumsum(row[:-1]) > 0
+    return out

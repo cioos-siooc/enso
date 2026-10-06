@@ -1,6 +1,7 @@
 import { trackEvent } from '~/composables/useAnalytics'
 import { useMainStore } from '~/stores/main'
 import { bucketStart, shiftBuckets } from '~/utils/periods'
+import { isNarrow } from '~/composables/useViewport'
 
 export const MIN_FPS = 1
 export const MAX_FPS = 10
@@ -10,8 +11,23 @@ const DEFAULT_FPS = 4
 const AHEAD = 8
 /** Decoded frames held at once — see the note on memory below. */
 const CACHE_MAX = 24
+/**
+ * The same two on a phone. A decoded 2048px frame is ~4 MB, and mobile browsers
+ * evict a page's memory far sooner than a desktop's. The frames cannot be made
+ * lighter instead: a smaller image tier would have to be rendered from NetCDF,
+ * and only the retention window's files are still on disk.
+ */
+const AHEAD_NARROW = 3
+const CACHE_MAX_NARROW = 8
 /** A single slow frame must not freeze playback. */
 const FRAME_TIMEOUT_MS = 3000
+
+/** One playhead for the whole page, not one per caller. */
+const playing = ref(false)
+const fps = ref(DEFAULT_FPS)
+/** Invalidates an in-flight loop, so stop/start cannot leave two running. */
+let run = 0
+const cache = new Map<string, HTMLImageElement>()
 
 /**
  * Play the map forward one bucket at a time until the user stops it.
@@ -41,13 +57,6 @@ export function usePlayback() {
   const store = useMainStore()
   const api = useApi()
 
-  const playing = ref(false)
-  const fps = ref(DEFAULT_FPS)
-
-  /** Invalidates an in-flight loop, so stop/start cannot leave two running. */
-  let run = 0
-  const cache = new Map<string, HTMLImageElement>()
-
   const canPlay = computed(() => Boolean(store.selectedDate && store.coverage?.end))
 
   function warm(url: string): HTMLImageElement {
@@ -63,7 +72,7 @@ export function usePlayback() {
       img.decoding = 'async'
       img.src = url
       cache.set(url, img)
-      while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
+      while (cache.size > (isNarrow() ? CACHE_MAX_NARROW : CACHE_MAX)) cache.delete(cache.keys().next().value!)
     }
     return img
   }
@@ -82,6 +91,23 @@ export function usePlayback() {
     return stepped
   }
 
+  /**
+   * Every frame a bucket needs on screen: the ocean's, plus the land overlay's
+   * when it is on and drawable for that bucket.
+   *
+   * The land frame is awaited like the ocean one, not merely warmed. Mapbox's
+   * image source keeps its previous image until the new one decodes, so a land
+   * frame that lags would show last bucket's rain under this bucket's date for
+   * the length of the lag — the same stutter waiting on readiness exists to
+   * prevent for the ocean.
+   */
+  function frameUrls(date: string): string[] {
+    const urls = [api.imageUrl(date, store.period, store.variable)]
+    const land = store.landVariable
+    if (land && !store.landReasonAt(date)) urls.push(api.imageUrl(date, store.period, land))
+    return urls
+  }
+
   function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
   }
@@ -93,7 +119,7 @@ export function usePlayback() {
       const target = next(store.selectedDate)
       if (!target) break
 
-      await ready(api.imageUrl(target, store.period, store.variable))
+      await Promise.all(frameUrls(target).map(ready))
       if (!playing.value || mine !== run) return
 
       store.setDate(target)
@@ -101,10 +127,11 @@ export function usePlayback() {
       // Queue the window in front of the frame just shown. Cheap: these are
       // ~78 KB each and already rendered to disk on the API side.
       let ahead: string | null = target
-      for (let i = 0; i < AHEAD; i++) {
+      const aheadCount = isNarrow() ? AHEAD_NARROW : AHEAD
+      for (let i = 0; i < aheadCount; i++) {
         ahead = next(ahead)
         if (!ahead) break
-        warm(api.imageUrl(ahead, store.period, store.variable))
+        for (const url of frameUrls(ahead)) warm(url)
       }
 
       // fps is read per frame, so the slider takes effect on the next one.
@@ -116,6 +143,7 @@ export function usePlayback() {
     if (mine === run) playing.value = false
   }
 
+  /** Start playing, from the date on screen to the end of coverage. */
   function play() {
     if (!canPlay.value || playing.value) return
     // Parked on the last bucket, there is nothing forward to play — rewind
@@ -148,8 +176,6 @@ export function usePlayback() {
     if (playing.value) stop()
     else play()
   }
-
-  onBeforeUnmount(stop)
 
   return { playing, fps, canPlay, play, stop, toggle }
 }

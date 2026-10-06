@@ -77,6 +77,13 @@ export interface SeriesCsvOptions {
   /** Column header for the value, e.g. `anom_degC`. */
   unit?: string
   precision?: number
+  /**
+   * Point B's series. With it the file has one value column per point,
+   * `<column>_a` and `<column>_b`, joined on the bucket start — the two cells
+   * can have different edges, and a bucket only one of them has gets an empty
+   * field on the other side rather than dropping the row.
+   */
+  second?: Series | null
 }
 
 /**
@@ -99,9 +106,21 @@ export function seriesCsv(series: Series, opts: SeriesCsvOptions): string {
   const column = opts.unit === '°C'
     ? `${variable}_degC`
     : opts.unit === '%' ? `${variable}_pct` : variable
-  const rows: Cell[][] = [['start_date', 'end_date', column]]
-  for (const [i, date] of series.dates.entries()) {
-    rows.push([date, bucketEnd(date, period), number(series.values[i], precision)])
+  const second = opts.second
+  if (!second) {
+    const rows: Cell[][] = [['start_date', 'end_date', column]]
+    for (const [i, date] of series.dates.entries()) {
+      rows.push([date, bucketEnd(date, period), number(series.values[i], precision)])
+    }
+    return csvText(rows)
+  }
+  const a = new Map(series.dates.map((d, i) => [d, series.values[i]]))
+  const b = new Map(second.dates.map((d, i) => [d, second.values[i]]))
+  // ISO dates sort as strings.
+  const dates = [...new Set([...series.dates, ...second.dates])].sort()
+  const rows: Cell[][] = [['start_date', 'end_date', `${column}_a`, `${column}_b`]]
+  for (const date of dates) {
+    rows.push([date, bucketEnd(date, period), number(a.get(date), precision), number(b.get(date), precision)])
   }
   return csvText(rows)
 }

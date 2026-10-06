@@ -45,6 +45,7 @@ import os
 import time
 
 from shared.buckets import bucket_field
+from shared.domain import variable as variable_meta
 from shared.periods import PERIODS, Period, span, start_of
 from shared.render import DEFAULT_WIDTH, cache_path, encode, write_cache
 
@@ -230,7 +231,13 @@ def render_range(
     jobs: list[tuple[dt.date, Period, str, int]] = []
     skipped = 0
     for variable in variables:
+        # A layer declares the periods it exists at — the land rainfall ratio is
+        # weekly and monthly only — and `bucket_field` raises on any other. Skip
+        # rather than queue a job that can only fail inside a worker.
+        declared = variable_meta(variable).periods
         for period in periods:
+            if period not in declared:
+                continue
             for date in closed_buckets(period, lo, hi):
                 if not force and cache_path(date, width, period, variable).is_file():
                     skipped += 1

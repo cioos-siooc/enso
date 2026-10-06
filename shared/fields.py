@@ -17,22 +17,58 @@ which is why they are asserted here rather than trusted at each call site:
 
 Everything returned is already subset to `domain.yml`'s box, so row 0 is the
 box's southern edge and column 0 its western edge.
+
+**The NOAA CPC land archive is read here too, and its conventions are not these
+two.** It is already 0-360 (so it must NOT be rolled) and it is north-up (so it
+must be flipped), on its own 0.5-degree grid. See the land section at the foot of
+this module; `_check_land_axes` verifies both against the file's own coordinates
+rather than trusting either.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import functools
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 
 import netCDF4
 import numpy as np
 
-from .domain import global_grid, subset, variable
+from .domain import global_grid, land_grid, land_shape, subset, variable
 
 log = logging.getLogger(__name__)
+
+# EVERY NetCDF READ IN THE PROCESS GOES THROUGH ONE LOCK, and it is not optional.
+#
+# netCDF4-python releases the GIL around its HDF5 calls, and the HDF5 it links
+# is not built thread-safe. Two threads inside HDF5 at once DEADLOCK — the whole
+# process freezes at 0% CPU, `/health` included, since the stuck thread is in C
+# holding HDF5's own state. Found by opening the land overlay in swipe compare:
+# the two maps asked `/image` for two uncached land frames at the same instant,
+# FastAPI ran them on two pool threads, and the API never answered again.
+# Reproduced with three concurrent requests.
+#
+# The ocean path always had the same exposure and rarely hit it, because ocean
+# frames are served from the cache and only the retention window renders on
+# demand. Every uncached land frame renders on demand, so land found it at once.
+#
+# Held only while a file is open and its slices are read — the reduction and
+# the WebP encode, which are most of a frame's second, run outside it. The
+# render pool uses `spawn`ed processes, each with its own lock, so bulk
+# rendering is not serialised by this.
+_NC_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def _open(path):
+    """`netCDF4.Dataset(path)` under the process-wide lock. See `_NC_LOCK`."""
+    with _NC_LOCK, netCDF4.Dataset(path) as ds:
+        yield ds
 
 # Both archives live under the one ./data bind mount: the daily files in
 # `sst/`, the 366 climatology files in `climatology/`. They are separate
@@ -46,6 +82,13 @@ CLIM_DIR = Path(os.environ.get("CRW_CLIM_DIR", "/opt/data/climatology"))
 # 7,477,923 ocean cells in the Pacific box — but not the lifetime: like the
 # dailies it is pruned to the retention window.
 MHW_DIR = Path(os.environ.get("CRW_MHW_DIR", "/opt/data/MHW"))
+# The land archive: NOAA CPC Global Unified, from NOAA PSL. A FOURTH archive, and
+# the only one that is **one file per YEAR** rather than per date — `precip.2015.nc`
+# holds all 365 days. It also has the opposite lifetime to the dailies: nothing
+# prunes it. The whole record from 1985 is ~9.5 GB for all three variables, so it
+# is kept forever like the climatology, which is what keeps land history
+# re-ingestable and re-renderable without a re-download.
+LAND_DIR = Path(os.environ.get("CPC_NC_DIR", "/opt/data/land"))
 
 # coraltemp_v3.1_19850101.nc
 DAILY_RE = re.compile(r"^coraltemp_v3\.1_(?P<date>\d{8})\.nc$")
@@ -53,6 +96,9 @@ DAILY_RE = re.compile(r"^coraltemp_v3\.1_(?P<date>\d{8})\.nc$")
 MHW_RE = re.compile(r"^noaa-crw_mhw_v1\.0\.1_category_(?P<date>\d{8})\.nc$")
 # ct5km_v3.1_clim-sst-mean-daily-window-01day-01grid-source19912020_day0101.nc
 CLIM_GLOB = "ct5km_v3.1_clim-sst-mean-daily-window-01day-01grid-source*_day{mmdd:04d}.nc"
+# precip.2015.nc / tmax.2015.nc / tmin.2015.nc — a YEAR, not a date.
+LAND_RE = re.compile(r"^(?P<variable>precip|tmax|tmin)\.(?P<year>\d{4})\.nc$")
+LAND_VARIABLES = ("precip", "tmax", "tmin")
 
 VARIABLE_NAME = "analysed_sst"
 MHW_VARIABLE_NAME = "heatwave_category"
@@ -179,7 +225,7 @@ def _to_project_frame(raw: np.ndarray, *, flip_lat: bool) -> np.ndarray:
 
 
 def _read_raw(path: Path, *, squeeze_time: bool, var_name: str = VARIABLE_NAME) -> np.ndarray:
-    with netCDF4.Dataset(path) as ds:
+    with _open(path) as ds:
         var = ds.variables[var_name]
         # Raw shorts, not the masked/scaled floats netCDF4 would hand back — the
         # scale factor is reapplied by the ALIAS columns in ClickHouse, and by
@@ -344,3 +390,470 @@ def anomaly(daily_raw: np.ndarray, clim_raw: np.ndarray) -> np.ndarray:
 def no_clim_mask(daily_raw: np.ndarray, clim_raw: np.ndarray) -> np.ndarray:
     """Ocean cells with SST but no climatology — anomaly undefined, not land."""
     return valid_mask(daily_raw) & ~valid_mask(clim_raw)
+
+
+# --- The land archive: NOAA CPC Global Unified -------------------------------
+#
+# A different NOAA program (Climate Prediction Center, not Coral Reef Watch), a
+# different grid (0.5 degree, `domain.yml`'s `land` block) and a different file
+# shape (one NetCDF per YEAR, `(time, lat, lon)`). The reader lives here anyway,
+# because this module exists to be the ONE place a grid convention is applied,
+# and this source has two of its own:
+#
+#   1. It is **already 0-360** (`lon 0.25 .. 359.75`), so it is the one source in
+#      the project that must NOT be rolled. Rolling it by half the grid — the
+#      habit every other reader here has — would draw the Pacific over Africa.
+#
+#   2. It is **north-up** (`lat[0] = +89.75`), so it must be flipped, exactly as
+#      the CoralTemp climatology files are.
+#
+# Neither failure is loud. `_check_land_axes` therefore verifies both against the
+# file's own coordinate variables on every read, which is exact rather than
+# heuristic: if the rows and columns we slice are not the degrees `domain.yml`
+# says they are, nothing downstream can tell.
+
+# What the files use for "no data here" — ocean, and land outside the gauge
+# network. Not a `_FillValue`, so netCDF4's own masking is not what finds it.
+LAND_MISSING = -9.96921e36
+# Anything at or below this is the missing sentinel. A generous threshold rather
+# than an equality test: the value is a float32 the file declares to 6 digits,
+# and a real temperature never approaches -1e30.
+LAND_MISSING_FLOOR = -1e30
+
+# Storage quantisation, and the two scales are not the same choice.
+#
+# Temperature: 0.01 degC into Int16. `valid_range` is -90..50, so -9000..5000,
+# comfortably inside the type. Unlike SST these counts are a QUANTISATION rather
+# than the source's own encoding — CPC ships float32 — costing ~0.005 degC on an
+# analysis whose real uncertainty is station density.
+#
+# Precipitation: 0.1 mm into UInt16, deliberately NOT 0.01. Rain is non-negative,
+# and 0.01 mm would cap a UInt16 at 655.35 mm against a measured global maximum
+# of 666.69 mm and a declared `valid_range` of 1000 — i.e. it would clip real
+# values, at exactly the extremes a rainfall map is read for. 0.1 mm reaches
+# 6553.5 mm and is the precision daily rainfall is reported at anyway.
+LAND_TEMP_SCALE = 0.01
+LAND_PRECIP_SCALE = 0.1
+LAND_PRECIP_MAX_COUNT = 65535
+
+
+def land_path(variable_name: str, year: int, nc_dir: Path | None = None) -> Path:
+    """The year file for one land variable, e.g. `tmax.2015.nc`."""
+    if variable_name not in LAND_VARIABLES:
+        raise ValueError(
+            f"unknown land variable {variable_name!r}; known: {LAND_VARIABLES}"
+        )
+    return (nc_dir or LAND_DIR) / f"{variable_name}.{year}.nc"
+
+
+def _check_land_axes(ds) -> None:
+    """Verify the file's own lat/lon against `domain.yml`'s `land` grid.
+
+    The exact form of the orientation guard the ocean side gets heuristically
+    from `check_orientation()`. Both of this source's conventions are checked at
+    once: if the file were south-up, or on a -180..180 longitude frame, the
+    degrees at the sliced indices would not be the degrees the grid declares, and
+    every downstream consumer would be told the wrong cell's value with complete
+    confidence.
+    """
+    grid = land_grid()
+    lat = np.asarray(ds.variables["lat"][:], dtype="float64")
+    lon = np.asarray(ds.variables["lon"][:], dtype="float64")
+    if lat.shape != (grid.nlat,) or lon.shape != (grid.nlon,):
+        raise ValueError(
+            f"land file has a {lat.size}x{lon.size} grid, domain.yml's `land` "
+            f"declares {grid.nlat}x{grid.nlon}"
+        )
+    # [::-1] is the flip itself: applied, the file's rows must read as the
+    # project's south-up latitudes.
+    want_lat = grid.lat(np.arange(grid.nlat))
+    got_lat = lat[::-1]
+    if not np.allclose(got_lat, want_lat, atol=1e-6):
+        raise ValueError(
+            "land file latitudes do not match the `land` grid after the flip "
+            f"(got {got_lat[0]:.3f}..{got_lat[-1]:.3f}, expected "
+            f"{want_lat[0]:.3f}..{want_lat[-1]:.3f}). The file is expected to be "
+            "north-up; see shared/fields.py."
+        )
+    # No roll, and this is what says so. CPC ships 0-360 already.
+    want_lon = grid.lon(np.arange(grid.nlon))
+    got_lon = lon
+    if not np.allclose(got_lon, want_lon, atol=1e-6):
+        raise ValueError(
+            "land file longitudes do not match the `land` grid "
+            f"(got {got_lon[0]:.3f}..{got_lon[-1]:.3f}, expected "
+            f"{want_lon[0]:.3f}..{want_lon[-1]:.3f}). CPC files are already "
+            "0-360 and must NOT be rolled; see shared/fields.py."
+        )
+
+
+def _read_land(
+    variable_name: str,
+    year: int,
+    nc_dir: Path | None,
+    first: dt.date | None = None,
+    last: dt.date | None = None,
+) -> tuple[list[dt.date], np.ndarray]:
+    """The one land reader: a year file, optionally clipped to `first..last`.
+
+    Clipped by TIME INDEX on the way off disk, so a weekly bucket reads seven
+    slices rather than the whole year. Both public readers go through here, so
+    `_check_land_axes` guards every read, not just the ingest's.
+    """
+    path = land_path(variable_name, year, nc_dir)
+    with _open(path) as ds:
+        _check_land_axes(ds)
+        time = ds.variables["time"]
+        stamps = netCDF4.num2date(
+            time[:], time.units, only_use_cftime_datetimes=False, only_use_python_datetimes=True
+        )
+        dates = [dt.date(t.year, t.month, t.day) for t in stamps]
+
+        idx = [
+            i for i, d in enumerate(dates)
+            if (first is None or d >= first) and (last is None or d <= last)
+        ]
+        if not idx:
+            return [], np.empty((0, *land_shape()), dtype="float32")
+        # Contiguous in a daily file, so one hyperslab rather than a fancy index.
+        t0, t1 = idx[0], idx[-1] + 1
+        dates = dates[t0:t1]
+
+        var = ds.variables[variable_name]
+        var.set_auto_maskandscale(False)
+        stack = np.asarray(var[t0:t1], dtype="float32")
+
+    # The flip: the file's rows count south from the north pole, the project's
+    # north from the south pole. `_check_land_axes` has verified it.
+    stack = stack[:, ::-1, :]
+
+    want = land_shape()
+    if stack.shape[1:] != want:
+        raise ValueError(f"{path.name}: grid came out {stack.shape[1:]}, expected {want}")
+    if len(dates) != stack.shape[0]:
+        raise ValueError(f"{path.name}: {len(dates)} timestamps for {stack.shape[0]} days")
+    return dates, stack
+
+
+def read_land_year(
+    variable_name: str, year: int, nc_dir: Path | None = None
+) -> tuple[list[dt.date], np.ndarray]:
+    """One year of a land variable over the whole globe: `(dates, stack)`.
+
+    `stack` is `(ntime, 360, 720)` float32 in the source's own units — degC or
+    mm — south-up and unrolled, with `LAND_MISSING` left visible rather than
+    masked. Quantisation into storage counts happens at ingest.
+
+    **Per year, not per date, and deliberately.** These are 60-80 MB HDF5 files
+    holding every day of a year; opening one per date would be ~365 opens of the
+    same file.
+
+    `dates` is as long as `stack`'s first axis and comes from the file's own
+    `time`, so a partly-written current-year file — which is the normal state of
+    `precip.2026.nc` — reports exactly the days it holds.
+    """
+    return _read_land(variable_name, year, nc_dir)
+
+
+def read_land_days(
+    variable_name: str, first: dt.date, last: dt.date, nc_dir: Path | None = None
+) -> tuple[list[dt.date], np.ndarray]:
+    """The days `first..last` of a land variable, across year files as needed.
+
+    What a bucket reads. A week spanning 1 January opens two files; a year file
+    that is not on disk contributes nothing rather than raising, so a bucket at
+    the edge of the archive is simply short — the same rule the ocean's buckets
+    follow.
+    """
+    dates: list[dt.date] = []
+    parts: list[np.ndarray] = []
+    for year in range(first.year, last.year + 1):
+        if not land_path(variable_name, year, nc_dir).exists():
+            continue
+        d, stack = _read_land(variable_name, year, nc_dir, first, last)
+        dates += d
+        parts.append(stack)
+    if not parts:
+        return [], np.empty((0, *land_shape()), dtype="float32")
+    return dates, np.concatenate(parts, axis=0)
+
+
+def land_last_date(variable_name: str, nc_dir: Path | None = None) -> dt.date | None:
+    """The last day any year file of this variable holds, or None.
+
+    Reads only the newest file's `time`, which is what bounds rendering: the
+    current year's file is partial, and temperature and precipitation end on
+    different days (measured one day apart).
+    """
+    years = sorted(
+        int(m["year"]) for p in (nc_dir or LAND_DIR).glob(f"{variable_name}.*.nc")
+        if (m := LAND_RE.match(p.name))
+    )
+    if not years:
+        return None
+    return land_file_last_date(variable_name, years[-1], nc_dir)
+
+
+def land_file_last_date(
+    variable_name: str, year: int, nc_dir: Path | None = None
+) -> dt.date | None:
+    """The last day one year file holds, or None if it holds none.
+
+    A past year ends on 31 December; the current year's file ends wherever CPC
+    has got to. `CPC.cli prune` checks a file's days against this before
+    deleting it.
+    """
+    with _open(land_path(variable_name, year, nc_dir)) as ds:
+        time = ds.variables["time"]
+        if len(time) == 0:
+            return None
+        last = netCDF4.num2date(
+            time[-1], time.units, only_use_cftime_datetimes=False, only_use_python_datetimes=True
+        )
+    return dt.date(last.year, last.month, last.day)
+
+
+# --- The land climatology ----------------------------------------------------
+#
+# COMPUTED HERE, unlike the ocean's, which NOAA ships as 366 files. Built by
+# `CPC.cli clim` from the year files for 1991-2020 (see `process/CPC/
+# climatology.py`) and stored as one NetCDF per source, `(mmdd, lat, lon)` over
+# the box, south-up, with 366 keys including 0229 — the same key set `sst_clim`
+# uses, so `mmdd_of()` indexes both.
+#
+# **Smoothed over the day of year**, by the window each layer's `baseline`
+# declares (15 days for temperature, 7 for rainfall). The file records the
+# window and period it was built with, and `read_land_clim` RAISES when those
+# disagree with `domain.yml` — editing the window would otherwise keep silently
+# serving the old normal under the new label.
+
+LAND_CLIM_DIR = Path(os.environ.get("CPC_CLIM_DIR", str(LAND_DIR / "climatology")))
+
+# The 366 MMDD keys in calendar order, 0229 included. Index k of the file's
+# first axis is MMDD_KEYS[k].
+MMDD_KEYS: tuple[int, ...] = tuple(
+    d.month * 100 + d.day
+    for d in (dt.date(2000, 1, 1) + dt.timedelta(days=i) for i in range(366))
+)
+_MMDD_INDEX = {k: i for i, k in enumerate(MMDD_KEYS)}
+
+
+def land_clim_path(source: str, clim_dir: Path | None = None) -> Path:
+    return (clim_dir or LAND_CLIM_DIR) / f"{source}.clim.nc"
+
+
+def land_clim_attrs(source: str, clim_dir: Path | None = None) -> dict | None:
+    """What a built climatology file says about itself, or None if absent."""
+    path = land_clim_path(source, clim_dir)
+    if not path.exists():
+        return None
+    with _open(path) as ds:
+        return {a: ds.getncattr(a) for a in ds.ncattrs()}
+
+
+def read_land_clim(
+    source: str,
+    mmdds: list[int],
+    *,
+    period: str,
+    window_days: int,
+    clim_dir: Path | None = None,
+) -> np.ndarray:
+    """The climatology for each of `mmdds`, `(len(mmdds), 360, 720)` float32.
+
+    NaN where the cell has no data. Slices only the requested keys: a whole
+    file is ~380 MB in memory, and a monthly bucket needs 31 of its 366 keys.
+
+    Raises if the file was built for a different baseline or window than the
+    caller declares — see the section comment above.
+    """
+    path = land_clim_path(source, clim_dir)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no land climatology for {source!r} at {path}; run `CPC.cli clim`"
+        )
+    with _open(path) as ds:
+        got_period = str(ds.getncattr("baseline_period"))
+        got_window = int(ds.getncattr("window_days"))
+        if got_period != period or got_window != window_days:
+            raise ValueError(
+                f"{path.name} was built for {got_period} with a {got_window}-day "
+                f"window, but domain.yml declares {period} with {window_days}. "
+                "Rebuild it with `CPC.cli clim`."
+            )
+        idx = [_MMDD_INDEX[m] for m in mmdds]
+        unique = sorted(set(idx))
+        block = np.asarray(ds.variables[source][unique], dtype="float32")
+    where = {k: i for i, k in enumerate(unique)}
+    return block[[where[k] for k in idx]]
+
+
+def read_land_clim_cell(
+    source: str,
+    gy: int,
+    gx: int,
+    *,
+    period: str,
+    window_days: int,
+    clim_dir: Path | None = None,
+) -> dict[int, float]:
+    """One land cell's climatology, `{mmdd: value}` over all 366 keys.
+
+    The point-series twin of `read_land_clim`: the same file, the same baseline
+    check, but one `(gy, gx)` column of it rather than whole days — 366 floats
+    against ~380 MB. The file is south-up and 0-360 like the land grid, so the
+    indices go straight in. Keys with no data (NaN) are left out.
+    """
+    path = land_clim_path(source, clim_dir)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no land climatology for {source!r} at {path}; run `CPC.cli clim`"
+        )
+    with _open(path) as ds:
+        got_period = str(ds.getncattr("baseline_period"))
+        got_window = int(ds.getncattr("window_days"))
+        if got_period != period or got_window != window_days:
+            raise ValueError(
+                f"{path.name} was built for {got_period} with a {got_window}-day "
+                f"window, but domain.yml declares {period} with {window_days}. "
+                "Rebuild it with `CPC.cli clim`."
+            )
+        column = np.ma.filled(ds.variables[source][:, gy, gx], np.nan).astype("float64")
+    return {k: float(v) for k, v in zip(MMDD_KEYS, column) if np.isfinite(v)}
+
+
+def land_valid_mask(raw: np.ndarray) -> np.ndarray:
+    """Cells that carry a reading.
+
+    **Zero is a reading, not a gap**, which is the easiest thing to get wrong
+    here: a dry day over Darwin is 0.0 mm and belongs in the table. Only the
+    missing sentinel and NaN are absent.
+    """
+    return np.isfinite(raw) & (raw > LAND_MISSING_FLOOR)
+
+
+def to_temp_counts(celsius: np.ndarray) -> np.ndarray:
+    """degC -> the Int16 counts `land_temp_daily` stores. See `LAND_TEMP_SCALE`."""
+    counts = np.rint(np.asarray(celsius, dtype="float64") / LAND_TEMP_SCALE)
+    if counts.size and (counts.min() < -32768 or counts.max() > 32767):
+        raise ValueError(
+            f"temperature {counts.min() * LAND_TEMP_SCALE:.2f}.."
+            f"{counts.max() * LAND_TEMP_SCALE:.2f} degC does not fit Int16 at "
+            f"{LAND_TEMP_SCALE} degC — the source declares valid_range -90..50"
+        )
+    return counts.astype("int16")
+
+
+def to_precip_counts(mm: np.ndarray) -> np.ndarray:
+    """mm -> the UInt16 counts `land_precip_daily` stores.
+
+    Raises rather than clipping on an overflow, for the reason
+    `shared/render.py` clamps rather than wraps: a silently wrapped 6600 mm would
+    come back as a drizzle, and the extremes are what a rainfall layer is read
+    for. At 0.1 mm the ceiling is 6553.5 mm against a measured global maximum of
+    666.69 mm, so this should never fire — and if it does, it is news.
+    """
+    counts = np.rint(np.asarray(mm, dtype="float64") / LAND_PRECIP_SCALE)
+    if counts.size and (counts.min() < 0 or counts.max() > LAND_PRECIP_MAX_COUNT):
+        raise ValueError(
+            f"precipitation {counts.min() * LAND_PRECIP_SCALE:.1f}.."
+            f"{counts.max() * LAND_PRECIP_SCALE:.1f} mm does not fit UInt16 at "
+            f"{LAND_PRECIP_SCALE} mm"
+        )
+    return counts.astype("uint16")
+
+
+def land_layer_ready(name: str, clim_dir: Path | None = None) -> bool:
+    """Whether a land layer can be drawn right now.
+
+    An absolute layer always can, given its year files. An anomaly
+    layer needs its source's climatology file, built for exactly the baseline
+    period and window `domain.yml` declares — the same condition
+    `read_land_clim` enforces by raising, asked here first so `/coverage` can
+    tell the frontend to disable the toggle and `CPC.cli render` can skip the
+    layer with one warning rather than failing a frame at a time.
+    """
+    var = variable(name)
+    if var.transform == "none":
+        return True
+    attrs = land_clim_attrs(var.source, clim_dir)
+    return bool(
+        attrs
+        and str(attrs.get("baseline_period")) == var.baseline.period
+        and int(attrs.get("window_days", -1)) == var.baseline.window_days
+    )
+
+
+# --- The fine land mask the land layers are cut with -------------------------
+#
+# THE LAND RASTER IS CUT TO COASTLINES AT 0.05 DEGREE, NOT 0.5. A CPC cell is
+# ~55 km, so its block overhangs the sea along every coast — and in the Mapbox
+# style the land raster must sit ABOVE the basemap's land fill to be seen at all
+# (`country-boundaries` is a fill, the only land in the style), so an overhang
+# would paint over the ocean raster beneath it. Worst under `mhw`, whose calm
+# ocean is transparent: the blocks would sit on open water.
+#
+# So `render.encode()` ANDs a land layer's alpha with CoralTemp's own land mask.
+# The two rasters then tile exactly, with no overlap, in any stacking order and
+# under every ocean variable; a coastal land pixel with no CPC value shows the
+# basemap's land fill rather than a neighbouring block.
+#
+# A COMMITTED ARTIFACT, like `regions/*.geojson`, because CoralTemp's daily
+# files are pruned to a retention window and land frames are rendered long
+# after. CoralTemp's land is constant — measured on 2026-08-01, -15 and -30:
+# 7,477,923 ocean cells in the box each, byte-identical — so one day's mask is
+# every day's. GLOBAL, because the land frames are. Rebuild with
+# `CPC.cli ocean-mask`.
+
+OCEAN_MASK_PATH = Path(__file__).with_name("masks") / "coraltemp_ocean.npz"
+
+
+def build_ocean_mask(date: dt.date, nc_dir: Path | None = None, path: Path | None = None) -> Path:
+    """Write CoralTemp's GLOBAL ocean mask from one day's file.
+
+    Global, because the land frames are: outside the Pacific box there is no
+    ocean raster, and this is still the only coastline finer than CPC's 0.5
+    degree that the render path has.
+    """
+    grid = global_grid()
+    raw = _read_raw(daily_path(date, nc_dir), squeeze_time=True)
+    if raw.shape != (grid.nlat, grid.nlon):
+        raise ValueError(f"expected {(grid.nlat, grid.nlon)} grid, got {raw.shape}")
+    # South-up already; -180..180 -> 0..360, as `_to_project_frame` does.
+    ocean = np.roll(valid_mask(raw), grid.nlon // 2, axis=1)
+    path = path or OCEAN_MASK_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    gy0, gy1, gx0, gx1 = _subset_indices()
+    np.savez_compressed(
+        path,
+        packed=np.packbits(ocean, axis=None),
+        shape=np.array(ocean.shape),
+        n_ocean=np.array(int(ocean.sum())),
+        n_ocean_box=np.array(int(ocean[gy0 : gy1 + 1, gx0 : gx1 + 1].sum())),
+        source=np.array(daily_path(date, nc_dir).name),
+    )
+    return path
+
+
+@functools.lru_cache(maxsize=1)
+def global_ocean_mask() -> np.ndarray:
+    """CoralTemp's ocean cells worldwide, `(3600, 7200)` bool, south-up, 0-360."""
+    with np.load(OCEAN_MASK_PATH) as z:
+        shape = tuple(int(n) for n in z["shape"])
+        ocean = np.unpackbits(z["packed"], count=shape[0] * shape[1]).reshape(shape).astype(bool)
+        expected = int(z["n_ocean"])
+    grid = global_grid()
+    if shape != (grid.nlat, grid.nlon):
+        raise ValueError(
+            f"{OCEAN_MASK_PATH.name} is {shape}, not the global {(grid.nlat, grid.nlon)}; "
+            "rebuild with `CPC.cli ocean-mask`"
+        )
+    if int(ocean.sum()) != expected:
+        raise ValueError(f"{OCEAN_MASK_PATH.name} decodes to {int(ocean.sum())} ocean cells, recorded {expected}")
+    return ocean
+
+
+def ocean_mask() -> np.ndarray:
+    """The Pacific box's CoralTemp ocean cells, `(2500, 3800)` bool."""
+    gy0, gy1, gx0, gx1 = _subset_indices()
+    return global_ocean_mask()[gy0 : gy1 + 1, gx0 : gx1 + 1]

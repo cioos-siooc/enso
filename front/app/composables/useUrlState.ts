@@ -18,6 +18,7 @@
  * step through a hundred playback frames instead of leaving the site.
  */
 import { useMainStore, type VariableName } from '~/stores/main'
+import { LAND_SOURCES, type LandMode, type LandSource } from '~/utils/land'
 import { PERIODS, type Period } from '~/utils/periods'
 
 /** Query keys, kept short because these links get pasted into chat and email. */
@@ -27,7 +28,17 @@ const KEYS = {
   date: 'd',
   region: 'r',
   point: 'at',
+  /** The second selection: a cell (`at2`) or a named region (`r2`), never both. */
+  point2: 'at2',
+  region2: 'r2',
+  /** Swipe compare's second date; absent when compare is off. */
+  compare: 'c',
+  /** The land overlay (`tmax` | `tmin` | `precip`) and its mode; absent when off. */
+  land: 'land',
+  landMode: 'lm',
 } as const
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 const VARIABLES: VariableName[] = ['sst', 'anom', 'mhw']
 
@@ -56,16 +67,7 @@ export function useUrlState() {
   const store = useMainStore()
   const route = useRoute()
 
-  /**
-   * Read the query into the store, in one pass and with one fetch.
-   *
-   * `variable` and `period` are written straight into state rather than through
-   * `setVariable`/`setPeriod`, which would each fire their own refetch of a
-   * selection that is about to be replaced anyway — three requests for one link.
-   * They are also the two actions that report an analytics event, and arriving
-   * on a link is not the same gesture as pressing a toggle: a deep link should
-   * look like a page view, not like the visitor having changed the variable.
-   */
+  /** Read the query into the store, as one `applyView`. */
   async function applyQuery() {
     const q = route.query
     const variable = first(q[KEYS.variable]) as VariableName | null
@@ -73,44 +75,26 @@ export function useUrlState() {
     const date = first(q[KEYS.date])
     const region = first(q[KEYS.region])
     const point = first(q[KEYS.point])
+    const point2 = first(q[KEYS.point2])
+    const region2 = first(q[KEYS.region2])
+    const compare = first(q[KEYS.compare])
+    const land = first(q[KEYS.land]) as LandSource | null
+    const landMode = first(q[KEYS.landMode]) as LandMode | null
 
-    const patch: { variable?: VariableName, period?: Period } = {}
-    // Gated exactly as the toggle is: a stale link to `mhw` from before its
-    // archive was complete must not open on a variable the app would refuse to
-    // draw, and silently falling back is better than an empty map.
-    if (variable && VARIABLES.includes(variable) && store.variableReady(variable)) {
-      patch.variable = variable
-    }
-    if (period && PERIODS.some(p => p.value === period)) patch.period = period
-    if (Object.keys(patch).length) store.$patch(patch)
-
-    // After the period is in force, so the date snaps to the right bucket — and
-    // ALWAYS, not only when the link carries one. `$patch` above deliberately
-    // skips `setPeriod`, which is also the thing that re-snaps the current date;
-    // without this, `?p=monthly` with no `d` leaves the date on the weekly
-    // bucket the bootstrap chose, and the panel reports "no value for this
-    // bucket" against a series that has one for the month.
-    const target = date ?? store.selectedDate
-    if (target) store.setDate(target)
-
-    // One selection, one fetch. `track: false` on the point for the same reason
-    // the patch above skips the actions: this is not a click on the map.
-    if (region && store.domain?.regions?.some(r => r.key === region)) {
-      store.activeRegion = region
-      store.scope = 'region'
-      await store.loadRegionSeries()
-    }
-    else if (point) {
-      const p = parsePoint(point)
-      if (p) await store.selectPoint(p.lat, p.lon, { track: false })
-    }
-    else if (patch.variable || patch.period) {
-      // No selection named, but the field or the window changed under the
-      // opening cell the bootstrap already fetched — so that series is for the
-      // wrong variable and has to be replaced.
-      const p = store.selectedPoint
-      if (p) await store.selectPoint(p.lat, p.lon, { track: false })
-    }
+    await store.applyView({
+      variable: variable && VARIABLES.includes(variable) ? variable : undefined,
+      period: period && PERIODS.some(p => p.value === period) ? period : undefined,
+      date: date ?? undefined,
+      region: region ?? undefined,
+      point: point ? parsePoint(point) ?? undefined : undefined,
+      point2: point2 ? parsePoint(point2) ?? undefined : undefined,
+      region2: region2 ?? undefined,
+      compareDate: compare && ISO_DATE.test(compare) ? compare : undefined,
+      // Unknown values are dropped rather than trusted, like the variable: a
+      // hand-edited link must not put the store into a state no button reaches.
+      landLayer: land && LAND_SOURCES.includes(land) ? land : undefined,
+      landMode: landMode === 'value' || landMode === 'anomaly' || landMode === 'difference' ? landMode : undefined,
+    })
   }
 
   /** The query the current state deserves, with defaults left out. */
@@ -120,6 +104,11 @@ export function useUrlState() {
       [KEYS.period]: store.period,
     }
     if (store.selectedDate) q[KEYS.date] = store.selectedDate
+    if (store.compareDate) q[KEYS.compare] = store.compareDate
+    if (store.landLayer) {
+      q[KEYS.land] = store.landLayer
+      q[KEYS.landMode] = store.landMode
+    }
     if (store.scope === 'region') {
       if (store.activeRegion) q[KEYS.region] = store.activeRegion
     }
@@ -128,6 +117,12 @@ export function useUrlState() {
       // grid cell rather than on whatever pixel happened to be under the cursor,
       // and the two round to the same place anyway.
       q[KEYS.point] = formatPoint(store.pointSeries.cell)
+    }
+    if (store.secondRegion) q[KEYS.region2] = store.secondRegion
+    else if (store.secondPoint) {
+      // The resolved cell once it has one, the click until then — the same
+      // reason as A's, and a B that failed to load still names where it was.
+      q[KEYS.point2] = formatPoint(store.secondSeries?.cell ?? store.secondPoint)
     }
     return q
   }
@@ -148,8 +143,10 @@ export function useUrlState() {
     // `selectedDate` up to ten times a second and `replaceState` is cheap, but
     // `flush: 'post'` keeps it off the critical path of the frame.
     watch(
-      () => [store.variable, store.period, store.selectedDate, store.scope,
-             store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon],
+      () => [store.variable, store.period, store.selectedDate, store.compareDate, store.scope,
+             store.landLayer, store.landMode,
+             store.activeRegion, store.pointSeries?.cell?.lat, store.pointSeries?.cell?.lon,
+             store.secondPoint, store.secondRegion, store.secondSeries?.cell?.lat, store.secondSeries?.cell?.lon],
       sync,
       { flush: 'post' },
     )

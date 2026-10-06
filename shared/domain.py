@@ -98,7 +98,7 @@ class Subset:
 
 @dataclass(frozen=True)
 class Reference:
-    """One citation, for a method this project did not invent.
+    """One citation, for a method or a region this project did not invent.
 
     Kept structured rather than as a formatted string because the frontend
     renders the author/year as the link text and the full citation as its
@@ -106,10 +106,43 @@ class Reference:
     """
 
     authors: str
-    year: int
     title: str
     source: str
     url: str
+    # None for a living web page or dataset record (NOAA's ONI table, DFO's
+    # bioregions), which has no single publication year to cite.
+    year: int | None = None
+
+
+@dataclass(frozen=True)
+class RegionAbout:
+    """Why a region is on the menu, what its edges are, and who says so.
+
+    Required on every region, because a region is a claim: that this area is
+    worth an area mean, and that its boundary is the one the label names. A
+    region added without saying why, or without a source a reader can check,
+    is one nobody can defend later.
+    """
+
+    # Why the area matters, in plain words: the event or mode it is known for.
+    why: str
+    # What the boundary is and who drew it, including the caveats — "a box
+    # chosen for this dashboard", "not the index itself".
+    definition: str
+    references: tuple[Reference, ...]
+
+
+@dataclass(frozen=True)
+class Outline:
+    """Where a polygon region's geometry came from, read off its GeoJSON.
+
+    The file is the one record of this, so it is read rather than restated in
+    `domain.yml`, where a second copy could drift from the geometry it names.
+    """
+
+    source: str
+    url: str | None
+    retrieved: str | None
 
 
 @dataclass(frozen=True)
@@ -191,18 +224,64 @@ class Variable:
     short_name: str
     units: str
     precision: int
-    scale_factor: float
-    add_offset: float
-    fill_value: int
     vmin: float
     vmax: float
     encoding: Encoding
+    # How CoralTemp's own NetCDF packs the value. Meaningful for the ocean
+    # variables, which read that file; a land layer reads CPC's float32 and has
+    # nothing to declare here, so these are optional rather than filled with
+    # numbers that describe no file.
+    scale_factor: float = 1.0
+    add_offset: float = 0.0
+    fill_value: int | None = None
+    # Which grid this variable's raster is built on: `global` (CoralTemp,
+    # 0.05 degree) or `land` (NOAA CPC, 0.5 degree). Both render to the same
+    # image bounds — see `render.bounds()` — so this decides which reader
+    # `shared.buckets` uses, not where the image lands.
+    grid: str = "global"
+    # For a land layer, WHAT IT IS MADE OF, declared here rather than coded in
+    # `shared.buckets`: the CPC variable it reads (`tmax`, `tmin`, `precip`)
+    # and how a bucket is turned into the value drawn —
+    #
+    #   none        the mean over the bucket's days
+    #   difference  the mean of (value - climatology) over those days
+    #   log2_ratio  log2(mean(value) / mean(climatology)) over those days
+    #
+    # One declaration, so there is no second name -> source table to drift.
+    source: str | None = None
+    transform: str = "none"
+    # The bucket lengths this layer exists at. The rainfall ratio is weekly and
+    # monthly only: a daily rainfall anomaly is noise, where a daily temperature
+    # anomaly (a heatwave day) is not.
+    periods: tuple[str, ...] = ("daily", "weekly", "monthly")
+    # `nearest` draws each source cell as a flat block. Land uses it because a
+    # 0.5-degree cell is ~55 km and blending between centres would draw
+    # gradients the gauge analysis never resolved. `categorical` implies it.
+    resampling: str = "bilinear"
+    # Below this climatological value a `log2_ratio` means nothing — one 0.5 mm
+    # shower over a 0.05 mm/day normal reads as 1000% — so those cells draw the
+    # sentinel grey instead. Measured: 7% of the box's land in January.
+    min_normal: float | None = None
+    # How the frontend should LABEL a value, where that differs from the number
+    # itself. `log2_percent` is the rainfall ratio: stored and ranged as log2 so
+    # a halving and a doubling sit equidistant from normal, printed as percent
+    # (-1 -> 50%, 0 -> 100%, +1 -> 200%) so nobody has to read a logarithm.
+    display: str | None = None
+    # What the sentinel grey MEANS on this variable, for the legend. It is the
+    # same colour for two different reasons: ocean with no climatology (the ice
+    # fringe) and land too dry for a ratio.
+    no_value_label: str | None = None
     # Exactly one of these two carries the palette. `colormap` names a
     # matplotlib colormap sampled server-side; `colors` lists the classes of a
     # categorical variable explicitly, because `mhw`'s five are NOAA's own and
     # are recognised on sight — sampling some sequential map at five points
     # would throw that away.
     colormap: str | None = None
+    # The slice of `colormap` to spread over vmin..vmax, as fractions of it.
+    # For a ramp whose far end is too dark to read against the dark basemap and
+    # chart: YlGnBu ends in near-black navy, so precipitation stops at 0.75,
+    # where it is still a clear blue. The whole map when omitted.
+    colormap_range: tuple[float, float] | None = None
     colors: tuple[Category, ...] = ()
     # What the *absence* of a value means on this variable, as a colour, where
     # that is a thing rather than a gap. Only `mhw` declares one: its image is
@@ -365,10 +444,17 @@ class Region:
     lat: tuple[float, float]
     lon: tuple[float, float]
     partial: bool = False
-    # Outer rings, longitudes 0-360, or None for a plain box. No interior rings:
+    # A `region_groups` key: which heading the region menu lists it under.
+    group: str | None = None
+    # Outer rings, or None for a plain box. Longitudes are continuous across the
+    # ring — 0-360 where the region allows, negative where it crosses the prime
+    # meridian — and `lon` above is the ring's own west/east. No interior rings:
     # the islands inside a maritime zone are land, and land is excluded by
     # `sst_daily` holding ocean cells only, not by the geometry.
     polygon: tuple[tuple[tuple[float, float], ...], ...] | None = None
+    about: RegionAbout | None = None
+    # A polygon region's provenance; None for a box, whose bounds are its definition.
+    outline: Outline | None = None
 
     @property
     def masked(self) -> bool:
@@ -380,12 +466,38 @@ class Region:
         return tuple(sorted(int(grid.gy(v)) for v in self.lat))
 
     def gx_range(self, grid: GlobalGrid) -> tuple[int, int]:
-        """Inclusive `(first, last)` global column index of the bounding box.
+        """Inclusive `(west, east)` global column index of the bounding box.
 
-        Contiguous, not wrapping, for the reason `Subset.gx_range` documents:
-        `lon0` is on the 0-360 convention precisely so a Pacific box is one range.
+        **West first, not sorted, and `west > east` means the box wraps.** `lon0`
+        is on the 0-360 convention so a Pacific box is one range, but a region
+        crossing the PRIME meridian (the Mediterranean, the North Atlantic) is
+        then two: `gx >= west OR gx <= east`. Sorting the pair would silently
+        select the complement — every longitude the region does not cover.
+        `gx_sql()` writes the clause; nothing should hand-roll a BETWEEN on this.
         """
-        return tuple(sorted(int(grid.gx(v)) for v in self.lon))
+        return int(grid.gx(self.lon[0])), int(grid.gx(self.lon[1]))
+
+    def wraps(self, grid: GlobalGrid) -> bool:
+        """Whether the box crosses gx = 0, i.e. needs two column ranges."""
+        west, east = self.gx_range(grid)
+        return west > east
+
+    def gx_columns(self, grid: GlobalGrid) -> np.ndarray:
+        """Every global column index in the box, west to east, across a wrap."""
+        west, east = self.gx_range(grid)
+        if west <= east:
+            return np.arange(west, east + 1)
+        return np.concatenate([np.arange(west, grid.nlon), np.arange(0, east + 1)])
+
+    def gx_sql(self, grid: GlobalGrid) -> str:
+        """The `gx` half of a WHERE clause, binding `%(gx0)s`/`%(gx1)s`.
+
+        An OR of two ranges for a wrapping box. ClickHouse turns either form into
+        primary-key ranges within each `gy`, so the wrap costs nothing extra.
+        """
+        if self.wraps(grid):
+            return "(gx >= %(gx0)s OR gx <= %(gx1)s)"
+        return "gx BETWEEN %(gx0)s AND %(gx1)s"
 
 
 @functools.lru_cache(maxsize=1)
@@ -406,6 +518,44 @@ def subset() -> Subset:
 
 
 @functools.lru_cache(maxsize=1)
+def land_grid() -> GlobalGrid:
+    """The 0.5-degree CPC grid the land tables index.
+
+    A `GlobalGrid` like `global_grid()` and deliberately the same type: the
+    arithmetic is identical, only the resolution and origin differ. What differs
+    is the *source* convention — CPC files are north-up and already 0-360, so the
+    reader flips and does not roll. See `domain.yml`'s `land` block.
+    """
+    return GlobalGrid(**_raw()["land"])
+
+
+def land_shape() -> tuple[int, int]:
+    """`(nlat, nlon)` of every land array: the whole CPC grid, 360 x 720."""
+    grid = land_grid()
+    return grid.nlat, grid.nlon
+
+
+@functools.lru_cache(maxsize=1)
+def land_image() -> dict:
+    """`{south, north}` of the land frames — see `domain.yml`'s `land_image`."""
+    block = _raw()["land_image"]
+    return {k: float(block[k]) for k in ("south", "north")}
+
+
+def subset_shape(grid: GlobalGrid) -> tuple[int, int]:
+    """``(nlat, nlon)`` the configured box covers on `grid`.
+
+    Derived rather than declared, so the box has one definition. `subset`'s own
+    `nlat`/`nlon` are the answer for `global_grid()` (2500 x 3800) and are kept
+    there because they are load-bearing in the image bounds; this is what gives
+    the same box's shape on any other grid — 250 x 380 on `land_grid()`.
+    """
+    gy0, gy1 = subset().gy_range(grid)
+    gx0, gx1 = subset().gx_range(grid)
+    return gy1 - gy0 + 1, gx1 - gx0 + 1
+
+
+@functools.lru_cache(maxsize=1)
 def variables() -> dict[str, Variable]:
     out = {}
     for name, cfg in _raw()["variables"].items():
@@ -414,6 +564,13 @@ def variables() -> dict[str, Variable]:
         enc["channels"] = tuple(enc["channels"])
         if cfg.get("limits") is not None:
             cfg["limits"] = tuple(cfg["limits"])
+        if cfg.get("periods") is not None:
+            cfg["periods"] = tuple(cfg["periods"])
+        if cfg.get("colormap_range") is not None:
+            lo, hi = (float(x) for x in cfg["colormap_range"])
+            if not 0.0 <= lo < hi <= 1.0:
+                raise ValueError(f"{name}: colormap_range must be 0 <= lo < hi <= 1")
+            cfg["colormap_range"] = (lo, hi)
         cfg["colors"] = tuple(Category(**c) for c in cfg.get("colors", ()))
         cfg["presets"] = tuple(Preset(**p) for p in cfg.get("presets", ()))
         if cfg.get("baseline") is not None:
@@ -423,7 +580,55 @@ def variables() -> dict[str, Variable]:
         out[name] = Variable(name=name, encoding=Encoding(**enc), **cfg)
         _check_presets(out[name])
         _check_baseline(out[name])
+        _check_layer(out[name])
     return out
+
+
+_GRIDS = ("global", "land")
+_TRANSFORMS = ("none", "difference", "log2_ratio")
+_LAND_SOURCES = ("tmax", "tmin", "precip")
+_PERIODS = ("daily", "weekly", "monthly")
+
+
+def _check_layer(v: Variable) -> None:
+    """Reject a layer declaration `shared.buckets` could not honour.
+
+    Each of these would otherwise fail far from here — a misspelt transform as
+    an empty frame, a land layer with no source as a KeyError inside a render
+    worker, a period typo as a variable that never renders at one period and
+    never says why.
+    """
+    if v.grid not in _GRIDS:
+        raise ValueError(f"{v.name}: grid {v.grid!r} is not one of {_GRIDS}")
+    if v.transform not in _TRANSFORMS:
+        raise ValueError(f"{v.name}: transform {v.transform!r} is not one of {_TRANSFORMS}")
+    bad = [p for p in v.periods if p not in _PERIODS]
+    if bad or not v.periods:
+        raise ValueError(f"{v.name}: periods {v.periods} must be a non-empty subset of {_PERIODS}")
+    if v.resampling not in ("nearest", "bilinear"):
+        raise ValueError(f"{v.name}: resampling {v.resampling!r} is not nearest or bilinear")
+    if v.grid == "land":
+        if v.source not in _LAND_SOURCES:
+            raise ValueError(
+                f"{v.name}: a land layer needs a source in {_LAND_SOURCES}, got {v.source!r}"
+            )
+        if v.transform != "none" and v.baseline is None:
+            # An anomaly with no declared baseline is a departure from nothing
+            # the UI can name — and the climatology reader checks its file
+            # against exactly this block.
+            raise ValueError(f"{v.name}: transform {v.transform!r} needs a baseline block")
+        if v.transform == "log2_ratio" and v.min_normal is None:
+            raise ValueError(
+                f"{v.name}: a log2_ratio needs min_normal, or every desert cell "
+                "divides by a normal of ~0"
+            )
+        if v.transform == "log2_ratio" and v.encoding.sentinel is None:
+            raise ValueError(
+                f"{v.name}: a log2_ratio needs an encoding sentinel for its "
+                "too-dry-for-a-ratio cells"
+            )
+    elif v.source is not None or v.transform != "none":
+        raise ValueError(f"{v.name}: source/transform are land-only declarations")
 
 
 def _check_presets(v: Variable) -> None:
@@ -499,7 +704,7 @@ _REGION_DIR = Path(__file__).with_name("regions")
 
 
 def _load_polygon(filename: str) -> tuple[tuple[tuple[float, float], ...], ...]:
-    """Outer rings of a stored region polygon, longitudes on the 0-360 frame.
+    """Outer rings of a stored region polygon, longitudes as stored (continuous).
 
     Plain `json` rather than a geometry library: the file is read once per
     process and nothing here needs an operation on it beyond point-in-polygon,
@@ -517,6 +722,41 @@ def _load_polygon(filename: str) -> tuple[tuple[tuple[float, float], ...], ...]:
     if not rings:
         raise ValueError(f"{filename}: no usable ring")
     return rings
+
+
+def _load_outline(filename: str) -> Outline:
+    """The provenance a polygon file records about itself, in its properties."""
+    with (_REGION_DIR / filename).open() as fh:
+        props = json.load(fh).get("properties") or {}
+    if not props.get("source"):
+        raise ValueError(f"{filename}: properties carry no `source`")
+    return Outline(
+        source=props["source"],
+        url=props.get("source_url"),
+        retrieved=props.get("retrieved"),
+    )
+
+
+def _region_about(key: str, cfg: dict | None) -> RegionAbout:
+    """Parse a region's `about` block, raising where it would not defend it."""
+    if not cfg:
+        raise ValueError(f"region {key!r}: no `about` block; say why it matters and cite it")
+    for field in ("why", "definition"):
+        if not str(cfg.get(field) or "").strip():
+            raise ValueError(f"region {key!r}: about.{field} is empty")
+    refs = tuple(Reference(**r) for r in cfg.get("references") or ())
+    if not refs:
+        raise ValueError(f"region {key!r}: about.references is empty")
+    for r in refs:
+        if not r.url.startswith("https://"):
+            raise ValueError(f"region {key!r}: reference {r.title!r} has no https url")
+    return RegionAbout(why=cfg["why"].strip(), definition=cfg["definition"].strip(),
+                       references=refs)
+
+
+def region_groups() -> dict[str, str]:
+    """Region menu headings, key -> label, in menu order."""
+    return dict(_raw().get("region_groups") or {})
 
 
 @functools.lru_cache(maxsize=1)
@@ -543,12 +783,27 @@ def regions() -> dict[str, Region]:
             lat, lon = (min(ys), max(ys)), (min(xs), max(xs))
         else:
             lat, lon = tuple(cfg["lat"]), tuple(cfg["lon"])
+        # West before east, always: a box crossing the prime meridian is written
+        # unwrapped (-20..0, or 354..396) rather than as a pair that reads the
+        # wrong way round, so `gx_range` can tell a wrap from a typo. A box wider
+        # than the globe would wrap onto itself and double-count.
+        if not lon[0] < lon[1] or lon[1] - lon[0] > 360:
+            raise ValueError(
+                f"region {key!r}: lon {list(lon)} must run west to east, unwrapped, "
+                "and span at most 360 degrees"
+            )
+        group = cfg.get("group")
+        if group is not None and group not in region_groups():
+            raise ValueError(f"region {key!r}: group {group!r} is not in region_groups")
         out[key] = Region(
             key=key,
             label=cfg["label"],
             lat=lat,
             lon=lon,
             partial=cfg.get("partial", False),
+            group=group,
             polygon=polygon,
+            about=_region_about(key, cfg.get("about")),
+            outline=_load_outline(cfg["polygon"]) if polygon is not None else None,
         )
     return out

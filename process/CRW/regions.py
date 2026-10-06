@@ -87,6 +87,9 @@ def box_of(region) -> tuple[int, int, int, int]:
 
     For a POLYGON region this is the bounding box, which is the prefilter and not
     the region: `mask_filter()` below narrows it to the cells actually inside.
+
+    `gx0` is the WEST column and can exceed `gx1` — a box across the prime
+    meridian. Bind them through `region.gx_sql()`, never a bare BETWEEN.
     """
     grid = global_grid()
     return (*region.gy_range(grid), *region.gx_range(grid))
@@ -194,6 +197,7 @@ def build_region_daily(
         # numerator by an unmasked denominator, which is a plausible-looking
         # extent rather than an error.
         mask = mask_filter(region)
+        gx_where = region.gx_sql(global_grid())
 
         client.command(
             f"""
@@ -221,7 +225,7 @@ def build_region_daily(
                           nan) AS mean_sst_clim
                 FROM {DATABASE}.sst_daily
                 WHERE gy BETWEEN %(gy0)s AND %(gy1)s
-                  AND gx BETWEEN %(gx0)s AND %(gx1)s{mask}{where}
+                  AND {gx_where}{mask}{where}
                 GROUP BY date
             ) AS s
             LEFT JOIN (
@@ -236,7 +240,7 @@ def build_region_daily(
                        count() AS n_mhw
                 FROM {DATABASE}.mhw_daily
                 WHERE gy BETWEEN %(gy0)s AND %(gy1)s
-                  AND gx BETWEEN %(gx0)s AND %(gx1)s{mask}{where}
+                  AND {gx_where}{mask}{where}
                 GROUP BY date
             ) AS m ON s.date = m.date
             """,

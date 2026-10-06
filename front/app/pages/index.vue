@@ -1,12 +1,12 @@
 <template>
-  <!-- The panel sits beside the map, not over it. Reading numbers is a
-       per-selection question, so the map has to stay clickable while the panel
-       is open — it was a fullscreen modal first, which meant close / click /
-       reopen for every cell. It is on the LEFT because the map's own controls
-       (projection, legend, time bar) grew on the right and below. -->
   <div class="flex h-full min-h-0">
+    <!-- The panel sits beside the map, not over it. Reading numbers is a
+         per-selection question, so the map has to stay clickable while the panel
+         is open — it was a fullscreen modal first, which meant close / click /
+         reopen for every cell. It is on the LEFT because the map's own controls
+         (projection, legend, time bar) grew on the right and below. -->
     <SideDock
-      v-if="dockOpen"
+      v-if="!narrow && dockOpen"
       side="left"
       :title="subjectTitle"
       storage-key="enso.dock.width"
@@ -28,21 +28,7 @@
            map is on — the rail of twelve is gone, since the numbers above
            already say which bucket is being described. -->
       <div class="flex min-h-0 grow flex-col gap-3 overflow-y-auto">
-        <StatsPanel
-          :series="store.activeSeries"
-          :loading="store.activeSeriesLoading"
-          :empty-message="emptyPointMessage"
-          :error="!!store.activeError"
-          :stops="store.seriesStops"
-          :categorical="store.seriesIsCategorical"
-          :unit="store.seriesUnitLabel"
-          :precision="store.seriesPrecision"
-          :signed="store.variable === 'anom'"
-          :variable-label="variableLabel"
-          :period="store.period"
-          :selected-date="store.selectedDate"
-          :rank-order="rankOrder"
-        />
+        <StatsPanel v-bind="statsProps" />
 
         <!-- One panel, both scopes. A region's ranking is the same question over
              a different daily series — the API defines the ranking once and
@@ -55,18 +41,7 @@
         <MonthlyRankPanel
           v-if="store.activeRanking || store.activeSeriesLoading"
           class="min-h-0 grow border-t border-default pt-3"
-          :ranking="store.activeRanking"
-          :stops="store.seriesStops"
-          :loading="store.activeSeriesLoading"
-          :empty-message="emptyPointMessage"
-          :error="!!store.activeError"
-          :selected-date="store.selectedDate"
-          :unit="store.seriesUnitLabel"
-          :categorical="store.seriesIsCategorical"
-          :zero-line="store.variable === 'anom'"
-          :precision="store.seriesPrecision"
-          :rank-order="rankOrder"
-          :period="store.period"
+          v-bind="rankProps"
           @select="store.setDate($event)"
         />
       </div>
@@ -76,7 +51,7 @@
     <!-- Closed, the dock leaves a strip rather than vanishing: a panel with no
          visible way back is a panel users do not find twice. -->
     <button
-      v-else
+      v-else-if="!narrow"
       type="button"
       class="flex w-7 shrink-0 cursor-pointer flex-col items-center gap-2 border-r border-default bg-default py-3 text-muted transition-colors hover:text-default"
       title="Show the panel"
@@ -89,7 +64,21 @@
     <div class="flex min-w-0 grow flex-col">
       <div class="relative grow">
         <AnomalyMap />
-        <ColorLegend class="absolute bottom-4 left-1/2 z-10 -translate-x-1/2" />
+        <IntroCard />
+        <!-- Two legends when the land overlay is on, side by side: by default
+             each layer keeps its own range (the ocean anomaly opens at +/-3,
+             land at +/-8). The land legend's `Match ocean` puts a compatible
+             land layer on the ocean's range instead. They wrap onto two rows
+             on a phone rather than overflowing. -->
+        <div class="absolute bottom-0 left-1/2 z-10 flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap items-end justify-center gap-2">
+          <ColorLegend />
+          <ColorLegend
+            v-if="store.landVariable"
+            :variable="store.landVariable"
+            :reason="store.landReasonAt(store.selectedDate)"
+            label="Land"
+          />
+        </div>
       </div>
 
       <!-- The chart and, under it, what its values are measured against. The
@@ -97,25 +86,75 @@
            never sit on top of the line, and the chart takes whatever height is
            left — the note is ~18px and only present for a variable that
            declares a baseline. -->
-      <div class="flex h-[38%] shrink-0 flex-col border-t border-default p-3">
+      <div class="flex h-[46%] min-h-72 shrink-0 flex-col border-t border-default p-2 md:h-[38%] md:min-h-0 md:p-3">
         <div class="relative min-h-0 grow">
           <TimeseriesChart
             :series="store.activeSeries"
-            :loading="store.activeSeriesLoading"
+            :second-series="store.activeSecondSeries"
+            :loading="store.activeSeriesLoading || landLoading"
             :empty-message="emptyPointMessage"
             :error="!!store.activeError"
             :title="chartTitle"
             :selected-date="store.selectedDate"
+            :compare-date="store.compareDate"
             :stops="store.seriesStops"
             :zero-line="store.variable === 'anom'"
             :unit="store.seriesUnitLabel"
             :categorical="store.seriesIsCategorical"
             :label="variableLabel"
+            :land-series="store.activeLandSeries"
+            :second-land-series="store.activeSecondLandSeries"
+            :land-stops="store.landVariable ? store.stopsFor(store.landVariable) : []"
+            :land-unit="landMeta?.units === 'degC' ? '°C' : landMeta?.units"
+            :land-label="landMeta?.shortName"
+            :land-log2-percent="landMeta?.display === 'log2_percent'"
+            :land-zero-line="store.landMode !== 'value'"
             @select="store.setDate($event)"
-          />
+            @select-compare="setCompareFromChart"
+          >
+            <PointPair />
+          </TimeseriesChart>
         </div>
         <BaselineNote class="mt-1 shrink-0" />
       </div>
+
+      <!-- On a phone the dock has no room beside the map, so the same two
+           panels live in a bottom sheet instead. The peek bar is the sheet's
+           handle and says what the panels are about, so the selection is still
+           named on screen while the sheet is closed. Only one of dock or sheet
+           is ever mounted, which keeps the ranking's chart from initialising in
+           a hidden, zero-sized box. -->
+      <UDrawer
+        v-if="narrow"
+        v-model:open="sheetOpen"
+        :title="subjectTitle"
+        :description="subjectSubtitle"
+        :ui="{ content: 'h-[85dvh]', body: 'flex min-h-0 flex-col' }"
+      >
+        <button
+          type="button"
+          class="flex min-h-12 shrink-0 cursor-pointer items-center gap-2 border-t border-default bg-elevated px-4 text-left"
+          @click="sheetOpen = true"
+        >
+          <UIcon name="i-mdi-chevron-up" class="size-5 shrink-0 text-muted" />
+          <span class="min-w-0 grow">
+            <span class="block truncate text-sm font-semibold text-highlighted">{{ subjectTitle }}</span>
+            <span class="block truncate text-xs text-muted">Numbers and year rankings</span>
+          </span>
+        </button>
+
+        <template #body>
+          <div class="flex min-h-0 grow flex-col gap-3 overflow-y-auto">
+            <StatsPanel v-bind="statsProps" />
+            <MonthlyRankPanel
+              v-if="store.activeRanking || store.activeSeriesLoading"
+              class="min-h-[60dvh] grow border-t border-default pt-3"
+              v-bind="rankProps"
+              @select="store.setDate($event)"
+            />
+          </div>
+        </template>
+      </UDrawer>
     </div>
   </div>
 </template>
@@ -123,6 +162,8 @@
 <script setup lang="ts">
 import { useMainStore } from '~/stores/main'
 import { useUrlState } from '~/composables/useUrlState'
+import { trackEvent } from '~/composables/useAnalytics'
+import { formatCell } from '~/utils/points'
 
 const store = useMainStore()
 
@@ -137,6 +178,46 @@ useUrlState()
  * making the first thing a user sees a closed dock.
  */
 const dockOpen = ref(true)
+
+const { narrow } = useViewport()
+/** The phone layout's bottom sheet. Closed: the map is what a phone opens on. */
+const sheetOpen = ref(false)
+
+/**
+ * The two panels' props, once. The dock and the phone's sheet mount the same
+ * components, and two copies of a dozen bindings is how one of them ends up
+ * describing a different series.
+ */
+const statsProps = computed(() => ({
+  series: store.activeSeries,
+  loading: store.activeSeriesLoading,
+  emptyMessage: emptyPointMessage.value,
+  error: !!store.activeError,
+  stops: store.seriesStops,
+  categorical: store.seriesIsCategorical,
+  unit: store.seriesUnitLabel,
+  precision: store.seriesPrecision,
+  signed: store.variable === 'anom',
+  variableLabel: variableLabel.value,
+  period: store.period,
+  selectedDate: store.selectedDate,
+  rankOrder: rankOrder.value,
+}))
+
+const rankProps = computed(() => ({
+  ranking: store.activeRanking,
+  stops: store.seriesStops,
+  loading: store.activeSeriesLoading,
+  emptyMessage: emptyPointMessage.value,
+  error: !!store.activeError,
+  selectedDate: store.selectedDate,
+  unit: store.seriesUnitLabel,
+  categorical: store.seriesIsCategorical,
+  zeroLine: store.variable === 'anom',
+  precision: store.seriesPrecision,
+  rankOrder: rankOrder.value,
+  period: store.period,
+}))
 
 const periodLabel = computed(
   () => ({ daily: 'daily', weekly: 'weekly mean', monthly: 'monthly mean' })[store.period],
@@ -155,20 +236,20 @@ const periodLabel = computed(
  */
 const variableLabel = computed(() => store.seriesLabel)
 
-/**
- * A cell as hemispheres, not signed degrees.
- *
- * Cells come back on the 0-360 convention the database stores, so most of this
- * box's longitudes are above 180 and have to be unwrapped for display. Printing
- * the signed result as "°E" gave `-168.125°E`, which is a compass direction
- * contradicting its own sign.
- */
-function formatCell(cell: { lat: number, lon: number } | undefined): string {
-  if (!cell) return ''
-  const lon = ((cell.lon + 180) % 360) - 180
-  return `${Math.abs(cell.lat).toFixed(2)}°${cell.lat < 0 ? 'S' : 'N'}, `
-    + `${Math.abs(lon).toFixed(2)}°${lon < 0 ? 'W' : 'E'}`
+/** A modifier-click on the chart, with compare on. One click is one decision, so no debounce. */
+function setCompareFromChart(date: string) {
+  store.setCompareDate(date)
+  trackEvent('compare_date_changed', {
+    date: store.compareDate,
+    mapDate: store.selectedDate,
+    variable: store.variable,
+    period: store.period,
+    source: 'chart',
+  })
 }
+
+/** With B on the chart, the dock says it is describing A. */
+const pinPrefix = computed(() => (store.hasSecond ? 'A · ' : ''))
 
 /**
  * What the panel is describing, said in the panel's own header.
@@ -178,8 +259,8 @@ function formatCell(cell: { lat: number, lon: number } | undefined): string {
  * that its numbers sit a long way from the button that chose them.
  */
 const subjectTitle = computed(() => (store.scope === 'region'
-  ? store.activeRegionMeta?.label ?? 'Region'
-  : formatCell(store.pointSeries?.cell) || 'No cell selected'))
+  ? pinPrefix.value + (store.activeRegionMeta?.label ?? 'Region')
+  : pinPrefix.value + (formatCell(store.pointSeries?.cell) || 'No cell selected')))
 
 const subjectSubtitle = computed(() => (store.scope === 'region'
   ? 'Area mean over the region'
@@ -212,11 +293,32 @@ const chartTitle = computed(() =>
  * order: a failure first, then the informational out-of-box case, then the
  * hint. `activeError` is scope-aware, so a failed region load reads as one too.
  */
-const emptyPointMessage = computed(
-  () => store.activeError
-    ?? store.outsideDomain
-    ?? 'Click anywhere on the map to read that cell’s full record.',
-)
+const emptyPointMessage = computed(() => {
+  if (store.activeError) return store.activeError
+  if (store.scope === 'point' && store.landLayer) {
+    const reason = store.landChartReason ?? store.landPins.a.error
+    if (reason) return reason
+  }
+  if (store.outsideDomain) return store.outsideDomain
+  // Inside the box, a land click answers with an empty ocean series.
+  if (store.scope === 'point' && store.pointSeries && !store.pointSeries.dates.length) {
+    if (store.activeLandSeries) {
+      return 'No ocean record here. The chart shows this cell’s land record; the numbers and rankings cover the ocean only.'
+    }
+    return store.landLayer
+      ? 'No ocean or land record at this cell.'
+      : 'No ocean record here. Turn on a land layer to chart land temperature or precipitation.'
+  }
+  return 'Click anywhere on the map to read that cell’s full record.'
+})
+
+/** The land overlay's layer metadata, for the chart's right-hand axis. */
+const landMeta = computed(() =>
+  store.landVariable ? store.domain?.variables?.[store.landVariable] ?? null : null)
+
+/** Either pin's land series in flight, in point scope. */
+const landLoading = computed(() =>
+  store.scope === 'point' && (store.landPins.a.loading || store.landPins.b.loading))
 
 /**
  * What rank 1 means for what is actually plotted. "Warmest" is right for a

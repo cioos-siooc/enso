@@ -7,6 +7,13 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
+  app: {
+    head: {
+      title: 'Ocean Surface Temperature Atlas (OSTA)',
+      link: [{ rel: 'icon', type: 'image/svg+xml', href: '/osta-logo.svg' }],
+    },
+  },
+
   // Dark-only, matching the ocean-acidification dashboard. Light mode is a real
   // option but nothing here has been checked in it.
   colorMode: {

@@ -19,6 +19,9 @@ cell at Cat 1 for two days of seven averages to 0.29, which is not a category at
 all and would draw as nothing. The max answers the question the frame is read
 for — how bad did it get this week — and keeps every period on the same discrete
 1..5 scale, so one legend serves all three.
+
+The six **land** layers are reduced by what `domain.yml` declares for each
+(`source`, `transform`) — see `_land_bucket` at the foot of this module.
 """
 
 from __future__ import annotations
@@ -72,6 +75,7 @@ def bucket_field(
     *,
     nc_dir: Path | None = None,
     mhw_dir: Path | None = None,
+    land_dir: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, int] | None:
     """Reduce a bucket to one field, from whatever NetCDF is still on disk.
 
@@ -86,8 +90,12 @@ def bucket_field(
     caller skip the open/fail cycle on a sparse archive. It is only ever a
     filter — a date in it whose file is missing is still handled.
     """
+    var = variable(variable_name)
+    if var.grid == "land":
+        return _land_bucket(date, period, var, land_dir=land_dir)
+
     first, last = span(date, period)
-    reduce_max = variable(variable_name).categorical
+    reduce_max = var.categorical
 
     total: np.ndarray | None = None
     count: np.ndarray | None = None
@@ -141,3 +149,91 @@ def bucket_field(
     # that had an anomaly on at least one day carries that day's value.
     no_clim = (missing_any & (count == 0)) if variable_name == "anom" else None
     return field, no_clim, n_days
+
+
+# --- The land layers ---------------------------------------------------------
+#
+# Same contract as the ocean path above — `(field, no_value_mask, n_days)` or
+# None — so `render.encode()`, `CRW.imaging` and the API's on-demand render take
+# land with no branch of their own. What differs is where a day comes from (a
+# slice of a CPC year file, via `fields.read_land_days`) and what a bucket is,
+# which the variable DECLARES in `domain.yml` rather than this module deciding
+# by name:
+#
+#   none        mean of the dailies. For tmax/tmin that is "the average daily
+#               high/low", which is what a normal is; for precip it is mean
+#               mm/day, so one legend serves every period.
+#   difference  mean of (value - climatology(mmdd)) over the days present.
+#   log2_ratio  log2(mean(value) / mean(climatology)), both over the SAME
+#               valid days of the same cell — a ratio of means is a ratio of
+#               totals, so this is "the bucket's rainfall as a share of normal".
+#
+# **The ratio is floored at 2^LOG2_FLOOR before the log**, not left to reach
+# log2(0) = -inf: a bone-dry month is common in a dry region, and it must land on
+# the driest colour. The encoding's own clamp would do the same with a huge
+# negative, but a -inf passes through `to_mercator`'s arithmetic as NaN-adjacent
+# trouble, so it is settled here where the meaning is.
+
+LOG2_FLOOR = -4.0
+
+
+def _land_bucket(
+    date: dt.date, period: Period, var, *, land_dir: Path | None = None
+) -> tuple[np.ndarray, np.ndarray | None, int] | None:
+    if period not in var.periods:
+        # The API refuses these with a 400 before they get here; reaching this
+        # means a caller skipped `variable.periods`, and an empty frame would be
+        # the silent version of that mistake.
+        raise ValueError(
+            f"{var.name} is not drawn at the {period} period "
+            f"(declared: {', '.join(var.periods)})"
+        )
+
+    first, last = span(date, period)
+    dates, stack = fields.read_land_days(var.source, first, last, land_dir)
+    if not dates:
+        return None
+
+    valid = fields.land_valid_mask(stack)
+    count = valid.sum(axis=0)
+    has_data = count > 0
+    values = np.where(valid, stack, 0.0).astype("float64")
+
+    if var.transform == "none":
+        with np.errstate(invalid="ignore", divide="ignore"):
+            field = np.where(has_data, values.sum(axis=0) / count, np.nan)
+        return field.astype("float32"), None, len(dates)
+
+    clim = fields.read_land_clim(
+        var.source,
+        [fields.mmdd_of(d) for d in dates],
+        period=var.baseline.period,
+        window_days=var.baseline.window_days,
+    )
+    # A cell with a reading but no normal on that day contributes to neither
+    # side. The climatology mask is static in practice, but a day is only
+    # compared with a normal that exists.
+    paired = valid & np.isfinite(clim)
+    n = paired.sum(axis=0)
+    usable = n > 0
+    clim0 = np.where(paired, clim, 0.0).astype("float64")
+    vals0 = np.where(paired, stack, 0.0).astype("float64")
+
+    if var.transform == "difference":
+        with np.errstate(invalid="ignore", divide="ignore"):
+            field = np.where(usable, (vals0 - clim0).sum(axis=0) / n, np.nan)
+        return field.astype("float32"), None, len(dates)
+
+    # log2_ratio
+    with np.errstate(invalid="ignore", divide="ignore"):
+        actual = np.where(usable, vals0.sum(axis=0) / n, np.nan)
+        normal = np.where(usable, clim0.sum(axis=0) / n, np.nan)
+    too_dry = usable & (normal < var.min_normal)
+    ok = usable & ~too_dry
+    ratio = np.full(actual.shape, np.nan)
+    ratio[ok] = actual[ok] / normal[ok]
+    field = np.full(actual.shape, np.nan, dtype="float64")
+    field[ok] = np.log2(np.maximum(ratio[ok], 2.0**LOG2_FLOOR))
+    # `too_dry` is the no-value mask `encode()` turns into the sentinel grey:
+    # the cell has rainfall data, it just has no meaningful normal to divide by.
+    return field.astype("float32"), too_dry, len(dates)
