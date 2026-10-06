@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The app is the **Ocean Surface Temperature Atlas (OSTA)**: full name on first mention, OSTA
+thereafter. The repo, compose project, database and `enso.*` storage keys keep the old name.
+
 Modelled on the `ocean-acidification-dashboard` project next door — same four-service
 compose shape (`front` / `api` / `db-ch` / `process`), same ClickHouse-as-sole-database
 approach, same conventions for env files and Dockerfiles. Where this project differs,

@@ -283,7 +283,8 @@
       <div v-else class="space-y-5 text-sm">
         <section class="space-y-2">
           <p class="text-default">
-            Daily sea surface temperature, its anomaly against the 1991&ndash;2020
+            The Ocean Surface Temperature Atlas (OSTA) maps daily sea surface
+            temperature, its anomaly against the 1991&ndash;2020
             climatology, and NOAA&rsquo;s marine heatwave category &mdash; which uses a
             <em>different</em> baseline, see below &mdash; for the global ocean at
             0.05&deg; resolution, from 1985 to the present, with land temperature

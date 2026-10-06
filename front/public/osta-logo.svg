@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- OSTA "isotherm globe": latitude bands from cold poles to a warm equator,
+       asymmetric because the Southern Ocean is colder. -->
+  <defs><clipPath id="osta-globe"><circle cx="32" cy="32" r="28"/></clipPath></defs>
+  <g clip-path="url(#osta-globe)">
+    <rect width="64" height="64" fill="#22407a"/>
+    <path fill="#2f7fc0" d="M0 0H64V55C48 57 48 57 32 55C16 53 16 53 0 55Z"/>
+    <path fill="#6cc3c0" d="M0 0H64V48C48 46 48 46 32 48C16 50 16 50 0 48Z"/>
+    <path fill="#f2c14e" d="M0 0H64V41C48 43 48 43 32 41C16 39 16 39 0 41Z"/>
+    <path fill="#e4572e" d="M0 0H64V36C48 34 48 34 32 36C16 38 16 38 0 36Z"/>
+    <path fill="#f2c14e" d="M0 0H64V29C48 31 48 31 32 29C16 27 16 27 0 29Z"/>
+    <path fill="#6cc3c0" d="M0 0H64V24C48 22 48 22 32 24C16 26 16 26 0 24Z"/>
+    <path fill="#2f7fc0" d="M0 0H64V17C48 19 48 19 32 17C16 15 16 15 0 17Z"/>
+    <path fill="#22407a" d="M0 0H64V10C48 8 48 8 32 10C16 12 16 12 0 10Z"/>
+  </g>
+</svg>

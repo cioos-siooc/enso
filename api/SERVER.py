@@ -1,4 +1,4 @@
-"""FastAPI service for the CoralTemp Pacific SST dashboard.
+"""FastAPI service for the Ocean Surface Temperature Atlas (OSTA).
 
 Timeseries are read live from ClickHouse. **Imagery is not**: map frames are
 rendered by `process` from the daily NetCDF and served from the cache here, so
@@ -90,7 +90,7 @@ def _timestamp_uvicorn_logs() -> None:
 
 _timestamp_uvicorn_logs()
 
-app = FastAPI(title="CoralTemp Pacific SST API", version="0.2.0")
+app = FastAPI(title="OSTA API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,

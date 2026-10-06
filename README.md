@@ -1,4 +1,4 @@
-# Ocean Heat Atlas
+# Ocean Surface Temperature Atlas (OSTA)
 
 Daily sea-surface temperature, anomaly and marine-heatwave category for the **global ocean**,
 from **NOAA Coral Reef Watch**, with land temperature and precipitation from **NOAA CPC**
