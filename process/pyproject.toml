@@ -1,5 +1,5 @@
 [project]
-name = "enso-process"
+name = "osta-process"
 version = "0.1.0"
 description = "CoralTemp daily NetCDF -> ClickHouse download/ingest/render pipeline"
 requires-python = ">=3.12"

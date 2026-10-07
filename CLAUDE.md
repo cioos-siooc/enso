@@ -3,7 +3,8 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 The app is the **Ocean Surface Temperature Atlas (OSTA)**: full name on first mention, OSTA
-thereafter. The repo, compose project, database and `enso.*` storage keys keep the old name.
+thereafter. The repo, compose project, database and `enso.*` storage keys keep the old name;
+the `process` image, its package and everything registered with Prefect use `osta`.
 
 Modelled on the `ocean-acidification-dashboard` project next door — same four-service
 compose shape (`front` / `api` / `db-ch` / `process`), same ClickHouse-as-sole-database
@@ -1457,7 +1458,7 @@ docker compose -f docker-compose.dev.yml --env-file .env.dev \
   --profile prefect up -d prefect scheduler          # dev: http://localhost:9025, admin:admin
 ```
 
-- **What the UI shows**: flow `enso-daily-run`, deployment `daily`, tag `enso`, one flow
+- **What the UI shows**: flow `osta-daily-run`, deployment `osta-daily`, tag `osta`, one flow
   run per firing and
   **one task run per date**, named after the date. Each date's task ends in a state named
   for its outcome: `Ingested`, `Skipped`, `Unpublished` or `Failed`. So on a normal day the
@@ -2476,7 +2477,7 @@ over 17.6 B rows from per-part metadata in 6 ms. Not verified on prod.
   the pipeline image on whatever code it was last built with, `api` could be on new
   `shared/` while `process` was on old, and a new subcommand failed with argparse's
   `invalid choice`. `scheduler` is not behind a profile and builds the same image
-  (`enso-prod-process`), so one `up -d --build` now covers both — verified with
+  (`osta-prod-process`), so one `up -d --build` now covers both — verified with
   `--dry-run`. **Give them different `image:` names, or put `scheduler` behind a profile,
   and that silent drift comes back.**
 - **Pausing in the Prefect UI is undone by the next restart.** `serve()` applies

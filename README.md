@@ -100,7 +100,7 @@ docker compose -f docker-compose.dev.yml --env-file .env.dev \
 ```
 
 The UI is at http://localhost:9025 (`PREFECT_AUTH_STRING`, default `admin:admin`): flow
-`enso-daily-run`, deployment `daily`, one task per date. It fires at `RUN_CRON` (default
+`osta-daily-run`, deployment `osta-daily`, one task per date. It fires at `RUN_CRON` (default
 16:30 UTC, after both products have published). **Dev opens paused and with `keep_nc` on**
 (`RUN_SCHEDULE_PAUSED`, `RUN_KEEP_NC`), because a run that prunes deletes the local archive
 back to the open week. Unpausing in the UI does not survive a container restart; to hold the

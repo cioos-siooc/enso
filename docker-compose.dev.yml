@@ -20,7 +20,7 @@ x-process: &process
   build:
     context: .
     dockerfile: process/Dockerfile
-  image: enso-process
+  image: osta-process
   user: "${UID:-1000}:${GID:-1000}"
   env_file:
     - .env.dev

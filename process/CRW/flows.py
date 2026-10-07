@@ -59,7 +59,7 @@ DEFAULT_CRON = "30 16 * * *"
 
 
 @task(
-    name="process-date",
+    name="osta-process-date",
     task_run_name="{date}",
     # The task takes live clients, which cannot be hashed into a cache key, and
     # returns only an outcome word; there is nothing worth caching or persisting.
@@ -77,10 +77,11 @@ def process_date(client, http, date: dt.date, *, force: bool, keep_nc: bool) -> 
     return Completed(name=outcome.capitalize(), message=f"{date}: {outcome}")
 
 
-# Prefixed with the project: in prod the server is shared with other projects'
-# flows (pipelines.cioospacific.ca), and a bare `daily-run` would sit beside
-# theirs under one name.
-@flow(name="enso-daily-run", log_prints=True)
+# Flow, task, deployment and tag are all prefixed with the project: in prod the
+# server is shared with other projects' flows (pipelines.cioospacific.ca), and a
+# bare `daily-run` or `daily` would sit beside theirs under one name. OSTA, not
+# the repo's old `enso`, since that is the name a reader of the shared UI knows.
+@flow(name="osta-daily-run", log_prints=True)
 def daily_run(
     date: dt.date | None = None,
     recheck_days: int = 30,
@@ -133,8 +134,8 @@ if __name__ == "__main__":
     from CRW.flows import daily_run as served
 
     served.serve(
-        name="daily",
-        tags=["enso"],
+        name="osta-daily",
+        tags=["osta"],
         cron=os.environ.get("RUN_CRON", DEFAULT_CRON),
         paused=_bool_env("RUN_SCHEDULE_PAUSED"),
         parameters={"keep_nc": _bool_env("RUN_KEEP_NC")},

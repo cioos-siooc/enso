@@ -70,7 +70,7 @@ x-process: &process
   build:
     context: .
     dockerfile: process/Dockerfile
-  image: enso-prod-process
+  image: osta-prod-process
   user: "${UID:-1000}:${GID:-1000}"
   env_file:
     - .env.prod
