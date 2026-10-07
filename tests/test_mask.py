@@ -57,3 +57,25 @@ def test_cell_half_a_step_west_of_the_ring_is_not_wrapped_in():
     region = Region(key="t", label="t", lat=(0.0, 0.3), lon=(200.04, 200.3), polygon=(ring,))
     _, gx = cells_in(region, grid)
     assert (grid.lon(gx) > 200.04).all()
+
+
+def test_hole_is_cut_out():
+    """A stored interior ring is water the region does not cover."""
+    grid = domain.global_grid()
+    ring = ((200.0, 0.0), (200.3, 0.0), (200.3, 0.3), (200.0, 0.3), (200.0, 0.0))
+    hole = ((200.1, 0.1), (200.2, 0.1), (200.2, 0.2), (200.1, 0.2), (200.1, 0.1))
+    whole = Region(key="t", label="t", lat=(0.0, 0.3), lon=(200.0, 200.3), polygon=(ring,))
+    cut = Region(key="t", label="t", lat=(0.0, 0.3), lon=(200.0, 200.3), polygon=(ring,),
+                 holes=((hole,),))
+    gy, gx = cells_in(cut, grid)
+    lat, lon = grid.lat(gy), grid.lon(gx)
+    assert len(cells_in(whole, grid)[0]) - len(gy) == 4
+    assert not ((lat > 0.1) & (lat < 0.2) & (lon > 200.1) & (lon < 200.2)).any()
+
+
+def test_saint_pierre_et_miquelon_is_not_canadian_water():
+    """It is a hole in the Newfoundland-Labrador Shelves, not an island to drop."""
+    grid = domain.global_grid()
+    spm = (grid.gy(46.3), grid.gx(-56.4 % 360))
+    gy, gx = cells_in(domain.regions()["nl_shelves"], grid)
+    assert spm not in set(zip(gy.tolist(), gx.tolist()))

@@ -18,7 +18,7 @@
       :title="store.selectedPoint ? 'The clicked cell' : 'Click the map to pick a cell'"
       @click="store.setScope('point')"
     />
-    <UDropdownMenu :items="items" :content="{ align: 'start' }">
+    <UDropdownMenu :items="items" :content="{ align: 'start' }" :ui="{ label: 'text-[#d4af37]' }">
       <UButton
         icon="i-mdi-vector-rectangle"
         trailing-icon="i-mdi-chevron-down"

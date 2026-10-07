@@ -448,10 +448,15 @@ class Region:
     group: str | None = None
     # Outer rings, or None for a plain box. Longitudes are continuous across the
     # ring — 0-360 where the region allows, negative where it crosses the prime
-    # meridian — and `lon` above is the ring's own west/east. No interior rings:
-    # the islands inside a maritime zone are land, and land is excluded by
-    # `sst_daily` holding ocean cells only, not by the geometry.
+    # meridian — and `lon` above is the ring's own west/east. Islands are NOT
+    # holes: they are land, and land is excluded by `sst_daily` holding ocean
+    # cells only, not by the geometry.
     polygon: tuple[tuple[tuple[float, float], ...], ...] | None = None
+    # Interior rings, `holes[i]` cutting `polygon[i]`, or None. Only for WATER
+    # the region does not cover: Saint-Pierre et Miquelon's French zone sits
+    # inside Canada's Newfoundland-Labrador Shelves, and dropping it with the
+    # islands would average French water into a Canadian region.
+    holes: tuple[tuple[tuple[tuple[float, float], ...], ...], ...] | None = None
     about: RegionAbout | None = None
     # A polygon region's provenance; None for a box, whose bounds are its definition.
     outline: Outline | None = None
@@ -703,25 +708,31 @@ def quantity(name: str) -> Quantity:
 _REGION_DIR = Path(__file__).with_name("regions")
 
 
-def _load_polygon(filename: str) -> tuple[tuple[tuple[float, float], ...], ...]:
-    """Outer rings of a stored region polygon, longitudes as stored (continuous).
+def _load_polygon(filename: str):
+    """Outer rings of a stored region polygon and each one's holes, as stored.
+
+    Longitudes are continuous across the ring. A file stores a hole only where
+    it means one (see `Region.holes`), so whatever interior rings it carries are
+    honoured; `holes` is None when it carries none.
 
     Plain `json` rather than a geometry library: the file is read once per
     process and nothing here needs an operation on it beyond point-in-polygon,
-    which `shared/mask.py` gets from matplotlib.
+    which `shared/mask.py` does itself.
     """
     with (_REGION_DIR / filename).open() as fh:
         feature = json.load(fh)
     geom = feature["geometry"]
     polys = geom["coordinates"] if geom["type"] == "MultiPolygon" else [geom["coordinates"]]
-    rings = tuple(
-        tuple((float(x), float(y)) for x, y in poly[0])
-        for poly in polys
-        if len(poly[0]) >= 4
-    )
-    if not rings:
+    polys = [p for p in polys if len(p[0]) >= 4]
+    if not polys:
         raise ValueError(f"{filename}: no usable ring")
-    return rings
+
+    def ring(r):
+        return tuple((float(x), float(y)) for x, y in r)
+
+    rings = tuple(ring(p[0]) for p in polys)
+    holes = tuple(tuple(ring(h) for h in p[1:] if len(h) >= 4) for p in polys)
+    return rings, (holes if any(holes) else None)
 
 
 def _load_outline(filename: str) -> Outline:
@@ -771,7 +782,7 @@ def regions() -> dict[str, Region]:
     """
     out = {}
     for key, cfg in _raw()["regions"].items():
-        polygon = _load_polygon(cfg["polygon"]) if cfg.get("polygon") else None
+        polygon, holes = _load_polygon(cfg["polygon"]) if cfg.get("polygon") else (None, None)
         if polygon is not None and ("lat" in cfg or "lon" in cfg):
             raise ValueError(
                 f"region {key!r}: declares both a polygon and explicit bounds; "
@@ -803,6 +814,7 @@ def regions() -> dict[str, Region]:
             partial=cfg.get("partial", False),
             group=group,
             polygon=polygon,
+            holes=holes,
             about=_region_about(key, cfg.get("about")),
             outline=_load_outline(cfg["polygon"]) if polygon is not None else None,
         )

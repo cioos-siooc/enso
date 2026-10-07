@@ -20,7 +20,7 @@
       :aria-pressed="store.addingPoint"
       @click="onClick"
     />
-    <UDropdownMenu v-else :items="items" :content="{ align: 'start' }">
+    <UDropdownMenu v-else :items="items" :content="{ align: 'start' }" :ui="{ label: 'text-[#d4af37]' }">
       <UButton
         class="rounded-lg shadow-lg"
         :size="size"

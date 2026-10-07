@@ -631,6 +631,7 @@ variables:
 
 # How the region menu is grouped, in menu order. Every region names one.
 region_groups:
+  canada: Canadian waters
   basins: Ocean basins
   enso: ENSO and its relatives
   north_pacific: North Pacific
@@ -891,7 +892,30 @@ regions:
           title: "The Pacific Decadal Oscillation, revisited"
           source: "Journal of Climate 29, 4399-4427"
           url: "https://doi.org/10.1175/JCLI-D-15-0508.1"
-  # --- The one region that is NOT a box.
+  # --- Canadian waters: Fisheries and Oceans Canada's Federal Marine
+  # Bioregions. Each marine bioregion is its own region except the Arctic
+  # Archipelago, which is under ice in every day of the 1991-2020 climatology
+  # (no anomaly) and has never had a heatwave day: only a flat SST near freezing.
+  # The Great Lakes are left out because CoralTemp has no water there (all four
+  # lakes checked are land in `masks/coraltemp_ocean.npz`).
+  #
+  # WHERE A BOUNDARY IS DISPUTED, THE REGION FOLLOWS CANADA'S POSITION, which is
+  # what DFO's file already draws: the 141st meridian in the Beaufort Sea, the
+  # A-B line in Dixon Entrance, the water seaward of Juan de Fuca, and Machias
+  # Seal Island and North Rock in the Gulf of Maine. Do not swap in an outline
+  # that splits these on a median line.
+  #
+  # Every file is built the way `pacific_bioregions.geojson` was (island holes
+  # dropped, longitudes 0-360), with one exception that matters: Saint-Pierre et
+  # Miquelon's French zone is a HOLE in the Newfoundland-Labrador Shelves, not an
+  # island, so `nl_shelves` keeps it as an interior ring (`Region.holes`).
+  # Dropping it with the islands put 590 cells of French water inside a Canadian
+  # region. That boundary is settled (1992 arbitration), not disputed.
+  #
+  # The Arctic ones are ice-covered for much of the year. CoralTemp still has an
+  # SST there, so `sst` and `mhw` extent average over the ice, but `anom` only
+  # covers the cells with a climatology, which in winter is far fewer.
+  # --- The first polygon region, and the one that set the rules.
   #
   # Canada's Pacific waters are not a rectangle: the bounding box is 55,533
   # cells against the region's 26,222, so 53% of what a box query would average
@@ -915,7 +939,7 @@ regions:
   # so the label names the bioregions and not the zone. The file records its
   # source, retrieval date and simplification.
   pacific_bioregions:
-    group: north_pacific
+    group: canada
     label: Pacific Bioregions (DFO)
     polygon: pacific_bioregions.geojson
     about:
@@ -927,8 +951,191 @@ regions:
         Canada's Federal Marine Bioregions: Offshore Pacific, Northern Shelf,
         Southern Shelf and Strait of Georgia. This is a marine planning
         framework, not a legal maritime boundary, which is why it is not called
-        the EEZ.
+        the EEZ. Where the boundary with the United States is unsettled, in
+        Dixon Entrance and seaward of the Strait of Juan de Fuca, it follows
+        Canada's position.
       references:
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+
+  scotian_shelf:
+    group: canada
+    label: Scotian Shelf (DFO)
+    polygon: scotian_shelf.geojson
+    about:
+      why: >-
+        The continental shelf off Nova Scotia, in the fast-warming
+        Northwest Atlantic. It has had abrupt warm events when warm
+        slope water from the Gulf Stream side reached onto the shelf.
+      definition: >-
+        The Scotian Shelf bioregion in Fisheries and Oceans Canada's
+        Federal Marine Bioregions, from the Bay of Fundy past
+        Sable Island to the Laurentian Channel. It includes the water
+        around Machias Seal Island and North Rock, following Canada's
+        position where the United States disputes it. A marine planning
+        framework, not a legal boundary.
+      references:
+        - authors: Brickman et al.
+          year: 2018
+          title: "Mechanism for the recent ocean warming events on the Scotian Shelf of eastern Canada"
+          source: "Continental Shelf Research 156, 11-22"
+          url: "https://doi.org/10.1016/j.csr.2018.01.001"
+        - authors: Saba et al.
+          year: 2016
+          title: "Enhanced warming of the Northwest Atlantic Ocean under climate change"
+          source: "Journal of Geophysical Research: Oceans 121, 118-132"
+          url: "https://doi.org/10.1002/2015JC011346"
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+  gulf_st_lawrence:
+    group: canada
+    label: Gulf of St. Lawrence (DFO)
+    polygon: gulf_st_lawrence.geojson
+    about:
+      why: >-
+        A semi-enclosed sea fed at depth by Atlantic water through Cabot
+        Strait. Its deep water has warmed and lost oxygen as more of
+        that inflow comes from the warm Gulf Stream side rather than the
+        Labrador Current. This dashboard sees only its surface.
+      definition: >-
+        The Gulf of Saint Lawrence bioregion in Fisheries and Oceans
+        Canada's Federal Marine Bioregions, including the estuary. A
+        marine planning framework, not a legal boundary.
+      references:
+        - authors: Gilbert et al.
+          year: 2005
+          title: "A seventy-two-year record of diminishing deep-water oxygen in the St. Lawrence estuary: The northwest Atlantic connection"
+          source: "Limnology and Oceanography 50(5), 1654-1666"
+          url: "https://doi.org/10.4319/lo.2005.50.5.1654"
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+  nl_shelves:
+    group: canada
+    label: Newfoundland-Labrador Shelves (DFO)
+    polygon: nl_shelves.geojson
+    about:
+      why: >-
+        The Labrador Current's shelves and the Grand Banks, where the
+        northern cod fishery collapsed in 1992. Their ocean climate
+        swings between cold and warm decades.
+      definition: >-
+        The Newfoundland-Labrador Shelves bioregion in Fisheries and
+        Oceans Canada's Federal Marine Bioregions, with Saint-Pierre et
+        Miquelon's French zone cut out. A marine planning framework, not
+        a legal boundary.
+      references:
+        - authors: Cyr and Galbraith
+          year: 2021
+          title: "A climate index for the Newfoundland and Labrador shelf"
+          source: "Earth System Science Data 13, 1807-1828"
+          url: "https://doi.org/10.5194/essd-13-1807-2021"
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+  hudson_bay:
+    group: canada
+    label: Hudson Bay Complex (DFO)
+    polygon: hudson_bay.geojson
+    about:
+      why: >-
+        A shallow inland sea that freezes over every winter and clears
+        in summer. Its ice now breaks up earlier and forms later,
+        lengthening the open-water season. In winter its surface sits at
+        freezing.
+      definition: >-
+        The Hudson Bay Complex bioregion in Fisheries and Oceans
+        Canada's Federal Marine Bioregions: Hudson Bay, James Bay, Foxe
+        Basin and Hudson Strait. A marine planning framework, not a
+        legal boundary.
+      references:
+        - authors: Hochheim and Barber
+          year: 2014
+          title: "An update on the ice climatology of the Hudson Bay system"
+          source: "Arctic, Antarctic, and Alpine Research 46(1), 66-83"
+          url: "https://doi.org/10.1657/1938-4246-46.1.66"
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+  eastern_arctic:
+    group: canada
+    label: Eastern Arctic (DFO)
+    polygon: eastern_arctic.geojson
+    about:
+      why: >-
+        Baffin Bay, Davis Strait and the eastern entrances to the
+        Northwest Passage, where the ice clears each summer. Arctic
+        marine heatwaves start when sea ice melts early and the open
+        water absorbs the summer sun.
+      definition: >-
+        The Eastern Arctic bioregion in Fisheries and Oceans Canada's
+        Federal Marine Bioregions. A marine planning framework, not a
+        legal boundary. Under ice, the surface sits at freezing and has
+        no anomaly.
+      references:
+        - authors: Barkhordarian et al.
+          year: 2024
+          title: "Arctic marine heatwaves forced by greenhouse gases and triggered by abrupt sea-ice melt"
+          source: "Communications Earth & Environment 5, 57"
+          url: "https://doi.org/10.1038/s43247-024-01215-y"
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+  western_arctic:
+    group: canada
+    label: Western Arctic (DFO)
+    polygon: western_arctic.geojson
+    about:
+      why: >-
+        The Beaufort Sea and Amundsen Gulf, off the Mackenzie Delta.
+        Summer ice loss lets the sun warm the surface ocean, and that
+        heat now reaches the interior of the Beaufort Gyre.
+      definition: >-
+        The Western Arctic bioregion in Fisheries and Oceans Canada's
+        Federal Marine Bioregions. Its western edge is the 141st
+        meridian extended to sea, following Canada's position on the
+        Beaufort Sea boundary, which the United States disputes. A
+        marine planning framework, not a legal boundary.
+      references:
+        - authors: Timmermans et al.
+          year: 2018
+          title: "Warming of the interior Arctic Ocean linked to sea ice losses at the basin margins"
+          source: "Science Advances 4(8), eaat6773"
+          url: "https://doi.org/10.1126/sciadv.aat6773"
+        - authors: Fisheries and Oceans Canada
+          title: "Federal Marine Bioregions"
+          source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+          url: "https://open.canada.ca/data/en/dataset/23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"
+  arctic_basin:
+    group: canada
+    label: Arctic Basin (DFO)
+    polygon: arctic_basin.geojson
+    about:
+      why: >-
+        The deep ocean north of the Beaufort Sea and the archipelago,
+        under ice for most of the year. Where summer ice has retreated,
+        the surface ocean has warmed.
+      definition: >-
+        The Arctic Basin bioregion in Fisheries and Oceans Canada's
+        Federal Marine Bioregions, out to the 200 nautical mile limit.
+        Its western edge follows Canada's position on the disputed
+        Beaufort Sea boundary. A marine planning framework, not a legal
+        boundary. Under ice, the surface sits at freezing and has no
+        anomaly.
+      references:
+        - authors: Steele et al.
+          year: 2008
+          title: "Arctic Ocean surface warming trends over the past 100 years"
+          source: "Geophysical Research Letters 35, L02614"
+          url: "https://doi.org/10.1029/2007GL031651"
         - authors: Fisheries and Oceans Canada
           title: "Federal Marine Bioregions"
           source: "Open Government Portal, record 23eb8b56-dac8-4efc-be7c-b8fa11ba62e9"

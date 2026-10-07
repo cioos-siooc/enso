@@ -21,7 +21,8 @@ fraction would be a second, subtler definition of "in the region" that the
 Nothing here decides what is OCEAN. The mask is pure geometry and includes the
 land inside the zone; `sst_daily` holds ocean cells only, so the join that reads
 this table drops the land — which is also why the stored polygon carries no
-interior rings for the islands.
+interior rings for the islands. A hole is stored only for WATER a region does
+not cover (`Region.holes`), and a cell inside one is out.
 """
 
 from __future__ import annotations
@@ -58,8 +59,12 @@ def cells_in(region: Region, grid: GlobalGrid) -> tuple[np.ndarray, np.ndarray]:
     lons = (grid.lon(gx) - ref) % 360.0 + ref
 
     inside = np.zeros(GY.shape, bool)
-    for ring in region.polygon:
-        inside |= _scanline(np.asarray(ring, dtype="float64"), lats, lons)
+    holes = region.holes or ((),) * len(region.polygon)
+    for ring, cut in zip(region.polygon, holes, strict=True):
+        part = _scanline(np.asarray(ring, dtype="float64"), lats, lons)
+        for hole in cut:
+            part &= ~_scanline(np.asarray(hole, dtype="float64"), lats, lons)
+        inside |= part
 
     return GY[inside], GX[inside]
 

@@ -742,7 +742,7 @@ Widening it needs no re-ingest: `gy`/`gx` index the *global* grid, so only `doma
 
 #### The first polygon region: `pacific_bioregions`
 
-Eight named regions are polygons now (see "The global regions" below). This one came first
+Fifteen named regions are polygons now (see "The global regions" and "Canadian waters" below). This one came first
 and set the rules. Like the others, **`pacific_bioregions`** declares a
 `polygon:` and no bounds — `shared/domain.py` derives its box from the ring, so a
 hand-written box cannot go stale behind a changed geometry, and `shared/mask.py` cuts that
@@ -771,7 +771,7 @@ do — measured, cell by cell:
 | outer-ring area | 511,063 km² | 512,340 km² |
 | bbox lat | 46.57…56.01 | 46.53…55.13 |
 | Dixon Entrance N of the A–B line | **excluded** | **included** (152 cells at 54–55°N) |
-| Juan de Fuca wedge | excluded | excluded |
+| seaward of Juan de Fuca, past the median line | excluded | **included** (1,152 km², measured 2026-10-07) |
 
 So the swap buys the Canadian reading of Dixon Entrance and costs a north-coast sliver
 above 55°N plus an offshore edge near Haida Gwaii (190 cells in all). The DFO layer stops
@@ -798,8 +798,8 @@ unsimplified ring, and takes 11,131 vertices to 4,573 (104 KB). The union is a
 
 #### The global regions (added 2026-10-02)
 
-Twelve regions came with the global grid. There are 22 in all, listed in the region menu
-under four headings that `domain.yml`'s `region_groups` declares; each region names its
+Twelve regions came with the global grid, and nine Canadian ones after it (see "Canadian
+waters" below). There are 29 in all, listed in the region menu under five headings that `domain.yml`'s `region_groups` declares; each region names its
 heading in `group:`, and `regions()` raises on a heading that isn't declared.
 
 | group | box (a convention, so a box by definition) | polygon (a published outline) |
@@ -807,6 +807,7 @@ heading in `group:`, and `regions()` raises on a heading that isn't declared.
 | Ocean basins | `global`, `southern` (S of 60°S) | `pacific`, `n_atlantic`, `indian` — Marine Regions *Global Oceans and Seas* v1 |
 | ENSO and its relatives | `iod_west`, `iod_east` (Saji 1999), `atl3` (20°W–0, 3°S–3°N) | |
 | Marine heatwave hotspots | `w_australia` (Ningaloo Niño, 22–32°S 108–116°E) | `tasman_sea`, `mediterranean` (IHO S-23 via Marine Regions), `gulf_of_maine` (SeaVoX), `coral_triangle` (MEOW) |
+| Canadian waters | | `pacific_bioregions` and seven more — DFO *Federal Marine Bioregions* |
 
 The rule is the one `pacific_bioregions` set: an index box is a convention anyone can write
 down, so it is a box; a named sea is someone's outline, so it is a polygon whose file records
@@ -884,6 +885,64 @@ and `pdo_north_pacific`'s says its mean is not the PDO index.
 sides meet, so `FieldMap.regionPolygon` keeps the polygon for the fill and outlines only the
 parallels. Without that, a seam was drawn down one meridian.
 
+#### Canadian waters (added 2026-10-07)
+
+**Eight regions under the `canada` heading, all from DFO's *Federal Marine Bioregions***, the
+same dataset `pacific_bioregions` came from (Open Government Licence – Canada):
+`pacific_bioregions` (moved here from North Pacific), `scotian_shelf`, `gulf_st_lawrence`,
+`nl_shelves`, `hudson_bay`, `eastern_arctic`, `western_arctic`, `arctic_basin`. Three of
+the dataset's thirteen are not here:
+
+- **Arctic Archipelago**, removed at the user's request. It is ice on every day of the
+  1991–2020 climatology (no anomaly ever) and has never had a heatwave day, so it showed
+  only a flat SST near −1.7 °C.
+- **A union of all twelve** (`canada`), also removed at the user's request. It would need
+  its own ~260 KB outline and held ~10,400 ocean cells none of its parts did, on Arctic
+  islands a bioregion boundary cuts in two.
+- **The Great Lakes**: CoralTemp counts all of them as land (Superior, Michigan, Erie and
+  Winnipeg checked in the ocean mask).
+
+**Where a boundary is disputed, the regions follow Canada's position, and DFO's file
+already draws it that way.** Measured against Marine Regions' EEZ layer, which splits each
+unsettled Canada–US stretch on a median line of its own:
+
+| | DFO outline | measured |
+|---|---|---|
+| Beaufort Sea | the 141°W meridian, Canada's claim | covers 21,581 km² of the 24,772 km² overlapping-claim area; the rest lies beyond Canada's own 200 nm limit |
+| Dixon Entrance | the A–B line | water north of it included |
+| seaward of Juan de Fuca | past the median line | 1,152 km² of Marine Regions' US side included |
+| Machias Seal Island, North Rock | inside `scotian_shelf` | 416 km² of the grey zone included |
+
+The region notes in `domain.yml` say so for each one. **Do not swap in an outline that
+splits these on a median.** Two places where DFO draws *less* than Marine Regions are not
+disputes. Seaward of Dixon Entrance (1,679 km²), Marine Regions' line is its own
+placeholder median, not a US claim. In the Lincoln Sea (1,433 km²), the Canada–Denmark
+agreement of June 2022 settled the boundary, and DFO's file (last modified 2022-04-20)
+predates it.
+
+- **Saint-Pierre et Miquelon is a hole, not an island**, and it is why `Region.holes`
+  exists. That boundary is settled (1992 arbitration). The convention of dropping every
+  interior ring would have put France's zone (590 ocean cells, its corridor included)
+  inside `nl_shelves`. The loader honours whatever interior rings a file stores, and the
+  build stores only that one. Every other file stores none.
+- **Built** with the Pacific file's method: reprojected from Canada Albers with the edges
+  densified at 2 km first, island holes dropped, parts holding no cell centre dropped,
+  simplified at **0.005°**. That moves 0.07–0.37% of cells; each file's properties record
+  the tolerance and the count. The masks equal shapely's `contains_xy` on the stored
+  rings, holes included, cell for cell.
+- **Ocean cells** (CoralTemp's own, from the rollup): arctic_basin 152,614 · hudson_bay
+  84,083 · eastern_arctic 76,232 · western_arctic 56,998 · nl_shelves 54,901 ·
+  scotian_shelf 18,365 · gulf_st_lawrence 12,174.
+- **The Arctic regions barely have an anomaly.** The 1991–2020 climatology has nothing under
+  ice, so `anom` there averages only the few ice-free cells, on the days there are any:
+  days a year with a climatology are 366 for scotian_shelf and nl_shelves, 278
+  gulf_st_lawrence, 234 eastern_arctic, 152 hudson_bay, 67 western_arctic (127 cells on
+  average) and 2 arctic_basin.
+- **`mhw` extent is diluted by ice**, since ice is in the denominator: arctic_basin has had
+  5 heatwave days and western_arctic 652.
+- **Rollup cost on dev:** `rollup --clim --fresh` for all of them took about a minute.
+- **No build script is in the repo**; the files' `properties` describe how they were made.
+
 #### The third state: ocean with no anomaly
 
 About **3.2% of the box's ocean has SST but no climatology** — the seasonal ice fringe,
@@ -910,7 +969,7 @@ Both containers mount `./shared` at `/app/shared`. Seven modules:
   There is one — `mhw_extent`, what `mhw` means over a region — and every timeseries
   response names its quantity in `quantity` (null at a point) so no client infers it
   from the scope.
-- **`mask.py` + `regions/*.geojson`** — the regions that are **not boxes** (eight of 22). A region is
+- **`mask.py` + `regions/*.geojson`** — the regions that are **not boxes** (15 of 29). A region is
   normally a lat/lon rectangle; Canada's Pacific bioregions are a 200-nautical-mile arc
   closed by two negotiated lateral boundaries, and their bounding box is 55,533 cells
   against the region's 26,222 — so 53% of what a box query would average is Alaskan,
@@ -921,7 +980,9 @@ Both containers mount `./shared` at `/app/shared`. Seven modules:
   a second, subtler definition of "in the region" that `n_cells` could not describe.
   Nothing here decides what is *ocean*: the mask is pure geometry and includes the land
   inside the zone, which `sst_daily` then excludes — which is also why the stored polygon
-  carries no interior rings for the islands.
+  carries no interior rings for the islands. A hole is stored only for **water** a region
+  does not cover (`Region.holes`; today only Saint-Pierre et Miquelon), and a cell inside
+  one is out.
 - **`fields.py`** — NetCDF reading, and the single home of both orientation rules above.
 - **`render.py`** — field array → Web-Mercator WebP. **Takes arrays, never a DB client.**
 - **`periods.py`** — daily/weekly/monthly buckets, shared by query and render.
@@ -987,8 +1048,8 @@ consequences, both load-bearing:
    gating `anom`, but sharper: there is no value that could signal the difference.
 
 **`region_cells`** — which grid cells a **polygon** region covers: one row per (region,
-cell), and rows only for the `domain.yml` regions that declare a `polygon`. **~11.7 M rows
-across eight regions**: 26,222 of them are `pacific_bioregions`, and 2.8 M are `indian`.
+cell), and rows only for the `domain.yml` regions that declare a `polygon`. **~12.2 M rows
+across 15 regions**: 26,222 of them are `pacific_bioregions`, and 2.8 M are `indian`.
 
 A plain box needs none — its `BETWEEN` says everything there is to say about which cells
 it holds. Canada's Pacific waters are not a rectangle: `pacific_bioregions`' bounding box
@@ -1016,10 +1077,12 @@ sides averaging the same cells. Verified: `/region/pacific_bioregions?variable=a
 2021-06-28 returns **1.583** against a direct cell-wise `avg(sst - clim)` over the polygon
 of **1.5827**, on the same 23,875 cells.
 
-**`region_clim`** — 22 regions × 366 MMDD = **8,052 rows**. The climatology side of a
-region anomaly.
+**`region_clim`** — **9,517 rows**: 366 MMDD for most of the 29 regions, but **fewer for
+the ice-covered ones**, because an MMDD gets a row only where the region has at least one
+cell with a climatology that day: `arctic_basin` 2, `western_arctic` 67, `hudson_bay` 152. The climatology side
+of a region anomaly.
 
-**`region_daily`** — 22 regions × ~15,250 days = **~335,000 rows**, ~8 MiB. The daily side, and the
+**`region_daily`** — 29 regions × ~15,250 days = **~442,000 rows**, ~8 MiB. The daily side, and the
 one that actually costs something.
 
 ```sql

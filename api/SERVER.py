@@ -627,7 +627,12 @@ def named_region_geometry(key: str) -> dict:
         "properties": {"key": region.key, "label": region.label},
         "geometry": {
             "type": "MultiPolygon",
-            "coordinates": [[[list(p) for p in ring]] for ring in region.polygon],
+            "coordinates": [
+                [[list(p) for p in ring], *([list(p) for p in h] for h in cut)]
+                for ring, cut in zip(
+                    region.polygon, region.holes or ((),) * len(region.polygon), strict=True
+                )
+            ],
         },
     }
 
