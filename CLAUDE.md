@@ -1442,7 +1442,7 @@ it freezes weekly and monthly frames at whatever was last rendered.
 **Both `run`s are scheduled by Prefect, and it adds nothing else.** `process/flows.py`
 (`python -m flows`) serves two deployments from one `scheduler` container. `ocean_run` wraps
 `CRW.cli.run_targets()` (which dates a run covers) and `CRW.cli._process_date()` (what happens
-to one); `land_run` wraps `CPC.cli.run()`. So each scheduled run and its CLI command are the
+to one); `land_run` runs `CPC.cli.run()`'s stages as tasks. So each scheduled run and its CLI command are the
 same job. It sits beside `CRW/` and `CPC/` rather than in either, since it serves both. It
 is the only module that imports Prefect, and neither CLI imports it. Prefect 3.8.6.
 
@@ -1468,7 +1468,11 @@ docker compose -f docker-compose.dev.yml --env-file .env.dev \
   `Failed` if any date did, with `cli.run_summary()`'s line as its message. The pipeline's
   own log lines (`CRW.*`, `CPC.*`, `shared.*`) appear in each run's logs. Flow
   `osta-land-run`, deployment `osta-land`: one flow run per firing, ending `Unchanged` (most
-  hours), `Ingested` or `Failed`.
+  hours), `Ingested` or `Failed`, with **one task run per stage**: `check versions`, then per
+  product `fetch`, `ingest <product> <year>` per year file, `render` and `finish` (versions
+  recorded, then pruned). These are `CPC.cli.run()`'s own stages (`plan_run` …
+  `finish_product`), so the CLI and the flow stay one job. A product whose download or
+  render failed records no version, so the next hour retries it.
 - **An ad-hoc run** is *Run → Custom run* on the deployment. Ocean: `date` for one day,
   `force`, `keep_nc`, `recheck_days`, `max_days`. `width` is deliberately absent: a cached
   frame at any other width is a 404 and a blank map. Land: `product`, `force`, `keep_nc`,

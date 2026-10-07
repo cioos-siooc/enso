@@ -32,6 +32,7 @@ import argparse
 import datetime as dt
 import logging
 import sys
+from dataclasses import dataclass
 
 from shared.ch import DATABASE, ensure_schema, get_client
 from shared.domain import variables as all_variables
@@ -186,35 +187,44 @@ def ingest_one_year(client, year: int, tgt: ingest.Target, args, **kwargs) -> di
     )
 
 
-def run(
-    *,
-    product: str | None = None,
-    recheck_days: int = 14,
-    keep_nc: bool = False,
-    force: bool = False,
-) -> str:
-    """The scheduled job: fetch the current year's files, ingest what is new.
+@dataclass(frozen=True)
+class RunPlan:
+    """What one `run` covers, decided by its HEADs before anything is fetched.
 
-    Returns the outcome: `unchanged`, `ingested` or `failed`. Shared with
-    `flows.land_run`, so the scheduled run and the CLI are the same job.
+    `targets` are the products with a changed year file (all of them under
+    `force`), `unchanged` the keys of the rest. `remote` is every year file's
+    `(size, mtime)` as HEAD saw it BEFORE the download, which is the version a
+    successful run records — so a file rewritten mid-run reads as changed next
+    time rather than as handled. `None` is not published, or the host is down.
+    """
 
-    **No date range and no catch-up watermark**, unlike `CRW.cli run`. A year
-    file holds every day of its year, so "what is new" is simply the dates in it
-    that status does not have — a missed run, a late publication and a normal day
-    are all the same code path with no argument.
+    today: dt.date
+    recheck_floor: dt.date
+    years: list[int]
+    targets: list[ingest.Target]
+    unchanged: list[str]
+    remote: dict[tuple[str, int], tuple[int, str] | None]
 
-    **It starts with a HEAD per year file, and stops there if none has changed**
+    @property
+    def recheck(self) -> set[dt.date]:
+        """The trailing window re-ingested whether status has it or not."""
+        return {
+            self.recheck_floor + dt.timedelta(days=n)
+            for n in range((self.today - self.recheck_floor).days + 1)
+        }
+
+
+def plan_run(
+    product: str | None = None, recheck_days: int = 14, force: bool = False
+) -> RunPlan:
+    """`run`'s first stage: which years it covers, and which products changed.
+
+    **It is a HEAD per year file, and the run stops here if none has changed**
     since the last run that finished with it (`land_source_files`). The files
     change about once a day and the run fires hourly, so without this every
     firing would download ~200 MB to find nothing new. The check is per
     product: temperature and precipitation are rewritten at different hours,
     and one being new does not make the other worth fetching. `force` skips it.
-
-    `recheck_days` re-ingests the trailing window regardless of status. CPC is
-    a near-real-time gauge analysis and revises its recent end as more stations
-    report, and that revision happens INSIDE the year file — so unlike CoralTemp
-    there is no per-date size or mtime that could reveal it. It does change the
-    file's own size and mtime, which is what the HEAD check reads.
     """
     today = dt.date.today()
     recheck_floor = today - dt.timedelta(days=recheck_days)
@@ -245,86 +255,141 @@ def run(
             for name in tgt.variables for year in years
         )
 
+    unchanged: list[str] = []
     if not force:
         unchanged = [tgt.key for tgt in targets if not changed(tgt)]
         targets = [tgt for tgt in targets if changed(tgt)]
         if unchanged:
             log.info("%s: no year file changed since the last run", ", ".join(unchanged))
-    if not targets:
+    return RunPlan(today, recheck_floor, years, targets, unchanged, remote)
+
+
+def fetch_product(plan: RunPlan, tgt: ingest.Target) -> bool:
+    """Download `tgt`'s year files for the run. False if any download failed."""
+    args = argparse.Namespace(year=plan.years, variable=list(tgt.variables), force=False)
+    return cmd_fetch(args) == 0
+
+
+def ingest_product_year(client, plan: RunPlan, tgt: ingest.Target, year: int) -> dict[str, int]:
+    """Ingest one year file: every day status lacks, plus the recheck window.
+
+    Raises `FileNotFoundError` when a file is not on disk — a failed download,
+    or a year not published yet.
+    """
+    missing = [name for name in tgt.variables if not config.land_path(name, year).exists()]
+    if missing:
+        raise FileNotFoundError(f"{year}: {', '.join(missing)} not on disk")
+    args = argparse.Namespace(start=None, end=None, force=False)
+    counts = ingest_one_year(client, year, tgt, args, force_dates=plan.recheck)
+    log.info(
+        "%d %s: %d ingested (incl. the %d-day recheck), %d skipped, %d failed, %s rows; "
+        "last ingested %s",
+        year, tgt.key, counts["ingested"], (plan.today - plan.recheck_floor).days,
+        counts["skipped"], counts["failed"], f"{counts['rows']:,}",
+        status_mod.last_ingested(client, tgt.status_table),
+    )
+    return counts
+
+
+def render_product(plan: RunPlan, tgt: ingest.Target) -> int:
+    """Re-render every bucket the recheck window touches, open or closed.
+
+    A CPC revision lands INSIDE a year file, so a week that closed a fortnight
+    ago can still change — and its cached frame with it. Unconditional writes,
+    the same rule `imaging.render_date` follows for the ocean's open buckets.
+    """
+    rendered = render_touched(tgt, plan.recheck_floor)
+    log.info("%s: re-rendered %d land frame(s)", tgt.key, rendered)
+    return rendered
+
+
+def finish_product(
+    client, plan: RunPlan, tgt: ingest.Target, *, succeeded: bool, keep_nc: bool
+) -> tuple[int, int] | None:
+    """Record `tgt`'s versions as done, then prune what the run fetched.
+
+    Only a product that `succeeded` records its versions; one with a failure
+    records nothing and is retried by the next run. The prune goes through the
+    same check as `CPC.cli prune`: a year whose frames are not all rendered
+    stays until `CPC.cli render` has run. Returns `(deleted, kept)`, or None
+    under `keep_nc`.
+    """
+    if succeeded:
+        status_mod.record_versions(client, {
+            (name, year): plan.remote[(name, year)]
+            for name in tgt.variables for year in plan.years
+            if plan.remote[(name, year)] is not None
+        })
+    if keep_nc:
+        return None
+    return prune_mod.prune(client, tgt, plan.years)
+
+
+def run(
+    *,
+    product: str | None = None,
+    recheck_days: int = 14,
+    keep_nc: bool = False,
+    force: bool = False,
+) -> str:
+    """The scheduled job: fetch the current year's files, ingest what is new.
+
+    Returns the outcome: `unchanged`, `ingested` or `failed`. `flows.land_run`
+    calls the same stages — `plan_run`, `fetch_product`, `ingest_product_year`,
+    `render_product`, `finish_product`, in this order — as Prefect tasks, so
+    the scheduled run and the CLI are the same job.
+
+    **No date range and no catch-up watermark**, unlike `CRW.cli run`. A year
+    file holds every day of its year, so "what is new" is simply the dates in it
+    that status does not have — a missed run, a late publication and a normal day
+    are all the same code path with no argument.
+
+    `recheck_days` re-ingests the trailing window regardless of status. CPC is
+    a near-real-time gauge analysis and revises its recent end as more stations
+    report, and that revision happens INSIDE the year file — so unlike CoralTemp
+    there is no per-date size or mtime that could reveal it. It does change the
+    file's own size and mtime, which is what the HEAD check reads.
+
+    A product whose download failed still ingests what is on disk, but counts
+    as failed: its versions are not recorded, so the next run fetches again.
+    """
+    plan = plan_run(product, recheck_days, force)
+    if not plan.targets:
         return "unchanged"
 
-    fetch_args = argparse.Namespace(
-        year=years, variable=[n for tgt in targets for n in tgt.variables], force=False
-    )
-    fetch_failed = bool(cmd_fetch(fetch_args))
-    if fetch_failed:
-        log.warning("some downloads failed; ingesting what landed")
-
     failed: set[str] = set()
+    for tgt in plan.targets:
+        if not fetch_product(plan, tgt):
+            log.warning("%s: some downloads failed; ingesting what landed", tgt.key)
+            failed.add(tgt.key)
+
     client = get_client()
     try:
-        for tgt in targets:
-            for year in years:
-                missing = [
-                    name for name in tgt.variables
-                    if not config.land_path(name, year).exists()
-                ]
-                if missing:
-                    log.warning("%d: %s not on disk, skipping", year, ", ".join(missing))
+        for tgt in plan.targets:
+            for year in plan.years:
+                try:
+                    counts = ingest_product_year(client, plan, tgt, year)
+                except FileNotFoundError as exc:
+                    log.warning("%s, skipping", exc)
                     failed.add(tgt.key)
                     continue
-
-                # One pass: everything status does not have, plus the recheck
-                # window re-ingested whether it has it or not.
-                recheck = {
-                    recheck_floor + dt.timedelta(days=n)
-                    for n in range((today - recheck_floor).days + 1)
-                }
-                ingest_args = argparse.Namespace(start=None, end=None, force=False)
-                counts = ingest_one_year(client, year, tgt, ingest_args, force_dates=recheck)
                 if counts["failed"]:
                     failed.add(tgt.key)
-                log.info(
-                    "%d %s: %d ingested (incl. the %d-day recheck), %d skipped, "
-                    "%d failed, %s rows",
-                    year, tgt.key, counts["ingested"], recheck_days,
-                    counts["skipped"], counts["failed"], f"{counts['rows']:,}",
-                )
-            last = status_mod.last_ingested(client, tgt.status_table)
-            log.info("%s last ingested: %s", tgt.key, last)
     finally:
         client.close()
 
-    # Re-render every bucket the recheck window touches, open or closed. A CPC
-    # revision lands INSIDE a year file, so a week that closed a fortnight ago
-    # can still change — and its cached frame with it. Unconditional writes, the
-    # same rule `imaging.render_date` follows for the ocean's open buckets.
-    for tgt in targets:
-        rendered = render_touched(tgt, recheck_floor)
-        log.info("%s: re-rendered %d land frame(s)", tgt.key, rendered)
+    for tgt in plan.targets:
+        render_product(plan, tgt)
 
     client = get_client()
     try:
-        # Only now is a version done with. The pair is the one HEAD saw BEFORE
-        # the download, so a file rewritten mid-run reads as changed next time
-        # rather than as handled. A product with a failure records nothing and
-        # is retried by the next run.
-        status_mod.record_versions(client, {
-            (name, year): remote[(name, year)]
-            for tgt in targets if tgt.key not in failed
-            for name in tgt.variables for year in years
-            if remote[(name, year)] is not None
-        })
-
-        # Delete what this run fetched, through the same check as `prune`: a
-        # year whose frames are not all rendered stays until `CPC.cli render`
-        # has run.
-        if not keep_nc:
-            for tgt in targets:
-                prune_mod.prune(client, tgt, years)
+        for tgt in plan.targets:
+            finish_product(
+                client, plan, tgt, succeeded=tgt.key not in failed, keep_nc=keep_nc
+            )
     finally:
         client.close()
-    return "failed" if failed or fetch_failed else "ingested"
+    return "failed" if failed else "ingested"
 
 
 def cmd_run(args) -> int:

@@ -6,8 +6,10 @@ This is the only module that imports Prefect, so `python -m CRW.cli ...` and
 `python -m CPC.cli ...` keep working with no server. It adds a scheduler and a
 UI and nothing else. For the ocean, which dates a run covers is
 `CRW.cli.run_targets()` and what happens to one date is
-`CRW.cli._process_date()`; for land, the whole job is `CPC.cli.run()`. A second
-copy of any of them here would be a second definition of the job.
+`CRW.cli._process_date()`; for land, it is `CPC.cli.run()`'s five stages
+(`plan_run`, `fetch_product`, `ingest_product_year`, `render_product`,
+`finish_product`). A second copy of any of them here would be a second
+definition of the job.
 
 It sits beside the two packages rather than inside either: it serves both, and
 a land flow inside `CRW` would be the misnaming `CPC` exists to avoid.
@@ -27,7 +29,12 @@ rechecks that are no-ops on a normal day read as `Skipped` rather than as thirty
 indistinguishable greens.
 
 `osta-land-run`: one flow run per firing, ending `Unchanged` (most hours),
-`Completed` or `Failed`.
+`Ingested` or `Failed`, and inside it **one task run per stage**: `check
+versions` (`Changed` / `Unchanged`; an unchanged run stops there), then per
+product `fetch temp`, `ingest temp 2026` for each year file, `render temp` and
+`finish temp` (`Pruned`, or `Kept` under `keep_nc`), the same for `precip`. So
+the timeline shows where an hour's run spent its time, and a failure names its
+product and year.
 
 The pipelines' own `logging` lines (download, ingest, imaging, regions,
 shared.*) land in the run's logs through `PREFECT_LOGGING_EXTRA_LOGGERS`.
@@ -107,6 +114,56 @@ def process_date(client, http, date: dt.date, *, force: bool, keep_nc: bool) -> 
     return Completed(name=outcome.capitalize(), message=f"{date}: {outcome}")
 
 
+# The land run's stages, one task each so the run's timeline shows where the
+# time went and which product or year failed. `product` is passed beside the
+# target only to name the task run; nothing reads it.
+_LAND_TASK = {"cache_policy": NO_CACHE, "persist_result": False}
+
+
+@task(name="osta-land-check", task_run_name="check versions", **_LAND_TASK)
+def land_check(product: str | None, recheck_days: int, force: bool) -> State:
+    plan = land_cli.plan_run(product, recheck_days, force)
+    if not plan.targets:
+        return Completed(name="Unchanged", message="no year file changed", data=plan)
+    keys = ", ".join(tgt.key for tgt in plan.targets)
+    return Completed(name="Changed", message=f"changed: {keys}", data=plan)
+
+
+@task(name="osta-land-fetch", task_run_name="fetch {product}", **_LAND_TASK)
+def land_fetch(plan, tgt, product: str) -> State:
+    if not land_cli.fetch_product(plan, tgt):
+        return Failed(message=f"{product}: some downloads failed")
+    return Completed(name="Fetched", message=f"{product}: {plan.years}")
+
+
+@task(name="osta-land-ingest", task_run_name="ingest {product} {year}", **_LAND_TASK)
+def land_ingest(client, plan, tgt, product: str, year: int) -> State:
+    counts = land_cli.ingest_product_year(client, plan, tgt, year)
+    message = (
+        f"{counts['ingested']} ingested, {counts['skipped']} skipped, "
+        f"{counts['failed']} failed, {counts['rows']:,} rows"
+    )
+    if counts["failed"]:
+        return Failed(message=message)
+    return Completed(name="Ingested", message=message)
+
+
+@task(name="osta-land-render", task_run_name="render {product}", **_LAND_TASK)
+def land_render(plan, tgt, product: str) -> State:
+    n = land_cli.render_product(plan, tgt)
+    return Completed(name="Rendered", message=f"{n} frame(s)")
+
+
+@task(name="osta-land-finish", task_run_name="finish {product}", **_LAND_TASK)
+def land_finish(client, plan, tgt, product: str, *, succeeded: bool, keep_nc: bool) -> State:
+    pruned = land_cli.finish_product(client, plan, tgt, succeeded=succeeded, keep_nc=keep_nc)
+    recorded = "versions recorded" if succeeded else "versions NOT recorded"
+    if pruned is None:
+        return Completed(name="Kept", message=f"{recorded}; keep_nc, nothing pruned")
+    deleted, kept = pruned
+    return Completed(name="Pruned", message=f"{recorded}; {deleted} deleted, {kept} kept")
+
+
 # Flows, task, deployments and tag are all prefixed with the project: in prod the
 # server is shared with other projects' flows (pipelines.cioospacific.ca), and a
 # bare `ocean-run` or `land` would sit beside theirs under one name. OSTA, not
@@ -162,12 +219,44 @@ def land_run(
     _log_to_ui()
     ensure_schema()
 
-    outcome = land_cli.run(
-        product=product, recheck_days=recheck_days, keep_nc=keep_nc, force=force
-    )
-    if outcome == "failed":
-        return Failed(message="land run: failed, see the logs")
-    return Completed(name=outcome.capitalize(), message=f"land run: {outcome}")
+    # The same stages, in the same order, as `CPC.cli.run()`; see there for
+    # what each decides. A raised exception fails that task only, so one bad
+    # year does not stop the other product or the render.
+    checked = land_check(product, recheck_days, force, return_state=True)
+    if not checked.is_completed():
+        return Failed(message="land run: the version check failed, see its task")
+    plan = checked.result()
+    if not plan.targets:
+        return Completed(name="Unchanged", message="land run: unchanged")
+
+    failed: set[str] = set()
+    for tgt in plan.targets:
+        if not land_fetch(plan, tgt, tgt.key, return_state=True).is_completed():
+            failed.add(tgt.key)
+
+    with get_client() as client:
+        for tgt in plan.targets:
+            for year in plan.years:
+                state = land_ingest(client, plan, tgt, tgt.key, year, return_state=True)
+                if not state.is_completed():
+                    failed.add(tgt.key)
+
+    for tgt in plan.targets:
+        if not land_render(plan, tgt, tgt.key, return_state=True).is_completed():
+            # A frame that did not render must not be marked done, or the
+            # next run would see an unchanged file and never redo it.
+            failed.add(tgt.key)
+
+    with get_client() as client:
+        for tgt in plan.targets:
+            land_finish(
+                client, plan, tgt, tgt.key,
+                succeeded=tgt.key not in failed, keep_nc=keep_nc, return_state=True,
+            )
+
+    if failed:
+        return Failed(message=f"land run: {', '.join(sorted(failed))} failed")
+    return Completed(name="Ingested", message="land run: ingested")
 
 
 if __name__ == "__main__":
