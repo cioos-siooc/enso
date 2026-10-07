@@ -240,10 +240,15 @@ async function setProjection(name: ProjectionName) {
   catch { /* private mode — the choice still applies this session */ }
 }
 
+// Read at setup, before `useUrlState` writes the defaults back into the query.
+// The app opens in region scope on Nino 3, but a first visit should see the
+// basin; only a link that names a region came to look at that region.
+const arrivedOnRegion = Boolean(useRoute().query.r)
+
 function onPrimaryReady(map: mapboxgl.Map) {
   primary = map
   // A deep link can pick a region before the map exists.
-  if (store.scope === 'region') frameRegion(false)
+  if (store.scope === 'region' && arrivedOnRegion) frameRegion(false)
   if (secondary) link()
 }
 
