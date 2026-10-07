@@ -328,20 +328,6 @@ export interface PacificState {
      */
     official: boolean
   } | null
-  heatwave: {
-    region: string
-    label: string
-    date: string
-    /** Share of the basin's ocean area in a heatwave, %. */
-    extent: number
-    /** The same for this day-of-year over the baseline, or null. */
-    normal: number | null
-    ratio: number | null
-    rank: number
-    of: number
-    baseline: string
-    windowDays: number
-  } | null
 }
 
 export interface Series {

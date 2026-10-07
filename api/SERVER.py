@@ -407,15 +407,13 @@ def coverage_endpoint() -> dict:
 
 @app.get("/state")
 def state_endpoint() -> dict:
-    """What the Pacific is doing today, in the two numbers that need no context.
+    """What the Pacific is doing today, in the one number that needs no context.
 
-    The header ribbon's whole payload: the ENSO phase from Nino 3.4 and the share
-    of the basin in a marine heatwave against the date's normal. Every other
+    The header ribbon's whole payload: the ENSO phase from Nino 3.4. Every other
     endpoint answers a question the visitor has already framed; this one answers
     the question they arrive with.
 
-    Both halves are rollup reads — `region_daily` for `nino34` and for the whole
-    `pacific` box — so this is a few thousand rows and milliseconds, not a scan.
+    A rollup read of `region_daily` for `nino34`: milliseconds, not a scan.
     Not instrumented: it is page-load plumbing, fired once per visit like
     `/domain` and `/coverage`, and a `state_viewed` event on every load would say
     nothing a page view does not already say. The ribbon's *clicks* are tracked,

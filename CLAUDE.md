@@ -1137,8 +1137,8 @@ read as "exactly at climatology".
 **Only named regions have a rollup.** `/regionTimeseries` on an arbitrary box still
 aggregates live, and that is the only difference between the two endpoints.
 
-**`pacific` is the Pacific basin, as a polygon region.** It exists so the basin-wide numbers
-the header ribbon reports are a rollup read rather than a scan, and adding it there rather
+**`pacific` is the Pacific basin, as a polygon region.** It was added so the header ribbon's
+basin-wide heatwave extent (since removed) was a rollup read rather than a scan, and adding it there rather
 than writing a second aggregation path means `region_daily`, `region_clim`,
 `/region/{key}`, the monthly ranking, the region outline on the map and the CSV export all
 serve it with no new code.
@@ -1514,7 +1514,7 @@ FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is n
 | `GET /health/data` | 503 once either archive is more than `STALE_AFTER_DAYS` (default 3) behind — for an external monitor |
 | `GET /domain` | grid extent, image bounds, variable metadata, per-variable colour stops and `encoding` (mix, ranges, `limits`), `noClimColor`, region list |
 | `GET /coverage` | served date range (`end` = last date both archives have), row count, climatology completeness, MHW archive range and completeness |
-| `GET /state` | the header ribbon's two findings: ENSO phase from Nino 3.4, and basin marine-heatwave extent against the date's normal |
+| `GET /state` | the header ribbon's finding: ENSO phase from Nino 3.4 (`heatwave` is always null; see below) |
 | `GET /variables` | variable list, with `derived` on `anom` |
 | `POST /timeseries` | `{lat, lon, start?, end?, period?, variable?}` → record at the nearest cell |
 | `POST /landTimeseries` | `{lat, lon, start?, end?, period?, variable: land_*}` → the land overlay layer at the nearest CPC cell; empty on CoralTemp ocean |
@@ -1553,8 +1553,7 @@ FastAPI in `SERVER.py`. **Timeseries are read live from ClickHouse; imagery is n
 **`/state` is the only endpoint that decides what is worth saying rather than serving what
 was asked for.** Everything else answers a question the visitor has already framed — this
 cell, that region, this date — and none of it says whether anything is happening out there.
-It reports two findings and nothing else, because the archive supports exactly two that
-need no context to read:
+It reports one finding:
 
 - **ENSO phase**, from Nino 3.4. **This is ONI-*style*, not the ONI, and the payload says
   so** (`official: false`, `baseline`). NOAA's index uses a base period that shifts every
@@ -1566,11 +1565,16 @@ need no context to read:
   months only** — the month in progress would drag a running mean that is meant to be three
   whole months — and it is reported separately as `latestMonth`, flagged partial, with its
   rank among the same calendar month in every other year.
-- **Marine heatwave extent**, from the `pacific` rollup, against the 1991–2020 mean for
-  that day-of-year over a ±7-day window. The comparison is the finding, not the number:
-  47% means nothing alone and a great deal beside a late-August normal of 15%.
 
-Both halves are rollup reads — a few thousand rows, milliseconds. Not instrumented
+**There used to be a second, the Pacific's marine heatwave extent against its 1991–2020
+mean for the day of year, and it was removed (2026-10-07) on a reviewer's comment.** That
+mean is not a normal. NOAA's heatwave threshold is a fixed 1985–2012 90th percentile, so in
+a warming ocean extent trends upward: measured on the `pacific` rollup, ~10% averaged over
+1985–2012, ~14% over 1991–2020, ~28% over 2014–2025. Calling 14% "normal" implied a stable
+reference when the reference is what is moving, and the bare percentage without it
+says nothing. `heatwave` stays in the payload as `null` so a cached frontend does not break.
+
+It is a rollup read — a few hundred rows, milliseconds. Not instrumented
 server-side: it is page-load plumbing like `/domain` and `/coverage`. The ribbon's *clicks*
 are tracked in the frontend, because those are choices.
 
@@ -1827,12 +1831,11 @@ app/stores/main.ts                 Pinia store
 #### The state ribbon, and what the series getters are for
 
 **`StateRibbon.vue` is the answer to the question a visitor arrives with**, before they have
-touched a control: the ENSO phase and how much of the Pacific is in a heatwave, in one
-sentence each. It sits under the header rather than in the dock because it describes the
-whole basin and must not move when the selection does. Both halves are buttons, and each
-sets the **variable as well as the region** — reading "El Niño" and landing on a
-marine-heatwave chart of Nino 3.4 would be a non-sequitur. `mhw` is still gated on
-`variableReady`: a rollup existing is not proof the archive is complete.
+touched a control: the ENSO phase, in one sentence. It sits under the header rather than in
+the dock because it describes the whole basin and must not move when the selection does.
+It is a button, and sets the **variable as well as the region** — reading "El Niño" and landing on a
+marine-heatwave chart of Nino 3.4 would be a non-sequitur. The heatwave half is gone; see
+`/state` above.
 
 Its caveats live in an on-demand popover, not in the sentences. The one that must not be
 left unsaid is that the index is not NOAA's ONI, and that is what the popover leads with.
@@ -2434,7 +2437,7 @@ each call site: `point_selected`, `region_selected` (with `enteredScope`), `scop
 `csv_downloaded` (`kind: series | ranking`, plus `quantity` and, on a ranking,
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
 `baseline_note_opened` (`variable`), `region_about_opened` (`region`),
-`about_opened`, `intro_closed` (`action: dismiss | guide`), `state_ribbon_clicked` (`half: enso | heatwave`), `state_guide_opened`,
+`about_opened`, `intro_closed` (`action: dismiss | guide`), `state_ribbon_clicked` (`half: enso`), `state_guide_opened`,
 `compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
 range).
 Server-side:

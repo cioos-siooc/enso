@@ -6,11 +6,16 @@
 
        A strip under the header rather than a card in the dock: it describes the
        whole basin, not the current selection, so it must not move when the
-       selection does. Both halves are buttons, because the natural next gesture
-       after reading a finding is to look at it, and the thing they select is
-       exactly the thing the sentence is about. -->
+       selection does. It is a button, because the natural next gesture after
+       reading a finding is to look at it, and the thing it selects is exactly
+       the thing the sentence is about.
+
+       There used to be a second half, the basin's marine heatwave extent against
+       its 1991-2020 "normal". It was removed: the heatwave threshold is a fixed
+       1985-2012 percentile in a warming ocean, so extent trends upward and no
+       period's average is a normal worth comparing to. -->
   <div
-    v-if="enso || heatwave"
+    v-if="enso"
     class="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-default bg-elevated/40 px-3 py-1.5 text-xs md:px-4"
   >
     <button
@@ -34,28 +39,12 @@
       </span>
     </button>
 
-    <button
-      v-if="heatwave"
-      type="button"
-      class="group flex cursor-pointer items-center gap-2 text-left"
-      :title="`Show marine heatwave extent over the ${heatwave.label.toLowerCase()}`"
-      @click="showHeatwave()"
-    >
-      <span
-        class="rounded bg-orange-500/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-orange-400"
-      >Heatwave</span>
-      <span class="text-muted group-hover:text-default">
-        <span class="font-medium text-highlighted tabular-nums">{{ heatwave.extent }}%</span>
-        of the Pacific<span v-if="extentPhrase">, {{ extentPhrase }}</span>
-      </span>
-    </button>
-
     <div class="ml-auto flex items-center gap-2 text-dimmed">
       <span v-if="asOf" class="hidden tabular-nums sm:inline">as of {{ asOf }}</span>
 
-      <!-- On demand, not always on. Both sentences above are written to be read
+      <!-- On demand, not always on. The sentence above is written to be read
            without it; this is where the caveats that would otherwise clutter
-           them live — chiefly that the index is not NOAA's ONI, which is the one
+           it live — chiefly that the index is not NOAA's ONI, which is the one
            thing here that would be wrong to leave unsaid. -->
       <UPopover :ui="{ content: 'max-w-sm' }">
         <UButton
@@ -63,7 +52,7 @@
           variant="ghost"
           color="neutral"
           size="xs"
-          aria-label="How these two numbers are calculated"
+          aria-label="How this number is calculated"
           @click="trackEvent('state_guide_opened', {})"
         />
         <template #content>
@@ -83,13 +72,6 @@
               {{ enso.baseline }} climatology, so the value here runs warmer than
               the official one and the two will not agree to the tenth.
             </p>
-            <p v-if="heatwave">
-              <span class="font-medium text-highlighted">Heatwave extent.</span>
-              The share of this domain's ocean <em>area</em> at NOAA marine
-              heatwave category 1 or above, area-weighted by latitude. Normal is
-              the {{ heatwave.baseline }} mean for this time of year, over a
-              ±{{ heatwave.windowDays }}-day window.
-            </p>
           </div>
         </template>
       </UPopover>
@@ -104,13 +86,12 @@ import { useMainStore } from '~/stores/main'
 const store = useMainStore()
 
 const enso = computed(() => store.pacific?.enso ?? null)
-const heatwave = computed(() => store.pacific?.heatwave ?? null)
 
 const unit = '°C'
 
-/** The date both findings are as of — they share one, the archive's last day. */
+/** The date the finding is as of: the archive's last day. */
 const asOf = computed(() => {
-  const iso = heatwave.value?.date ?? store.coverage?.end
+  const iso = store.coverage?.end
   if (!iso) return ''
   // 'en-GB' pinned, not the visitor's locale, and for a reason that only shows
   // up under SSR: this line is rendered on the server too, where Node's default
@@ -180,29 +161,12 @@ const rankPhrase = computed(() => {
   return `${nth} ${monthName.value} in ${m.of} years${so_far}`
 })
 
-/**
- * The comparison, which is the finding — 47% is a number, and 47% against a
- * normal of 15% is a fact. Falls back to the archive rank when there is no
- * baseline to compare against, and to nothing when there is neither.
- */
-const extentPhrase = computed(() => {
-  const h = heatwave.value
-  if (!h) return ''
-  if (h.normal != null && h.ratio != null) {
-    // "about the same as" rather than "1x normal", which reads as a unit.
-    if (h.ratio >= 1.15) return `${h.ratio}× the normal ${h.normal}% for this time of year`
-    if (h.ratio <= 0.85) return `below the normal ${h.normal}% for this time of year`
-    return `about the normal ${h.normal}% for this time of year`
-  }
-  return `${h.rank} highest of ${h.of.toLocaleString('en-GB')} days on record`
-})
-
 const ensoTitle = computed(() =>
   `${phaseWord.value} · ${signed(enso.value?.index ?? 0)}${unit} for ${enso.value?.season}`)
 
 /**
- * Both halves select what their sentence is about. The variable is set too, not
- * just the region: reading "El Niño" and landing on a marine-heatwave chart of
+ * Selects what the sentence is about. The variable is set too, not just the
+ * region: reading "El Niño" and landing on a marine-heatwave chart of
  * Niño 3.4 would be a non-sequitur, and the ribbon's whole point is that the
  * next click needs no thought.
  */
@@ -216,13 +180,4 @@ function showEnso() {
   store.showRegion(e.region, 'anom')
 }
 
-function showHeatwave() {
-  const h = heatwave.value
-  if (!h) return
-  trackEvent('state_ribbon_clicked', { half: 'heatwave', region: h.region, variable: 'mhw' })
-  // As above — and `showRegion` keeps the gate: `mhw` is only adopted when its
-  // own archive is complete, since a ribbon built from a rollup that exists is
-  // not proof that the gate has opened.
-  store.showRegion(h.region, 'mhw')
-}
 </script>

@@ -69,8 +69,8 @@
                 aria-hidden="true"
               >
                 <div class="pointer-events-none w-max select-none">
-                  <!-- Live, like the other figures: it names the phase and the
-                       extent actually on screen rather than a frozen example
+                  <!-- Live, like the other figures: it names the phase
+                       actually on screen rather than a frozen example
                        that would read as stale the day ENSO turns over. -->
                   <div
                     v-if="step.figure === 'ribbon'"
@@ -81,12 +81,6 @@
                       :class="phaseChip.class"
                     >{{ phaseChip.label }}</span>
                     <span class="text-muted">Niño 3.4</span>
-                    <span class="h-4 w-px bg-accented" />
-                    <span class="rounded bg-orange-500/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-orange-400">Heatwave</span>
-                    <span class="text-muted">
-                      <span class="tabular-nums text-highlighted">{{ store.pacific?.heatwave?.extent ?? '—' }}%</span>
-                      of the Pacific
-                    </span>
                   </div>
 
                   <div
@@ -463,9 +457,8 @@ const steps = [
     title: 'Start with the headline',
     figure: 'ribbon',
     text: 'The strip under the title is the state of the basin right now, and needs no setting up: '
-      + 'the El Niño / La Niña phase from the Niño 3.4 anomaly, and how much of the '
-      + 'Pacific is in a marine heatwave against what is normal for the date. Click either half to '
-      + 'open it in the panels below; the (i) beside it says exactly how each is calculated.',
+      + 'the El Niño / La Niña phase from the Niño 3.4 anomaly. Click it to open Niño 3.4 '
+      + 'in the panels below; the (i) beside it says exactly how it is calculated.',
   },
   {
     title: 'Choose what to draw',

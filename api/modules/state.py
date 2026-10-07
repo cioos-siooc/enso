@@ -7,17 +7,17 @@ not framed yet, which is the one a first-time visitor actually arrives with:
 and it is deliberately the only endpoint that decides what is worth saying rather
 than serving what was asked for.
 
-Two findings, because the archive supports exactly two that need no context to
-read:
+One finding: the **ENSO state**, from the Nino 3.4 anomaly. See `enso_state`
+for why this is ONI-*style* and not the ONI. It comes off `region_daily`, so the
+endpoint is a few hundred rows and runs in milliseconds.
 
-* **ENSO state**, from the Nino 3.4 anomaly. See `enso_state` for why this is
-  ONI-*style* and not the ONI.
-* **Marine heatwave extent**, the share of the Pacific box in a heatwave today
-  against what is normal for the date.
-
-Both come off `region_daily`, so the whole endpoint is a few thousand rows and
-runs in milliseconds — the `pacific` region exists in `domain.yml` precisely so
-the basin-wide half is a rollup read and not a scan of 113.8 billion rows.
+There used to be a second, the Pacific's marine heatwave extent against its
+1991-2020 mean for the date. It was removed because that mean is not a normal:
+NOAA's heatwave threshold is a fixed 1985-2012 90th percentile, so in a warming
+ocean the extent trends upward (~10% averaged over 1985-2012, ~14% over
+1991-2020, ~28% over 2014-2025) and any period's average is one point on a
+rising series. The key stays `null` in the payload so an older cached frontend
+does not break.
 """
 
 from __future__ import annotations
@@ -27,15 +27,11 @@ import datetime as dt
 from shared.domain import regions, variable
 
 from .clickhouse_helpers import DATABASE, client
-from .timeseries import _MHW_EXTENT_SCALE, MMDD_SQL, data_through
+from .timeseries import MMDD_SQL, data_through
 
 # The region whose anomaly defines the ENSO state. Nino 3.4 is the box the ONI is
 # computed over and the one this repo is named for.
 ENSO_REGION = "nino34"
-
-# The Pacific basin (GOaS's outline). Its rollup is what makes the basin-wide extent a
-# 15k-row read; see `domain.yml`'s `pacific` region.
-BASIN_REGION = "pacific"
 
 # NOAA's ENSO threshold, on the 3-month running mean of the Nino 3.4 anomaly.
 THRESHOLD = 0.5
@@ -61,15 +57,6 @@ _SEASONS = (
     "JJA", "JAS", "ASO", "SON", "OND", "NDJ",
 )
 
-# Half-width, in days, of the window a day-of-year "normal" is averaged over.
-#
-# A single MMDD over 1991-2020 is a mean of 30 numbers and jitters by a percent
-# or two between neighbouring days, which would make the ribbon's comparison move
-# for reasons that are not weather. +/-7 days is 450 values and is smooth without
-# blurring the seasonal cycle, which at this latitude range turns over months
-# rather than weeks.
-NORMAL_WINDOW_DAYS = 7
-
 # The climatological baseline, matching `sst_clim` and every anomaly this API
 # serves. Reported in the payload so the ribbon can name it rather than assume.
 #
@@ -81,10 +68,10 @@ BASELINE = variable("anom").baseline.period
 
 
 def _through_params(key: str, column: str = "date") -> tuple[str, dict]:
-    """The `data_through()` bound both rollup reads take, as SQL and params.
+    """The `data_through()` bound the rollup read takes, as SQL and params.
 
-    Without it the ribbon reads a date `run` has rolled up from SST alone, whose
-    `mhw_area_frac` is a 0 standing in for a file that has not landed yet.
+    Without it the ribbon would report a date the rest of the dashboard does not
+    serve yet, one `run` has rolled up from SST alone.
     """
     through = data_through()
     if through is None:
@@ -241,77 +228,9 @@ def enso_state() -> dict | None:
     }
 
 
-def _basin_extent_rows() -> list[tuple[dt.date, float]]:
-    """(date, extent %) for the whole box, straight from the `pacific` rollup."""
-    bound, params = _through_params(BASIN_REGION)
-    return [
-        (date, float(value))
-        for date, value in client().query(
-            f"""
-            SELECT date, mhw_area_frac * {_MHW_EXTENT_SCALE}
-            FROM {DATABASE}.region_daily FINAL
-            WHERE region = %(key)s AND isFinite(mhw_area_frac){bound}
-            ORDER BY date
-            """,
-            parameters=params,
-        ).result_rows
-    ]
-
-
-def heatwave_state() -> dict | None:
-    """How much of the Pacific is in a marine heatwave, against the date's normal.
-
-    The comparison is the finding, not the number: 47% means nothing on its own,
-    and means a great deal beside a late-August normal of 15%. Both come out of
-    the same ~15k rows, folded in Python rather than in three separate queries —
-    the whole series is smaller than one day of `mhw_daily`.
-
-    `normal` is the 1991-2020 mean over a +/-`NORMAL_WINDOW_DAYS` window around
-    the date's day-of-year rather than that day alone; see that constant. It is
-    None if the baseline years are not in the archive, in which case the ribbon
-    reports the extent without a comparison rather than inventing one.
-    """
-    rows = _basin_extent_rows()
-    if not rows:
-        return None
-
-    date, extent = rows[-1]
-    doy = date.timetuple().tm_yday
-
-    def in_window(day: dt.date) -> bool:
-        gap = abs(day.timetuple().tm_yday - doy)
-        # Wrap the year, so a normal for early January is not built out of
-        # January alone.
-        return min(gap, 366 - gap) <= NORMAL_WINDOW_DAYS
-
-    baseline = [v for d, v in rows if 1991 <= d.year <= 2020 and in_window(d)]
-    normal = sum(baseline) / len(baseline) if baseline else None
-
-    # Rank among every day in the archive, warmest first. `rows` is ~15k floats,
-    # so this is a comparison rather than a query.
-    hotter = sum(1 for _, v in rows if v > extent)
-
-    return {
-        "region": BASIN_REGION,
-        "label": regions()[BASIN_REGION].label,
-        "date": str(date),
-        "extent": round(extent, 1),
-        "normal": None if normal is None else round(normal, 1),
-        # How many times the normal, for the ribbon's plainest possible phrasing.
-        # Guarded against a zero normal, which no day of this archive has but
-        # which a narrower future box could.
-        "ratio": None if not normal else round(extent / normal, 1),
-        "rank": hotter + 1,
-        "of": len(rows),
-        "baseline": BASELINE,
-        "windowDays": NORMAL_WINDOW_DAYS,
-    }
-
-
 def pacific_state() -> dict:
-    """Both findings, plus the date they are as of.
+    """The ENSO finding, or None with fewer than three months of rollup.
 
-    Either half may be None — an archive without the `pacific` rollup, or with
-    fewer than three months of it — and the ribbon renders whichever it gets.
+    `heatwave` is always None; see the module docstring for why it was removed.
     """
-    return {"enso": enso_state(), "heatwave": heatwave_state()}
+    return {"enso": enso_state(), "heatwave": None}
