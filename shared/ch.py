@@ -477,6 +477,24 @@ DDL: tuple[str, ...] = (
     # says a year is worth fetching again, not what says a date was revised.
     _STATUS_DDL.format(database=DATABASE, table="land_temp_status"),
     _STATUS_DDL.format(database=DATABASE, table="land_precip_status"),
+    # The version of each CPC year file the last successful `CPC.cli run` fully
+    # processed, as the server reported it by HEAD. One row per (variable, year)
+    # FILE, which the status tables cannot say: `land_temp_status` holds one
+    # pair per date for two files (tmax, tmin). It is what lets an hourly run
+    # stop after six HEADs when nothing has been published, rather than
+    # downloading ~200 MB to find out.
+    f"""
+    CREATE TABLE IF NOT EXISTS {DATABASE}.land_source_files
+    (
+        variable         LowCardinality(String),
+        year             UInt16,
+        remote_size      UInt64,
+        remote_modified  String,
+        updated_at       DateTime DEFAULT now()
+    )
+    ENGINE = ReplacingMergeTree(updated_at)
+    ORDER BY (variable, year)
+    """,
 )
 
 # Status values used by process/CRW. ReplacingMergeTree keyed on `date` means

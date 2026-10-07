@@ -511,7 +511,7 @@ def _process_date(client, http, date, *, force, keep_nc, width) -> str:
 def run_targets(client, *, date, recheck_days, max_days) -> list[dt.date]:
     """The dates one `run` covers, sorted and unique.
 
-    Shared with `CRW.flows.daily_run`, so the scheduled run and the CLI cannot
+    Shared with `flows.ocean_run`, so the scheduled run and the CLI cannot
     disagree about which dates a run is responsible for.
     """
     if date:

@@ -30,12 +30,12 @@
 #   5. A `maintenance` service, also behind a profile, which takes over front's
 #      and api's published ports while they are stopped. See its own comment
 #      below for why a migration needs the site down rather than merely slow.
-#   6. `scheduler` runs the daily `run` on a schedule, registered with the
+#   6. `scheduler` runs the ocean and land `run`s hourly, registered with the
 #      shared Prefect server at PREFECT_API_URL (pipelines.cioospacific.ca), which
 #      is its own deployment and not part of this stack — dev runs a local one.
 #      That server is https://github.com/cioos-siooc/cioos-pacific-pipeline.
 #      `scheduler` is not behind a profile: it is the pipeline image serving
-#      CRW/flows.py, and it shares its `image:` with `process` — so
+#      flows.py, and it shares its `image:` with `process` — so
 #      `up -d --build` rebuilds the pipeline too, which it used to skip.
 #
 # One deploy prerequisite compose will not tell you about: create DATA_DIR,
@@ -273,25 +273,26 @@ services:
     # for a long backfill; the `run --rm` form above ignores it.
     command: ["sleep", "infinity"]
 
-  # --- Prefect: the daily `run` on a schedule ---------------------------------
+  # --- Prefect: the ocean and land `run`s on a schedule -----------------------
   # The server is not here: it is a standalone deployment shared with other
   # projects, and `scheduler` registers with it over HTTPS.
-  # The same image as `process`, serving CRW/flows.py instead of idling. Stopping
+  # The same image as `process`, serving flows.py instead of idling. Stopping
   # it pauses the schedule; starting it re-applies RUN_SCHEDULE_PAUSED — so the
   # UI's pause toggle lasts only until the next restart, and `stop scheduler` is
   # the pause that holds.
   scheduler:
     <<: *process
-    command: ["python", "-m", "CRW.flows"]
+    command: ["python", "-m", "flows"]
     environment:
       <<: *process-env
       PREFECT_API_URL: ${PREFECT_API_URL:?set PREFECT_API_URL, e.g. https://pipelines.cioospacific.ca/api}
       PREFECT_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?set PREFECT_AUTH_STRING to the shared server's user:password}
-      PREFECT_LOGGING_EXTRA_LOGGERS: CRW,shared
+      PREFECT_LOGGING_EXTRA_LOGGERS: CRW,CPC,shared
       # The container runs as the host UID, which has no home directory here, so
       # the default ~/.prefect would be /.prefect and unwritable.
       PREFECT_HOME: /tmp/prefect
-      RUN_CRON: ${RUN_CRON:-30 16 * * *}
+      RUN_CRON: ${RUN_CRON:-0 * * * *}
+      LAND_RUN_CRON: ${LAND_RUN_CRON:-30 * * * *}
       RUN_SCHEDULE_PAUSED: ${RUN_SCHEDULE_PAUSED:-false}
       RUN_KEEP_NC: ${RUN_KEEP_NC:-false}
     depends_on:

@@ -27,6 +27,8 @@ import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
 
+from shared.ch import DATABASE
+
 from CRW.status import (  # noqa: F401 — re-exported, deliberately not reimplemented
     COLUMNS,
     ingested_dates,
@@ -58,3 +60,31 @@ class LandDate:
     @property
     def filename(self) -> str:
         return self.path.name
+
+
+# --- Which version of each year file the last run finished with ---------------
+
+SOURCE_TABLE = "land_source_files"
+
+# (variable, year) -> (remote_size, remote_modified), as `download.head` returns it.
+Versions = dict[tuple[str, int], tuple[int, str]]
+
+
+def seen_versions(client) -> Versions:
+    """The year-file versions the last successful `run` fully processed."""
+    rows = client.query(
+        f"SELECT variable, year, remote_size, remote_modified "
+        f"FROM {DATABASE}.{SOURCE_TABLE} FINAL"
+    ).result_rows
+    return {(v, int(y)): (int(size), modified) for v, y, size, modified in rows}
+
+
+def record_versions(client, versions: Versions) -> None:
+    """Mark these year-file versions as processed: ingested, rendered, done."""
+    if not versions:
+        return
+    client.insert(
+        f"{DATABASE}.{SOURCE_TABLE}",
+        [[v, y, size, modified] for (v, y), (size, modified) in versions.items()],
+        column_names=["variable", "year", "remote_size", "remote_modified"],
+    )

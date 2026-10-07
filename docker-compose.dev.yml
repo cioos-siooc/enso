@@ -185,16 +185,17 @@ services:
   scheduler:
     <<: *process
     profiles: ["prefect"]
-    command: ["python", "-m", "CRW.flows"]
+    command: ["python", "-m", "flows"]
     environment:
       <<: *process-env
       PREFECT_API_URL: http://prefect:4200/api
       PREFECT_API_AUTH_STRING: ${PREFECT_AUTH_STRING:-admin:admin}
-      PREFECT_LOGGING_EXTRA_LOGGERS: CRW,shared
+      PREFECT_LOGGING_EXTRA_LOGGERS: CRW,CPC,shared
       # The container runs as the host UID, which has no home directory here, so
       # the default ~/.prefect would be /.prefect and unwritable.
       PREFECT_HOME: /tmp/prefect
-      RUN_CRON: ${RUN_CRON:-30 16 * * *}
+      RUN_CRON: ${RUN_CRON:-0 * * * *}
+      LAND_RUN_CRON: ${LAND_RUN_CRON:-30 * * * *}
       RUN_SCHEDULE_PAUSED: ${RUN_SCHEDULE_PAUSED:-true}
       RUN_KEEP_NC: ${RUN_KEEP_NC:-true}
     depends_on:

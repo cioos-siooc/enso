@@ -99,9 +99,10 @@ docker compose -f docker-compose.dev.yml --env-file .env.dev \
   --profile prefect up -d prefect scheduler
 ```
 
-The UI is at http://localhost:9025 (`PREFECT_AUTH_STRING`, default `admin:admin`): flow
-`osta-daily-run`, deployment `osta-daily`, one task per date. It fires at `RUN_CRON` (default
-16:30 UTC, after both products have published). **Dev opens paused and with `keep_nc` on**
+The UI is at http://localhost:9025 (`PREFECT_AUTH_STRING`, default `admin:admin`). There are
+two deployments: `osta-ocean` (flow `osta-ocean-run`, one task per date) fires at `RUN_CRON`,
+and `osta-land` (flow `osta-land-run`) at `LAND_RUN_CRON`, both hourly by default (`:00` and
+`:30`). A run with nothing new stops after its HEAD requests. **Dev opens paused and with `keep_nc` on**
 (`RUN_SCHEDULE_PAUSED`, `RUN_KEEP_NC`), because a run that prunes deletes the local archive
 back to the open week. Unpausing in the UI does not survive a container restart; to hold the
 pipeline, `stop scheduler`. An ad-hoc run is *Run → Custom run* on the deployment.
@@ -121,15 +122,16 @@ It downloads, ingests and renders every day from the last ingested through yeste
 re-checks the recent tail for files CoralTemp has revised in place, and appends to the
 region rollup. A date that is not published yet is a no-op, not a failure.
 
-**The land overlay is not scheduled.** Update it by hand:
+The land overlay's job by hand:
 
 ```bash
 docker compose -f docker-compose.dev.yml --env-file .env.dev run --rm process \
-  python -m CPC.cli run --keep-nc
+  python -m CPC.cli run --keep-nc [--force]
 ```
 
-It re-downloads the current year's files (CPC rewrites them in place), ingests the new days
-and re-renders every bucket its recheck window touches. **Without `--keep-nc` it deletes the
+It asks the server whether any current-year file has changed since the last run and stops if
+not (`--force` skips that). Otherwise it re-downloads them (CPC rewrites them in place),
+ingests the new days and re-renders every bucket its recheck window touches. **Without `--keep-nc` it deletes the
 year files it has finished with**, so pass it if you keep the land archive.
 
 ### Production

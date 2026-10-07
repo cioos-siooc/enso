@@ -14,7 +14,7 @@ dependencies = [
     # same code path the API serves /image from.
     "matplotlib>=3.9",
     "pillow>=11.0",
-    # Scheduler + run history UI for the daily `run` (CRW/flows.py). Pinned
+    # Scheduler + run history UI for the scheduled `run`s (flows.py). Pinned
     # exactly: it must match the server's version — in prod the shared server at
     # pipelines.cioospacific.ca, in dev PREFECT_IMAGE_TAG in docker-compose.dev.yml
     # — since a client newer than its server can send what it cannot read.

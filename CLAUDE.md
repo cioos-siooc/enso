@@ -30,7 +30,7 @@ ports you'll actually hit:
 | `db-ch` | ClickHouse | 9023 (HTTP), 9024 (native) |
 | `process` | NetCDF → ClickHouse ingest + image rendering (the CLI) | — |
 | `prefect` | Prefect server: the daily `run`'s schedule and run-history UI (**dev only**; prod uses the shared server at `pipelines.cioospacific.ca`) | 9025 |
-| `scheduler` | the `process` image serving `CRW/flows.py` to the Prefect server | — |
+| `scheduler` | the `process` image serving `flows.py` (ocean and land runs) to the Prefect server | — |
 
 Ports are deliberately offset from the ocean-acidification-dashboard's 9010–9014 so both
 stacks can run at once.
@@ -146,7 +146,7 @@ program from Coral Reef Watch and its files are one per **year**, not per date:
 python -m CPC.cli init                                    # the two land tables
 python -m CPC.cli fetch    [--year|--start-year|--end-year] [--variable] [--force]
 python -m CPC.cli backfill [--year ...] [--product temp|precip] [--start|--end] [--fresh]
-python -m CPC.cli run      [--recheck-days N] [--keep-nc] # fetch + ingest + re-render + prune
+python -m CPC.cli run      [--recheck-days N] [--keep-nc] [--force] # HEAD check, then fetch + ingest + re-render + prune
 python -m CPC.cli clim     [--source]                     # the 1991-2020 land climatology
 python -m CPC.cli render   [--variable|--period|--start|--end] [--workers N] [--force]
 python -m CPC.cli prune    [--year ...] [--product] [--dry-run]  # delete used year files
@@ -1297,7 +1297,8 @@ for the land layers. Same module names, same shapes, importing the same `shared/
 The naming is deliberate and worth keeping: CPC is the Climate Prediction Center, a different
 NOAA program, and a CPC product inside a package named for Coral Reef Watch would be the same
 class of misnaming as calling a bioregion an EEZ. Its `run` is also a genuinely different
-shape — yearly files, no watermark — rather than a flag on the ocean one.
+shape — yearly files, no watermark, a version check that stops an unchanged run after its
+HEADs — rather than a flag on the ocean one.
 
 Land inserts are **one per year** (~23 M temperature rows, ~34 M rain rows), not batched by
 day: a land day is only ~63–93 k rows, so finer batching would only create parts.
@@ -1438,11 +1439,12 @@ it freezes weekly and monthly frames at whatever was last rendered.
 
 #### Prefect: the schedule and the run history
 
-**`run` is scheduled by Prefect, and it adds nothing else.**
-`CRW/flows.py` wraps `cli.run_targets()` (which dates a run covers) and `cli._process_date()`
-(what happens to one) unchanged, so the scheduled run and `python -m CRW.cli run` are the
-same job. It is the only module that imports Prefect, and the CLI never imports it.
-Prefect 3.8.6.
+**Both `run`s are scheduled by Prefect, and it adds nothing else.** `process/flows.py`
+(`python -m flows`) serves two deployments from one `scheduler` container. `ocean_run` wraps
+`CRW.cli.run_targets()` (which dates a run covers) and `CRW.cli._process_date()` (what happens
+to one); `land_run` wraps `CPC.cli.run()`. So each scheduled run and its CLI command are the
+same job. It sits beside `CRW/` and `CPC/` rather than in either, since it serves both. It
+is the only module that imports Prefect, and neither CLI imports it. Prefect 3.8.6.
 
 **Prod and dev use different servers, deliberately.** Prod's `scheduler` registers with the
 shared server at `https://pipelines.cioospacific.ca` (`PREFECT_API_URL`), which is not part of
@@ -1458,19 +1460,32 @@ docker compose -f docker-compose.dev.yml --env-file .env.dev \
   --profile prefect up -d prefect scheduler          # dev: http://localhost:9025, admin:admin
 ```
 
-- **What the UI shows**: flow `osta-daily-run`, deployment `osta-daily`, tag `osta`, one flow
-  run per firing and
+- **What the UI shows**: tag `osta` on both. Flow `osta-ocean-run`, deployment `osta-ocean`:
+  one flow run per firing and
   **one task run per date**, named after the date. Each date's task ends in a state named
   for its outcome: `Ingested`, `Skipped`, `Unpublished` or `Failed`. So on a normal day the
   thirty recheck dates show as `Skipped` and the one new date as `Ingested`. The flow ends
   `Failed` if any date did, with `cli.run_summary()`'s line as its message. The pipeline's
-  own log lines (`CRW.*`, `shared.*`) appear in each task's log tab.
-- **An ad-hoc run** is *Run → Custom run* on the deployment: `date` for one day, `force`,
-  `keep_nc`, `recheck_days`, `max_days`. `width` is deliberately absent: a cached frame at
-  any other width is a 404 and a blank map.
-- **Schedule** `RUN_CRON`, default `30 16 * * *` UTC, after both products have published.
-  `limit=1`, so two runs never overlap. **No retries**, because `run` is a range and the
-  next firing is the retry.
+  own log lines (`CRW.*`, `CPC.*`, `shared.*`) appear in each run's logs. Flow
+  `osta-land-run`, deployment `osta-land`: one flow run per firing, ending `Unchanged` (most
+  hours), `Ingested` or `Failed`.
+- **An ad-hoc run** is *Run → Custom run* on the deployment. Ocean: `date` for one day,
+  `force`, `keep_nc`, `recheck_days`, `max_days`. `width` is deliberately absent: a cached
+  frame at any other width is a 404 and a blank map. Land: `product`, `force`, `keep_nc`,
+  `recheck_days`.
+- **Schedule: hourly**, `RUN_CRON` (default `0 * * * *`) and `LAND_RUN_CRON` (`30 * * * *`),
+  UTC. Neither source publishes at a fixed hour, so the first run after a publication picks
+  it up. `limit=1` is **across both deployments**, so no two runs overlap, ocean or land; the
+  half-hour offset keeps the land run from waiting behind the ocean one. **No retries**: each
+  run picks up whatever the last one missed, so the next firing is the retry.
+- **A run with nothing new is cheap, and that is what makes hourly affordable.** The ocean
+  run HEADs its 30-day recheck window and skips every date whose `Content-Length` and
+  `Last-Modified` match status. The land run HEADs its year files (six, or nine early in
+  January) and stops if every one matches `land_source_files`, the version the last
+  successful run finished with. Without that check every firing would download ~200 MB. It is
+  per product, since temperature and precipitation are rewritten at different hours, and a
+  version is recorded only after ingest and render succeed, so a failed run is retried next
+  hour. `CPC.cli run --force` skips the check.
 - **Dev opens paused with `keep_nc` on** (`RUN_SCHEDULE_PAUSED`, `RUN_KEEP_NC`). A dev run
   that prunes deletes the local archive back to the open week. Prod defaults to live and
   pruning, so **leave `RUN_KEEP_NC=true` until `render --variable mhw` has finished.**
@@ -2504,7 +2519,8 @@ over 17.6 B rows from per-part metadata in 6 ms. Not verified on prod.
     validation.
 - **`PREFECT_LOGGING_EXTRA_LOGGERS` attaches a handler but sets no level**, so `CRW.*` would
   inherit the root's WARNING and every INFO line would be dropped before reaching the UI.
-  `daily_run` sets them to INFO itself.
+  `flows._log_to_ui()` sets them to INFO itself; a new package's logger goes in both
+  `LOGGERS` there and the compose variable.
 - **`PREFECT_UI_API_URL` is what the browser calls**, and left unset it defaults to
   `http://0.0.0.0:4200/api` — the UI loads and then fails every request. It is
   `PREFECT_PUBLIC_URL` + `/api`.
