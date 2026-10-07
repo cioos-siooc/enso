@@ -5,31 +5,36 @@
        desktop), and the regions are the scope menu's own grouped list. With B
        set the button removes it. It sits beside `ScopeControl` on the map: B is a
        second "where", so it lives next to the control that picks A. -->
-  <UButton
-    v-if="store.hasSecond || store.addingPoint"
-    :size="size"
-    :icon="store.hasSecond ? 'i-mdi-map-marker-remove' : 'i-mdi-map-marker-plus'"
-    :label="narrow ? undefined : label"
-    :aria-label="label"
-    :color="store.addingPoint ? 'primary' : 'neutral'"
-    :variant="store.addingPoint ? 'solid' : 'subtle'"
-    :title="title"
-    :style="store.hasSecond ? removeStyle : undefined"
-    :aria-pressed="store.addingPoint"
-    @click="onClick"
-  />
-  <UDropdownMenu v-else :items="items" :content="{ align: 'start' }">
+  <div class="flex items-center gap-1">
     <UButton
+      v-if="store.hasSecond || store.addingPoint"
+      class="rounded-lg shadow-lg"
       :size="size"
-      icon="i-mdi-map-marker-plus"
-      :trailing-icon="narrow ? undefined : 'i-mdi-chevron-down'"
-      :label="narrow ? undefined : 'Compare'"
-      aria-label="Compare with another place"
-      color="neutral"
-      variant="subtle"
-      :title="`Compare with a second point or region, drawn beside A on the chart. Or ${alt}-click the map to drop point B.`"
+      :icon="store.hasSecond ? 'i-mdi-map-marker-remove' : 'i-mdi-map-marker-plus'"
+      :label="narrow ? undefined : label"
+      :aria-label="label"
+      :color="store.addingPoint ? 'primary' : 'neutral'"
+      :variant="store.addingPoint ? 'solid' : 'subtle'"
+      :title="title"
+      :style="store.hasSecond ? removeStyle : undefined"
+      :aria-pressed="store.addingPoint"
+      @click="onClick"
     />
-  </UDropdownMenu>
+    <UDropdownMenu v-else :items="items" :content="{ align: 'start' }">
+      <UButton
+        class="rounded-lg shadow-lg"
+        :size="size"
+        icon="i-mdi-map-marker-plus"
+        :trailing-icon="narrow ? undefined : 'i-mdi-chevron-down'"
+        :label="narrow ? undefined : 'Compare'"
+        aria-label="Compare with another place"
+        color="neutral"
+        variant="subtle"
+        :title="`Compare with a second point or region, drawn beside A on the chart. Or ${alt}-click the map to drop point B.`"
+      />
+    </UDropdownMenu>
+    <CompareHint :text="hint" :size="size" variant="subtle" class="rounded-lg shadow-lg" />
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -50,6 +55,10 @@ const label = computed(() => {
 const title = computed(() => (store.hasSecond
   ? 'Remove the second selection from the chart'
   : 'Click the map to drop point B (Esc cancels)'))
+
+const hint = computed(() => (store.hasSecond
+  ? `${alt.value}-click the map to put B there instead; Remove B clears it.`
+  : `${alt.value}-click the map to drop point B, or pick a point or region from Compare.`))
 
 // B's own violet, so the button reads as belonging to the pin and outline it
 // removes. Inline, because the colour is PIN_COLORS', not a theme colour.

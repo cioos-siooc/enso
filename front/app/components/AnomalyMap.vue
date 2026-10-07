@@ -97,7 +97,7 @@
       <LayerControl />
       <div class="flex items-center gap-2">
         <ScopeControl />
-        <SecondPointControl :size="narrow ? 'sm' : 'xs'" class="rounded-lg shadow-lg" />
+        <SecondPointControl :size="narrow ? 'sm' : 'xs'" />
       </div>
     </div>
 

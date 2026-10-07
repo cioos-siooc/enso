@@ -118,6 +118,7 @@
         :title="dateTitle"
         @click="store.toggleCompare()"
       />
+      <CompareHint :text="dateHint" :size="size" />
       <template v-if="store.compareDate">
         <UButton
           icon="i-mdi-chevron-left"
@@ -191,6 +192,10 @@ const alt = useAltKey()
 const dateTitle = computed(() => (store.compareDate
   ? `Stop comparing. Drag the divider to swipe between the two dates; ${alt.value}-click the chart to move the right-hand map.`
   : `Split the map: the same view on another date, side by side. Then ${alt.value}-click the chart to set that date.`))
+
+const dateHint = computed(() => (store.compareDate
+  ? `${alt.value}-click the chart to move the right-hand map's date.`
+  : `Split the map by date; then ${alt.value}-click the chart to set the second date.`))
 
 const dateInput = computed({
   get: () => store.selectedDate ?? '',
