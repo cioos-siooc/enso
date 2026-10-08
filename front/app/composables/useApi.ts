@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getRequestIP } from 'h3'
 import type { Period } from '~/utils/periods'
 
 /** Mirrors `shared/render.py`'s DEFAULT_WIDTH — see `imageUrl` below. */
@@ -22,15 +23,19 @@ export function useApi() {
   const publicBase = String(config.public.apiBaseUrl ?? '').replace(/\/+$/, '')
   const internalBase = String(config.apiInternalBaseUrl ?? '').replace(/\/+$/, '')
   const requestBase = import.meta.server ? internalBase : publicBase
+  // During SSR the API's TCP peer is this container, so without this every
+  // server-rendered request is attributed in PostHog to `front`'s Docker IP.
+  // Read here, in the synchronous part of setup, where the request event exists.
+  const headers = import.meta.server ? visitorHeaders() : undefined
 
   return {
     baseURL: publicBase,
     async get<T>(path: string, params?: Record<string, unknown>): Promise<T> {
-      const { data } = await axios.get<T>(`${requestBase}${path}`, { params })
+      const { data } = await axios.get<T>(`${requestBase}${path}`, { params, headers })
       return data
     },
     async post<T>(path: string, body?: unknown): Promise<T> {
-      const { data } = await axios.post<T>(`${requestBase}${path}`, body)
+      const { data } = await axios.post<T>(`${requestBase}${path}`, body, { headers })
       return data
     },
     /**
@@ -46,4 +51,11 @@ export function useApi() {
       return `${publicBase}/image/${date}.webp?width=${width}&period=${period}&variable=${variable}`
     },
   }
+}
+
+/** The visitor's IP as `X-Forwarded-For`, for the API's `client_ip()`. */
+function visitorHeaders(): Record<string, string> | undefined {
+  const event = useRequestEvent()
+  const ip = event && getRequestIP(event, { xForwardedFor: true })
+  return ip ? { 'X-Forwarded-For': ip } : undefined
 }
