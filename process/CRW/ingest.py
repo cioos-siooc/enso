@@ -10,8 +10,8 @@ in a heatwave are stored**, so `mhw_daily` is ~24.2 B rows against `sst_daily`'s
 Each file holds one day of `analysed_sst` on the global 0.05-degree grid,
 encoded as `short` counts of 0.01 degC with `_FillValue = -32768` over land.
 Those raw counts go into ClickHouse untouched (see `shared/ch.py` for why),
-subset to the Pacific box and keyed by their index into the *global* grid, so
-widening the box later needs no reindex.
+subset to `domain.yml`'s box (the whole globe today) and keyed by their index
+into the *global* grid, so changing the box later needs no reindex.
 
 Grid conventions — the longitude roll and the latitude orientation — are applied
 by `shared/fields.py`, not here.
@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from shared.ch import DATABASE, STATUS_FAILED, STATUS_INGESTING, STATUS_SUCCESS
+from shared.ch import DATABASE, STATUS_FAILED, STATUS_INGESTING, STATUS_SUCCESS, insert_days
 from shared.domain import global_grid, subset
 from shared.fields import (
     mhw_valid_mask,
@@ -36,7 +36,7 @@ from shared.fields import (
     valid_mask,
 )
 
-from . import status as status_mod
+from . import recent as recent_mod, status as status_mod
 from .config import NcFile
 
 log = logging.getLogger(__name__)
@@ -137,7 +137,11 @@ def delete_day(
     that day sees both copies; the merges (or the `OPTIMIZE ... FINAL` a
     backfill ends with) settle it. A day with no rows — a file that failed to
     read — issues nothing.
+
+    Either way the date is also cleared from the table's `*_recent` twin, which a
+    materialized view fills on insert but nothing empties on delete.
     """
+    recent_mod.delete_day(client, table, date)
     if lightweight:
         present = client.query(
             f"SELECT count() FROM {DATABASE}.{table} WHERE date = %(date)s",
@@ -155,47 +159,6 @@ def delete_day(
         parameters={"date": date},
         settings={"mutations_sync": 2},
     )
-
-
-# The RowBinary layout of every column either daily table carries. `date` is a
-# ClickHouse Date, which on the wire is a UInt16 count of days since 1970-01-01.
-ROW_BINARY = {
-    "date": "<u2", "gy": "<u2", "gx": "<u2",
-    "sst_raw": "<i2", "has_clim": "u1", "cat": "u1",
-}
-_EPOCH = dt.date(1970, 1, 1)
-
-# Blocks of ~a day rather than ClickHouse's default ~1 M rows, so a 5-day batch
-# lands as ~6 parts instead of ~86. Not one block per insert: an 86 M-row block
-# made the server throw `std::length_error` in `splitBlockIntoParts` on about
-# 1 insert in 175 (ClickHouse 26.5, 8 concurrent writers).
-_INSERT_BLOCKS = {
-    "max_insert_block_size": 1 << 24,
-    "min_insert_block_size_rows": 0,
-    "min_insert_block_size_bytes": 0,
-}
-
-
-def _row_binary(dtype: np.dtype, files: list[NcFile], days: list[tuple]) -> bytes:
-    """Pack a batch into RowBinary: a numpy record array, straight to bytes.
-
-    This replaces `client.insert()` with Python lists, which cost ~11 GB of
-    objects per 5-day global batch and, worse, serialises the Date column
-    through `struct.pack(*column)` — one Python argument per row. At 86 M rows
-    that segfaulted Python 3.13 intermittently (clickhouse-connect 1.8.0,
-    `driver/common.py:write_array`), leaving part of the batch inserted.
-    """
-    total = sum(int(cols[0].size) for cols in days)
-    out = np.empty(total, dtype=dtype)
-    names = dtype.names
-    at = 0
-    for nc, cols in zip(files, days):
-        n = int(cols[0].size)
-        out["date"][at : at + n] = (nc.date - _EPOCH).days
-        for name, values in zip(names[1:], cols):
-            out[name][at : at + n] = values
-        at += n
-    return out.tobytes()
 
 
 def ingest_files(
@@ -225,7 +188,6 @@ def ingest_files(
     pending: list[NcFile] = []
     rows_per_day: list[int] = []
     days: list[tuple] = []  # per pending day, its per-column arrays
-    dtype = np.dtype([(c, ROW_BINARY[c]) for c in target.columns])
 
     def flush() -> None:
         if not pending:
@@ -237,13 +199,7 @@ def ingest_files(
         for nc in pending:
             status_mod.record(client, nc, STATUS_INGESTING, table=target.status_table)
         try:
-            client.raw_insert(
-                f"{DATABASE}.{target.table}",
-                target.columns,
-                insert_block=_row_binary(dtype, pending, days),
-                settings=_INSERT_BLOCKS,
-                fmt="RowBinary",
-            )
+            insert_days(client, target.table, target.columns, [nc.date for nc in pending], days)
         except Exception as exc:  # noqa: BLE001 — recorded per-day below
             log.exception("insert failed for %d day(s)", len(pending))
             for nc in pending:

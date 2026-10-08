@@ -495,14 +495,20 @@ class Region:
         return np.concatenate([np.arange(west, grid.nlon), np.arange(0, east + 1)])
 
     def gx_sql(self, grid: GlobalGrid) -> str:
-        """The `gx` half of a WHERE clause, binding `%(gx0)s`/`%(gx1)s`.
+        """The `gx` half of a WHERE clause, binding `%(gx0)s`/`%(gx1)s`."""
+        return gx_sql(*self.gx_range(grid))
 
-        An OR of two ranges for a wrapping box. ClickHouse turns either form into
-        primary-key ranges within each `gy`, so the wrap costs nothing extra.
-        """
-        if self.wraps(grid):
-            return "(gx >= %(gx0)s OR gx <= %(gx1)s)"
-        return "gx BETWEEN %(gx0)s AND %(gx1)s"
+
+def gx_sql(west: int, east: int) -> str:
+    """The `gx` half of a WHERE clause for columns `west..east`, binding `%(gx0)s`/`%(gx1)s`.
+
+    An OR of two ranges when `west > east`, i.e. a box across gx = 0. ClickHouse
+    turns either form into primary-key ranges within each `gy`, so the wrap costs
+    nothing extra. Sorting the pair instead would select the complement.
+    """
+    if west > east:
+        return "(gx >= %(gx0)s OR gx <= %(gx1)s)"
+    return "gx BETWEEN %(gx0)s AND %(gx1)s"
 
 
 @functools.lru_cache(maxsize=1)
@@ -708,6 +714,13 @@ def quantity(name: str) -> Quantity:
 _REGION_DIR = Path(__file__).with_name("regions")
 
 
+@functools.lru_cache(maxsize=None)
+def _load_feature(filename: str) -> dict:
+    """A region's GeoJSON Feature, parsed once for its rings and its provenance."""
+    with (_REGION_DIR / filename).open() as fh:
+        return json.load(fh)
+
+
 def _load_polygon(filename: str):
     """Outer rings of a stored region polygon and each one's holes, as stored.
 
@@ -719,9 +732,7 @@ def _load_polygon(filename: str):
     process and nothing here needs an operation on it beyond point-in-polygon,
     which `shared/mask.py` does itself.
     """
-    with (_REGION_DIR / filename).open() as fh:
-        feature = json.load(fh)
-    geom = feature["geometry"]
+    geom = _load_feature(filename)["geometry"]
     polys = geom["coordinates"] if geom["type"] == "MultiPolygon" else [geom["coordinates"]]
     polys = [p for p in polys if len(p[0]) >= 4]
     if not polys:
@@ -737,8 +748,7 @@ def _load_polygon(filename: str):
 
 def _load_outline(filename: str) -> Outline:
     """The provenance a polygon file records about itself, in its properties."""
-    with (_REGION_DIR / filename).open() as fh:
-        props = json.load(fh).get("properties") or {}
+    props = _load_feature(filename).get("properties") or {}
     if not props.get("source"):
         raise ValueError(f"{filename}: properties carry no `source`")
     return Outline(

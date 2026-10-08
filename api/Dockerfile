@@ -11,8 +11,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN pip install --no-cache-dir uv
 
-COPY api/requirements.txt ./
-RUN uv pip install --system -r requirements.txt
+# The lock, not requirements.txt: a `--build` on the production box must install
+# what was tested, not whatever resolves that day.
+COPY api/requirements.lock ./
+RUN uv pip install --system -r requirements.lock
 
 COPY api .
 COPY shared ./shared

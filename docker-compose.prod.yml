@@ -66,7 +66,17 @@ x-process-env: &process-env
   CH_PASSWORD: ${CH_PASSWORD:-${CLICKHOUSE_PASSWORD:-}}
   CH_DATABASE: ${CH_DATABASE:-enso}
 
+# Docker's json-file driver keeps every line forever by default, and `api` logs
+# a line per request — including every `/image` frame playback prefetches. Capped
+# per container at 5 x 20 MB.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 x-process: &process
+  logging: *logging
   build:
     context: .
     dockerfile: process/Dockerfile
@@ -85,6 +95,7 @@ x-process: &process
 
 services:
   front:
+    logging: *logging
     build:
       context: ./front
       target: ${FRONTEND_TARGET:-production}
@@ -122,6 +133,7 @@ services:
     restart: unless-stopped
 
   api:
+    logging: *logging
     build:
       context: .
       dockerfile: api/Dockerfile
@@ -144,8 +156,8 @@ services:
       - OISST_IMAGE_DIR=${OISST_IMAGE_DIR:-/opt/data/images}
       - CRW_CLIM_DIR=${CRW_CLIM_DIR:-/opt/data/climatology}
       - CRW_MHW_DIR=${CRW_MHW_DIR:-/opt/data/MHW}
-      # The land year files and their climatology. The API renders a land
-      # bucket on demand from them — they are never pruned, so any bucket can be.
+      # The land climatology, which `/coverage` and `/landTimeseries` read. The
+      # API renders nothing; the year files are `process`'s to fetch and prune.
       - CPC_NC_DIR=${CPC_NC_DIR:-/opt/data/land}
       - CH_HOST=${CH_HOST:-db-ch}
       - CH_PORT=${CH_PORT:-8123}
@@ -184,6 +196,7 @@ services:
     restart: unless-stopped
 
   db-ch:
+    logging: *logging
     image: clickhouse/clickhouse-server:${CH_IMAGE_TAG:-25.8}
     # Pinned rather than :latest. The dev stack can afford a surprise major
     # upgrade on a pull; a 100 GB data directory cannot.
@@ -249,6 +262,7 @@ services:
   # would mean a rebuild to fix a typo in a page you only see when everything
   # else is off.
   maintenance:
+    logging: *logging
     image: nginx:alpine
     profiles: ["maintenance"]
     ports:

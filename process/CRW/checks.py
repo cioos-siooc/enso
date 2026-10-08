@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from shared.ch import DATABASE, STATUS_SUCCESS
 from shared.domain import regions
 
-from . import status as status_mod
+from . import recent as recent_mod, status as status_mod
 
 # A repaired 29 February has ~1,600 Cat 5 cells in the box (2024-02-29: 1,612);
 # an unrepaired one has ~2,022,000, because land arrives as Cat 5. The threshold
@@ -200,6 +200,25 @@ def check_rollup_mhw(client, today: dt.date) -> list[Result]:
     return out
 
 
+def check_recent(client, last: dt.date) -> Result:
+    """The date-ordered recent tables hold the last 30 ingested days in full.
+
+    A warning, not a failure: when they do not, the per-date rollup reads the
+    archive tables instead and is right, just slow — minutes per date on the
+    production HDD. `CRW.cli recent` refills them.
+    """
+    start = last - dt.timedelta(days=30)
+    bad = {
+        recent: recent_mod._mismatched(client, recent, status_table, start, last)
+        for recent, status_table, _ in recent_mod.TABLES.values()
+    }
+    bad = {k: v for k, v in bad.items() if v}
+    if bad:
+        listed = "; ".join(f"{k}: {len(v)} date(s), first {v[0]}" for k, v in bad.items())
+        return Result("rollup.recent_tables", "warn", f"{listed} — run CRW.cli recent")
+    return Result("rollup.recent_tables", "ok", f"both hold {start} .. {last} in full")
+
+
 def run_checks(client, *, days: int = 45, full: bool = False, stale_after: int = 3,
                today: dt.date | None = None) -> list[Result]:
     today = today or dt.datetime.now(dt.timezone.utc).date()
@@ -219,4 +238,5 @@ def run_checks(client, *, days: int = 45, full: bool = False, stale_after: int =
         results.append(check_leap_days(client, since, last))
     results += check_rollup_coverage(client)
     results += check_rollup_mhw(client, last)
+    results.append(check_recent(client, last))
     return results

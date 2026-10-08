@@ -53,6 +53,20 @@ def load(client, table: str = SST_TABLE) -> dict[dt.date, dict]:
     return {row[0]: dict(zip(columns, row)) for row in result.result_rows}
 
 
+def load_one(client, date: dt.date, table: str = SST_TABLE) -> dict | None:
+    """One date's current status row, or None.
+
+    What `run` asks for each of the ~30 dates it re-checks every hour, where
+    `load()` would read the whole table each time.
+    """
+    result = client.query(
+        f"SELECT {', '.join(COLUMNS)} FROM {DATABASE}.{table} FINAL WHERE date = %(d)s",
+        parameters={"d": date},
+    )
+    rows = result.result_rows
+    return dict(zip(result.column_names, rows[0])) if rows else None
+
+
 def ingested_dates(client, table: str = SST_TABLE) -> set[dt.date]:
     rows = client.query(
         f"SELECT date FROM {DATABASE}.{table} FINAL WHERE status = %(ok)s",

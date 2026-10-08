@@ -49,12 +49,14 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import math
+import threading
+import time
 
-from shared.domain import global_grid, quantity, regions, subset, variable, variables
+from shared.domain import global_grid, gx_sql, quantity, regions, subset, variable, variables
 from shared.fields import land_layer_ready
 
 from .clickhouse_helpers import DATABASE, client
-from .periods import Period, bucket_sql
+from .periods import Period, bucket_sql, start_of
 
 log = logging.getLogger(__name__)
 
@@ -148,7 +150,29 @@ def _mhw_complete(sst_days: int, mhw_days: int) -> bool:
     return mhw_days > 0 and mhw_days >= sst_days - 1
 
 
+# `_archive_state()` is read by every series, ranking and `/state` request, some
+# of them twice, and it only changes when a `run` lands a date. Held for this
+# long per worker: a newly landed date reaches the dashboard up to a minute late.
+_ARCHIVE_STATE_TTL_S = 60.0
+_archive_state_cache: tuple[float, dict] | None = None
+_archive_state_lock = threading.Lock()
+
+
 def _archive_state() -> dict:
+    """`_read_archive_state()`, reused for `_ARCHIVE_STATE_TTL_S`."""
+    global _archive_state_cache
+    now = time.monotonic()
+    with _archive_state_lock:
+        cached = _archive_state_cache
+    if cached is not None and now - cached[0] < _ARCHIVE_STATE_TTL_S:
+        return cached[1]
+    state = _read_archive_state()
+    with _archive_state_lock:
+        _archive_state_cache = (now, state)
+    return state
+
+
+def _read_archive_state() -> dict:
     """Both archives' ingested-day counts and last days, off the status tables.
 
     `both_last` is the last date **both** archives have landed for — the edge of
@@ -423,7 +447,7 @@ def _box_clim_by_mmdd(gy0: int, gy1: int, gx0: int, gx1: int) -> dict[int, float
         SELECT mmdd,
                sum(clim * cos(lat * pi() / 180)) / sum(cos(lat * pi() / 180)) AS mean_clim
         FROM {DATABASE}.sst_clim
-        WHERE gy BETWEEN %(gy0)s AND %(gy1)s AND gx BETWEEN %(gx0)s AND %(gx1)s
+        WHERE gy BETWEEN %(gy0)s AND %(gy1)s AND {gx_sql(gx0, gx1)}
         GROUP BY mmdd
         """,
         parameters={"gy0": gy0, "gy1": gy1, "gx0": gx0, "gx1": gx1},
@@ -544,7 +568,7 @@ def _region_mhw_daily(
             SELECT date, sum({weight}) AS weighted_area
             FROM {DATABASE}.mhw_daily
             WHERE gy BETWEEN %(gy0)s AND %(gy1)s
-              AND gx BETWEEN %(gx0)s AND %(gx1)s{where}
+              AND {gx_sql(gx0, gx1)}{where}
             GROUP BY date
             """,
             parameters=params | box,
@@ -559,7 +583,7 @@ def _region_mhw_daily(
             SELECT date, sum({weight}) AS total, count() AS n_cells
             FROM {DATABASE}.sst_daily
             WHERE gy BETWEEN %(gy0)s AND %(gy1)s
-              AND gx BETWEEN %(gx0)s AND %(gx1)s{where}
+              AND {gx_sql(gx0, gx1)}{where}
             GROUP BY date ORDER BY date
             """,
             parameters=params | box,
@@ -598,7 +622,10 @@ def region_timeseries(
     name = check_variable(variable_name)
     grid = global_grid()
     gy0, gy1 = sorted(int(grid.gy(v)) for v in lat_bounds)
-    gx0, gx1 = sorted(int(grid.gx(v)) for v in lon_bounds)
+    # West, then east — NOT sorted. A box across the prime meridian has
+    # west > east on the 0-360 grid, and sorting the pair would select every
+    # longitude it does not cover. `gx_sql` writes the two-range clause.
+    gx0, gx1 = (int(grid.gx(v)) for v in lon_bounds)
 
     where, params = _date_filter(start, end)
     params |= {"gy0": gy0, "gy1": gy1, "gx0": gx0, "gx1": gx1}
@@ -624,7 +651,7 @@ def region_timeseries(
                    count() AS n_cells
             FROM {DATABASE}.sst_daily
             WHERE gy BETWEEN %(gy0)s AND %(gy1)s
-              AND gx BETWEEN %(gx0)s AND %(gx1)s{clim_filter}{where}
+              AND {gx_sql(gx0, gx1)}{clim_filter}{where}
             GROUP BY date ORDER BY date
             """,
             parameters=params,
@@ -638,8 +665,6 @@ def region_timeseries(
     # Fold days into buckets in Python: the daily list is at most ~15k long, and
     # doing it here keeps one bucketing implementation (shared.periods) rather
     # than duplicating the SQL branch.
-    from .periods import start_of
-
     buckets: dict[dt.date, list[float]] = {}
     cells: dict[dt.date, int] = {}
     for date, mean_sst, n_cells in rows:
@@ -716,7 +741,8 @@ def land_coverage() -> dict | None:
 
     Dates come from the status tables. Frames are rendered from the year files
     rather than from these tables, but nothing is ingested without its file and
-    nothing prunes the files, so the two ranges are the same.
+    `CPC.cli prune` deletes a file only once every frame it feeds is rendered,
+    so the two ranges are the same.
 
     `layers` is per LAYER, not per source, because that is the question the
     toggle asks: an absolute layer is always drawable, an anomaly layer only once
@@ -747,6 +773,23 @@ def land_coverage() -> dict | None:
     return out
 
 
+# The climatology is static once loaded, and counting its keys is a full read of
+# `sst_clim.mmdd` — 1.5 s of every page load's `/coverage` on NVMe, measured.
+# So the count is kept once it reaches all 366; a partial count is re-read, since
+# that is a load still in progress.
+_CLIM_KEYS = 366
+_clim_keys_seen = 0
+
+
+def _clim_keys() -> int:
+    global _clim_keys_seen
+    if _clim_keys_seen < _CLIM_KEYS:
+        _clim_keys_seen = int(client().query(
+            f"SELECT uniqExact(mmdd) FROM {DATABASE}.sst_clim"
+        ).result_rows[0][0])
+    return _clim_keys_seen
+
+
 def coverage() -> dict:
     """The ingested date range and row count.
 
@@ -766,9 +809,7 @@ def coverage() -> dict:
     days, mhw_days = archives["sst_days"], archives["mhw_days"]
     complete = _mhw_complete(days, mhw_days)
     through = archives["both_last"] if complete else archives["sst_last"]
-    clim_keys = client().query(
-        f"SELECT uniqExact(mmdd) FROM {DATABASE}.sst_clim"
-    ).result_rows[0][0]
+    clim_keys = _clim_keys()
     mhw = client().query(
         f"SELECT count(), min(date), max(date) FROM {DATABASE}.mhw_daily"
     ).result_rows[0]
@@ -803,7 +844,7 @@ def coverage() -> dict:
         },
         # Anomaly is unavailable until all 366 keys are loaded; the frontend
         # uses this to decide whether to offer the variable at all.
-        "climatology": {"keys": int(clim_keys), "complete": int(clim_keys) == 366},
+        "climatology": {"keys": clim_keys, "complete": clim_keys == _CLIM_KEYS},
         # The land overlay's own range and per-layer readiness, or null when
         # the land tables do not exist. Separate from everything above because
         # the land archive publishes on its own schedule — ~2 days behind, and

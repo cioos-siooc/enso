@@ -1,3 +1,5 @@
+# The API's direct dependencies. The image installs `requirements.lock`, compiled
+# from this file; see the header there.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 clickhouse-connect>=0.8.0
@@ -5,9 +7,9 @@ numpy>=2.0
 matplotlib>=3.9
 pillow>=11.0
 PyYAML>=6.0
-# The API renders the head of the archive (buckets whose NetCDF is still inside
-# the retention window) directly from file — see modules/render.py. Historical
-# frames come from the image cache, never from ClickHouse.
+# Read-only: the land climatology files' attributes for `/coverage`, and one
+# cell of them for `/landTimeseries`. The API renders nothing — every frame is
+# served from the image cache `process` writes.
 netCDF4>=1.7.0
 
 # Usage analytics (PostHog Cloud). The client is created only when

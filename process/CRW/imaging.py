@@ -13,9 +13,8 @@ Two entry points over one implementation:
 
 Both go through `shared.buckets.bucket_field()`, so a change to how a week is
 reduced cannot apply to one and not the other. That function lives in `shared/`
-rather than here because `api/modules/render.py` needs it too — it renders the
-buckets still inside the retention window on demand — and it had drifted into a
-second copy there. Two definitions of "what is a week" is one too many, and the
+because the API once rendered buckets on demand too, and had drifted into a
+second copy of it there. Two definitions of "what is a week" is one too many, and the
 MHW variable made that concrete: it reduces a bucket by **max**, not mean.
 
 A date contributes to three buckets (its day, its Monday-anchored week, its
@@ -44,7 +43,7 @@ import multiprocessing as mp
 import os
 import time
 
-from shared.buckets import bucket_field
+from shared.buckets import bucket_field, bucket_fields
 from shared.domain import variable as variable_meta
 from shared.periods import PERIODS, Period, span, start_of
 from shared.render import DEFAULT_WIDTH, cache_path, encode, write_cache
@@ -78,11 +77,13 @@ def render_date(
     """
     written = 0
     for period in periods:
+        # All variables of a period in one pass, so `sst` and `anom` share each
+        # day's CoralTemp read.
+        results = bucket_fields(
+            date, period, variables, available, available_mhw=available_mhw
+        )
         for name in variables:
-            result = bucket_field(
-                date, period, name,
-                available_mhw if name == "mhw" else available,
-            )
+            result = results[name]
             if result is None:
                 log.warning("no data for %s %s bucket at %s", name, period, date)
                 continue
@@ -246,14 +247,29 @@ def render_range(
     if limit:
         jobs = jobs[:limit]
 
-    counts = {"rendered": 0, "empty": 0, "skipped": skipped, "bytes": 0, "seconds": 0.0}
     if dry_run or not jobs:
-        counts["pending"] = len(jobs)
-        return counts
+        return {"rendered": 0, "empty": 0, "skipped": skipped, "bytes": 0,
+                "seconds": 0.0, "pending": len(jobs)}
+    counts = render_jobs(jobs, workers=workers, progress=progress)
+    counts["skipped"] = skipped
+    return counts
 
+
+def render_jobs(
+    jobs: list[tuple[dt.date, Period, str, int]],
+    *,
+    workers: int | None = None,
+    progress=None,
+) -> dict:
+    """Render `jobs` across a `spawn` pool; see `render_range` for why spawn."""
+    counts = {"rendered": 0, "empty": 0, "skipped": 0, "bytes": 0, "seconds": 0.0,
+              "pending": len(jobs)}
+    if not jobs:
+        return counts
     started = time.time()
     done = 0
-    with mp.get_context("spawn").Pool(workers or default_workers()) as pool:
+    workers = min(workers or default_workers(), len(jobs))
+    with mp.get_context("spawn").Pool(workers) as pool:
         for _date, _period, _variable, size in pool.imap_unordered(
             render_bucket, jobs, chunksize=4
         ):
@@ -267,5 +283,4 @@ def render_range(
                 progress(done, len(jobs), counts["bytes"], time.time() - started)
 
     counts["seconds"] = time.time() - started
-    counts["pending"] = len(jobs)
     return counts

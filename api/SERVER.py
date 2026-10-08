@@ -12,13 +12,15 @@ rather than blocking the event loop.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import logging
 import time
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from shared.domain import global_grid, quantities, region_groups, regions, subset, variable, variables
 from shared.domain import variable as variable_meta  # `variable` is a query param name in /image
@@ -100,6 +102,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# A point series is 300-460 KB of JSON and compresses ~6x. WebP is excluded by
+# Starlette's own default list, so the frames are not compressed twice. Level 6
+# rather than the default 9: the same size within a few percent at a fraction of
+# the CPU, and every chart request pays it.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+
 
 @app.middleware("http")
 async def _stamp_request_context(request: Request, call_next):
@@ -149,6 +157,8 @@ class RankingRequest(BaseModel):
 
 class BoxRequest(BaseModel):
     lat: tuple[float, float]
+    # West, then east. A box across the prime meridian is `[-10, 10]`, and the
+    # order is what says so: `[10, -10]` is the other 340 degrees.
     lon: tuple[float, float]
     start: dt.date | None = None
     end: dt.date | None = None
@@ -207,6 +217,15 @@ def health_data() -> JSONResponse:
 @app.get("/domain")
 def domain() -> dict:
     """Grid extent, variable metadata, regions and colour stops for the client."""
+    return _domain_payload()
+
+
+# Built once per worker. Everything in it comes from `domain.yml`, which
+# `shared.domain` already caches for the life of the process (an edit needs a
+# restart either way), and sampling 33 colours per layer through matplotlib was
+# most of the ~130 ms this took per page load.
+@functools.lru_cache(maxsize=1)
+def _domain_payload() -> dict:
     box = subset()
     return {
         "subset": {
@@ -737,6 +756,7 @@ def monthly_ranking_endpoint(request: RankingRequest, http_request: Request):
 @app.get("/image/{date}.webp")
 def image(
     date: dt.date,
+    http_request: Request,
     width: int = Query(render.DEFAULT_WIDTH, ge=180, le=8192),
     period: Period = "daily",
     variable: ImageVariable = "sst",
@@ -756,8 +776,8 @@ def image(
     history means re-downloading the range and running `CRW.cli render` or
     `CPC.cli render`.
 
-    There is no tile pyramid; the Pacific box is one image, and a pyramid can be
-    added behind the same URL shape later.
+    There is no tile pyramid; the globe is one image, and a pyramid can be added
+    behind the same URL shape later.
     """
     # A layer that does not exist at this period is a request error, not a
     # missing frame: the rainfall ratio is weekly and monthly only, because a
@@ -768,19 +788,28 @@ def image(
             400,
             f"{variable} is drawn at {', '.join(declared)} periods only, not {period}",
         )
-    payload = render.render(
-        date,
-        width=width,
-        period=period,
-        variable_name=variable,
-    )
-    if payload is None:
+    path = render.cached_frame(date, width=width, period=period, variable_name=variable)
+    if path is None:
         raise HTTPException(
             404,
             f"no {variable} image rendered for {date} ({period}, w{width})",
         )
-    return Response(
-        content=payload,
-        media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    # Validated by mtime and size, so a re-rendered frame is a new ETag and a
+    # revalidation of an unchanged one is a 304 with no body. A bucket past
+    # every re-render window is held for 30 days — not `immutable`, so a forced
+    # re-render of history (`render --force`) still reaches every browser within
+    # a month. A recent one is rewritten daily while it fills and while its
+    # source can be revised, so it is held for an hour.
+    stat = path.stat()
+    etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    headers = {
+        "ETag": etag,
+        "Cache-Control": (
+            "public, max-age=2592000"
+            if render.frame_settled(date, period)
+            else "public, max-age=3600"
+        ),
+    }
+    if etag in http_request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers=headers)
+    return FileResponse(path, media_type="image/webp", headers=headers, stat_result=stat)

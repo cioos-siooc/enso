@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from shared.ch import DATABASE, STATUS_FAILED, STATUS_SUCCESS
+from shared.ch import DATABASE, STATUS_FAILED, STATUS_SUCCESS, insert_days
 from shared.fields import (
     land_path,
     land_valid_mask,
@@ -130,17 +130,19 @@ def target(key: str) -> Target:
         raise KeyError(f"unknown land target {key!r}; known: {sorted(TARGETS)}") from None
 
 
-def delete_day(client, date: dt.date, table: str) -> None:
-    """Remove an already-ingested date so it can be replaced.
+def delete_days(client, dates: list[dt.date], table: str) -> None:
+    """Remove already-ingested dates so they can be replaced.
 
-    Both land tables are plain MergeTrees, so this is a mutation. It is far
-    cheaper here than on the ocean side — a land day is ~21 k rows against SST's
-    7.5 M — but it is still a part rewrite, which is why the ingest skips a date
-    it already holds unless told otherwise.
+    Both land tables are plain MergeTrees, so this is a mutation, and each one
+    rewrites every part of the year's partition it touches. ONE for all the
+    dates a year file replaces, not one per date: `run`'s 14-day recheck would
+    otherwise rewrite the same parts fourteen times an hour.
     """
+    if not dates:
+        return
     client.command(
-        f"ALTER TABLE {DATABASE}.{table} DELETE WHERE date = %(date)s",
-        parameters={"date": date},
+        f"ALTER TABLE {DATABASE}.{table} DELETE WHERE date IN %(dates)s",
+        parameters={"dates": sorted(dates)},
         settings={"mutations_sync": 2},
     )
 
@@ -201,8 +203,9 @@ def ingest_year(
     existing = status_mod.load(client, tgt.status_table)
     counts = {"ingested": 0, "skipped": 0, "failed": 0, "rows": 0}
 
-    buffers: list[list] = [[] for _ in tgt.columns]
+    days: list[tuple] = []  # per pending date, its per-column arrays
     pending: list[tuple[dt.date, int]] = []
+    replace: list[dt.date] = []
     # The file a status row names. For temperature that is `tmax.YYYY.nc`, the
     # first of the two — `file_size` and `filename` describe one file and there
     # are two, so it names the one the table is keyed on rather than inventing a
@@ -236,24 +239,20 @@ def ingest_year(
         # A date previously loaded must be cleared first: plain MergeTrees would
         # otherwise end up holding both versions.
         if row is not None and row["status"] == STATUS_SUCCESS:
-            log.info("replacing already-ingested %s in %s", date, tgt.table)
-            delete_day(client, date, tgt.table)
+            replace.append(date)
 
-        n = int(columns[0].size)
-        buffers[0].extend([date] * n)
-        for j, values in enumerate(columns, start=1):
-            buffers[j].extend(values.tolist())
-        pending.append((date, n))
+        days.append(columns)
+        pending.append((date, int(columns[0].size)))
 
     if not pending:
         return counts
 
+    if replace:
+        log.info("replacing %d already-ingested day(s) in %s", len(replace), tgt.table)
+        delete_days(client, replace, tgt.table)
     log.info("inserting %d day(s) of %s for %d", len(pending), tgt.table, year)
     try:
-        client.insert(
-            f"{DATABASE}.{tgt.table}", buffers,
-            column_names=tgt.columns, column_oriented=True,
-        )
+        insert_days(client, tgt.table, tgt.columns, [d for d, _ in pending], days)
     except Exception as exc:  # noqa: BLE001 — recorded per-day below
         log.exception("insert failed for %d day(s) of %d", len(pending), year)
         for date, _ in pending:

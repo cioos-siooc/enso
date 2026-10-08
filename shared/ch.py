@@ -8,10 +8,12 @@ tables. `get_client()` selects between the local docker-compose instance
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 
 import clickhouse_connect
+import numpy as np
 
 DATABASE = os.environ.get("CH_DATABASE", "enso")
 
@@ -152,6 +154,28 @@ _STATUS_DDL = """
     ORDER BY date
 """
 
+# How many days back the date-ordered `*_recent` tables hold. Past `run`'s
+# 30-day revision recheck with room to spare; TTL drops a month's part only once
+# all of it is older than this, so in practice they hold 70-100 days.
+RECENT_DAYS = 70
+
+_RECENT_DDL = """
+    CREATE TABLE IF NOT EXISTS {database}.{table}
+    (
+        date      Date    CODEC(DoubleDelta, ZSTD(3)),
+        gy        UInt16  CODEC(DoubleDelta, ZSTD(3)),
+        gx        UInt16  CODEC(DoubleDelta, ZSTD(3)),
+        {columns}
+        lat       Float32 ALIAS -89.975 + gy * 0.05,
+        lon       Float32 ALIAS 0.025 + gx * 0.05
+    )
+    ENGINE = MergeTree
+    PARTITION BY toYYYYMM(date)
+    ORDER BY (date, gy, gx)
+    TTL date + INTERVAL """ + str(RECENT_DAYS) + """ DAY
+    SETTINGS ttl_only_drop_parts = 1
+"""
+
 DDL: tuple[str, ...] = (
     f"CREATE DATABASE IF NOT EXISTS {DATABASE}",
     # One row per (date, ocean cell) inside the Pacific subset. Ordered
@@ -209,7 +233,8 @@ DDL: tuple[str, ...] = (
     ORDER BY (gy, gx, mmdd)
     """,
     # Per named region, the cos(lat)-weighted climatology mean for each MMDD:
-    # 8 regions x 366 = 2,928 rows, computed once at `init`.
+    # up to 366 rows per region (fewer under ice), built at `init` and by
+    # `rollup --clim`.
     #
     # This is the whole precomputation layer. A region ANOMALY series does not
     # join anything, because mean(sst - clim) = mean(sst) - mean(clim) when both
@@ -227,8 +252,8 @@ DDL: tuple[str, ...] = (
     ENGINE = ReplacingMergeTree(updated_at)
     ORDER BY (region, mmdd)
     """,
-    # Per named region, the area means for each DATE: 8 regions x 15,211 days =
-    # ~121,688 rows. This is the rollup that `region_clim` is not.
+    # Per named region, the area means for each DATE: ~15k rows per region,
+    # ~442k for the 29 configured today. This is the rollup that `region_clim` is not.
     #
     # `region_clim` above precomputes the CLIMATOLOGY side of a region anomaly,
     # measured at 0.296 s live against a daily side of 12.14 s for Nino 3.4 — so
@@ -376,6 +401,43 @@ DDL: tuple[str, ...] = (
     PARTITION BY {DAILY_PARTITION_SQL}
     ORDER BY (gy, gx, date)
     """,
+    # --- The recent window, ordered by DATE -----------------------------------
+    #
+    # `run` rolls each date it ingests into `region_daily`, and on the archive
+    # tables a single date cannot be pruned: `ORDER BY (gy, gx, date)` puts every
+    # day of a cell in one granule, so `WHERE date = X` reads the whole year's
+    # partition. Measured on dev for the `global` region: 4.64 B rows, 34.6 GiB
+    # uncompressed, to aggregate 17.2 M — and the 29 regions read about 2.5
+    # partitions' worth per date, growing all year.
+    #
+    # These hold the same rows for the last `RECENT_DAYS` only, ordered by date,
+    # so a date is one contiguous range. Filled by the materialized views below
+    # on every insert into the archive tables (never by hand), trimmed by TTL a
+    # whole month-part at a time. `CRW/recent.py` decides when the rollup may
+    # read them and fills the window after a deploy. Deletes do NOT propagate
+    # through a view: `ingest.delete_day` clears both tables.
+    _RECENT_DDL.format(
+        database=DATABASE, table="sst_recent",
+        columns="""sst_raw   Int16   CODEC(ZSTD(3)),
+        has_clim  UInt8   CODEC(ZSTD(3)),
+        sst       Float32 ALIAS sst_raw * 0.01,""",
+    ),
+    f"""
+    CREATE MATERIALIZED VIEW IF NOT EXISTS {DATABASE}.sst_recent_mv
+    TO {DATABASE}.sst_recent
+    AS SELECT date, gy, gx, sst_raw, has_clim FROM {DATABASE}.sst_daily
+    WHERE date >= today() - {RECENT_DAYS}
+    """,
+    _RECENT_DDL.format(
+        database=DATABASE, table="mhw_recent",
+        columns="""cat       UInt8   CODEC(ZSTD(3)),""",
+    ),
+    f"""
+    CREATE MATERIALIZED VIEW IF NOT EXISTS {DATABASE}.mhw_recent_mv
+    TO {DATABASE}.mhw_recent
+    AS SELECT date, gy, gx, cat FROM {DATABASE}.mhw_daily
+    WHERE date >= today() - {RECENT_DAYS}
+    """,
     # One row per date. `remote_size`/`remote_modified` are what a re-check
     # compares against: CoralTemp v3.1_op is a near-real-time stream whose files
     # can be revised in place, and the local NetCDF is deleted after ingest, so
@@ -496,6 +558,63 @@ DDL: tuple[str, ...] = (
     ORDER BY (variable, year)
     """,
 )
+
+# --- Bulk inserts -------------------------------------------------------------
+#
+# The daily tables are inserted as RowBinary built straight from numpy, never as
+# Python lists. `client.insert()` with lists cost ~11 GB of objects per 5-day
+# global SST batch and serialised the Date column through `struct.pack(*column)`,
+# one Python argument per row — at 86 M rows that segfaulted Python 3.13
+# intermittently (clickhouse-connect 1.8.0), leaving part of a batch inserted.
+
+# The RowBinary layout of every column a daily table carries. `date` is a
+# ClickHouse Date, which on the wire is a UInt16 count of days since 1970-01-01.
+ROW_BINARY = {
+    "date": "<u2", "gy": "<u2", "gx": "<u2",
+    "sst_raw": "<i2", "has_clim": "u1", "cat": "u1",
+    "tmax_raw": "<i2", "tmin_raw": "<i2", "precip_raw": "<u2",
+}
+_EPOCH = dt.date(1970, 1, 1)
+
+# Blocks of up to 16 M rows rather than ClickHouse's default ~1 M, so a 5-day
+# SST batch lands as ~6 parts instead of ~86. Not one block per insert: an 86 M-row
+# block made the server throw `std::length_error` in `splitBlockIntoParts` on
+# about 1 insert in 175 (ClickHouse 26.5, 8 concurrent writers).
+INSERT_BLOCK_SETTINGS = {
+    "max_insert_block_size": 1 << 24,
+    "min_insert_block_size_rows": 0,
+    "min_insert_block_size_bytes": 0,
+}
+
+
+def row_binary(columns: list[str], dates: list[dt.date], days: list[tuple]) -> bytes:
+    """Pack per-day column arrays into one RowBinary body.
+
+    `columns` starts with `date`; `days[i]` holds the arrays for every other
+    column, in order, for `dates[i]`.
+    """
+    dtype = np.dtype([(c, ROW_BINARY[c]) for c in columns])
+    out = np.empty(sum(int(cols[0].size) for cols in days), dtype=dtype)
+    at = 0
+    for date, cols in zip(dates, days, strict=True):
+        n = int(cols[0].size)
+        out["date"][at : at + n] = (date - _EPOCH).days
+        for name, values in zip(columns[1:], cols, strict=True):
+            out[name][at : at + n] = values
+        at += n
+    return out.tobytes()
+
+
+def insert_days(client, table: str, columns: list[str], dates: list[dt.date], days: list[tuple]) -> None:
+    """One RowBinary insert of whole days into a daily table."""
+    client.raw_insert(
+        f"{DATABASE}.{table}",
+        columns,
+        insert_block=row_binary(columns, dates, days),
+        settings=INSERT_BLOCK_SETTINGS,
+        fmt="RowBinary",
+    )
+
 
 # Status values used by process/CRW. ReplacingMergeTree keyed on `date` means
 # the table always shows one row per day.

@@ -398,6 +398,13 @@ let regionRequestSeq = 0
 /** Which second-point request is the current one. Same job as `regionRequestSeq`. */
 let secondRequestSeq = 0
 
+/**
+ * Which point request is the current one. Same job again: two quick map clicks
+ * race, a cold cell answering after a warm one, and without this the first
+ * cell's series would land under the second cell's pin.
+ */
+let pointRequestSeq = 0
+
 /** The same for each pin's land series. */
 const landRequestSeq = { a: 0, b: 0 }
 
@@ -1583,6 +1590,8 @@ export const useMainStore = defineStore('main', {
       // app back to point scope; the control that moved you is visibly the one
       // that moves you back.
       if (enterScope) this.scope = 'point'
+      const seq = ++pointRequestSeq
+      const current = () => seq === pointRequestSeq
       this.outsideDomain = null
       this.pointError = null
       this.loadingPoint = true
@@ -1599,10 +1608,12 @@ export const useMainStore = defineStore('main', {
             ? Promise.resolve(this.monthlyRanking!)
             : api.post<MonthlyRanking>('/monthlyRanking', { lat, lon, variable: this.variable }),
         ])
+        if (!current()) return
         this.pointSeries = series
         this.monthlyRanking = ranking
       }
       catch (error: unknown) {
+        if (!current()) return
         // The API answers an out-of-box point with a structured 400 rather than
         // an error — show it as an empty state, not a failure.
         const body = (error as { response?: { data?: { error?: { code?: string }, detail?: string } } }).response?.data
@@ -1624,7 +1635,7 @@ export const useMainStore = defineStore('main', {
         }
       }
       finally {
-        this.loadingPoint = false
+        if (current()) this.loadingPoint = false
       }
     },
 

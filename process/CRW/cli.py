@@ -53,6 +53,7 @@ from . import (
     download,
     imaging,
     ingest,
+    recent as recent_mod,
     regions as regions_mod,
     repartition as repartition_mod,
     status as status_mod,
@@ -234,9 +235,9 @@ def cmd_backfill(args) -> int:
         # reload must not throw away 113 billion rows of SST.
         tables = []
         if "sst" in products:
-            tables += ["sst_daily", "ingest_status"]
+            tables += ["sst_daily", "sst_recent", "ingest_status"]
         if "mhw" in products:
-            tables += ["mhw_daily", "mhw_status"]
+            tables += ["mhw_daily", "mhw_recent", "mhw_status"]
         with get_client() as client:
             for table in tables:
                 client.command(f"TRUNCATE TABLE IF EXISTS {DATABASE}.{table}")
@@ -346,6 +347,21 @@ def cmd_render(args) -> int:
     return 0
 
 
+def cmd_recent(args) -> int:
+    """Fill the date-ordered `*_recent` tables with the window's dates they lack.
+
+    The one-off after deploying them: the materialized views fill them from then
+    on, and until a date is filled the per-date rollup simply reads the archive
+    tables as it always did. See `CRW/recent.py`.
+    """
+    ensure_schema()
+    with get_client(send_receive_timeout=3600) as client:
+        copied = recent_mod.fill(client)
+    for table, n in copied.items():
+        print(f"{table}: {n} date(s) copied")
+    return 0
+
+
 def cmd_mask(args) -> int:
     """Rewrite `region_cells` for the polygon regions.
 
@@ -412,7 +428,7 @@ def cmd_rollup(args) -> int:
         if args.fresh:
             regions_mod.truncate(client, args.region)
         counts = regions_mod.build_region_daily(
-            client, keys=args.region, start=args.start, end=args.end
+            client, keys=args.region, start=args.start, end=args.end, source="archive"
         )
         regions_mod.optimize(client)
 
@@ -444,7 +460,7 @@ def _process_product(client, http, date, product, target, *, force) -> str:
         log.info("%s: %s not published yet", date, product.key)
         return "unpublished"
 
-    existing = status_mod.load(client, target.status_table).get(date)
+    existing = status_mod.load_one(client, date, target.status_table)
     if not force and status_mod.is_current(existing, remote):
         log.info("%s: %s already ingested and unrevised", date, product.key)
         return "skipped"
@@ -847,6 +863,10 @@ def main(argv: list[str] | None = None) -> int:
         help="rebuild region_clim for the same regions first (needed for a newly added region)",
     )
     p_roll.set_defaults(func=cmd_rollup)
+
+    sub.add_parser(
+        "recent", help="fill the date-ordered recent tables the per-date rollup reads",
+    ).set_defaults(func=cmd_recent)
 
     p_mask = sub.add_parser(
         "mask",

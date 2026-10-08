@@ -143,7 +143,8 @@
 </template>
 
 <script setup lang="ts">
-import * as echarts from 'echarts'
+import type * as echarts from 'echarts'
+import { init as initChart } from '~/utils/echarts'
 import { trackEvent } from '~/composables/useAnalytics'
 import type { ColorStop } from '~/utils/colorScale'
 import type { MonthlyRanking, RankBasis } from '~/utils/ranking'
@@ -396,7 +397,7 @@ function renderDetail() {
   const el = detail.value
   if (!el || !el.clientWidth || !rows.value.length) return
   if (!chart) {
-    chart = echarts.init(el, null, { renderer: 'canvas' })
+    chart = initChart(el, null, { renderer: 'canvas' })
     chart.on('click', onClick)
   }
   chart.resize()

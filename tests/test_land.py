@@ -695,9 +695,25 @@ def test_image_serves_the_cache_and_never_renders(tmp_path, monkeypatch):
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "api"))
     api_render = importlib.import_module("modules.render")
     monkeypatch.setattr(api_render, "cache_path", lambda *a, **k: tmp_path / "x.webp")
-    assert api_render.render(dt.date(2015, 7, 1), period="weekly", variable_name="land_tmax") is None
+    assert api_render.cached_frame(dt.date(2015, 7, 1), period="weekly", variable_name="land_tmax") is None
     (tmp_path / "x.webp").write_bytes(b"RIFF")
-    assert api_render.render(dt.date(2015, 7, 1)) == b"RIFF"
+    assert api_render.cached_frame(dt.date(2015, 7, 1)) == tmp_path / "x.webp"
+
+
+def test_a_frame_settles_once_past_every_rerender_window():
+    import sys
+
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "api"))
+    from modules.render import SETTLED_AFTER_DAYS, frame_settled
+
+    today = dt.date(2026, 10, 8)
+    # The week of 2026-08-03 ends on the 9th, 60 days back: settled.
+    assert frame_settled(dt.date(2026, 8, 5), "weekly", today)
+    # A month ends on its last day, so September is still being revised.
+    assert not frame_settled(dt.date(2026, 9, 1), "monthly", today)
+    edge = today - dt.timedelta(days=SETTLED_AFTER_DAYS)
+    assert not frame_settled(edge, "daily", today)
+    assert frame_settled(edge - dt.timedelta(days=1), "daily", today)
 
 
 @pytest.fixture

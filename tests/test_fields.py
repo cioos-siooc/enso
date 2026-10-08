@@ -69,12 +69,8 @@ def test_leap_day_land_comes_from_coraltemp(monkeypatch, tmp_path, grid, box_ind
     sst[:, : grid.nlon // 4] = fill
     mhw = np.full((grid.nlat, grid.nlon), 5, dtype="int8")
 
-    def fake_read_raw(path, *, squeeze_time, var_name=fields.VARIABLE_NAME):
-        if var_name == fields.MHW_MASK_NAME:
-            return np.zeros((grid.nlat, grid.nlon), "int8")
-        return mhw if var_name == fields.MHW_VARIABLE_NAME else sst
-
-    monkeypatch.setattr(fields, "_read_raw", fake_read_raw)
+    monkeypatch.setattr(fields, "_read_mhw", lambda path: (mhw, False))
+    monkeypatch.setattr(fields, "_read_raw", lambda path, **kw: sst)
     monkeypatch.setattr(fields, "daily_path", lambda date, nc_dir=None: sst_file)
 
     out = fields.read_mhw_raw(dt.date(2024, 2, 29))
@@ -86,10 +82,8 @@ def test_leap_day_land_comes_from_coraltemp(monkeypatch, tmp_path, grid, box_ind
 
 
 def test_leap_day_without_coraltemp_raises(monkeypatch, tmp_path, grid):
-    def fake_read_raw(path, *, squeeze_time, var_name=fields.VARIABLE_NAME):
-        return np.full((grid.nlat, grid.nlon), 5 if var_name == fields.MHW_VARIABLE_NAME else 0, "int8")
-
-    monkeypatch.setattr(fields, "_read_raw", fake_read_raw)
+    category = np.full((grid.nlat, grid.nlon), 5, "int8")
+    monkeypatch.setattr(fields, "_read_mhw", lambda path: (category, False))
     monkeypatch.setattr(fields, "daily_path", lambda date, nc_dir=None: tmp_path / "missing.nc")
     with pytest.raises(FileNotFoundError):
         fields.read_mhw_raw(dt.date(2024, 2, 29))
@@ -107,3 +101,17 @@ def test_check_orientation_catches_a_flip():
     clim_ok = daily.copy()
     clim_ok[3, 3] = fill                # a strict subset is fine
     fields.check_orientation(daily, clim_ok)
+
+
+class _FakeMask:
+    def __init__(self, **attrs):
+        self.__dict__.update(attrs)
+
+
+def test_mhw_land_code_comes_from_the_files_own_flags():
+    # 2024-07-01 onward: land is 1, not the first encoding's 2.
+    new = _FakeMask(flag_values=np.array([0, 1, 2, 4], "uint8"),
+                    flag_meanings="valid-water land missing ice")
+    assert fields._mhw_mask_land_code(new) == 1
+    # No flags declared: the first encoding's code.
+    assert fields._mhw_mask_land_code(_FakeMask()) == fields.MHW_MASK_LAND
