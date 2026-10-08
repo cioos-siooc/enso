@@ -741,7 +741,8 @@ def land_coverage() -> dict | None:
 
     Dates come from the status tables. Frames are rendered from the year files
     rather than from these tables, but nothing is ingested without its file and
-    nothing prunes the files, so the two ranges are the same.
+    `CPC.cli prune` deletes a file only once every frame it feeds is rendered,
+    so the two ranges are the same.
 
     `layers` is per LAYER, not per source, because that is the question the
     toggle asks: an absolute layer is always drawable, an anomaly layer only once

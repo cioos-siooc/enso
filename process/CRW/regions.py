@@ -10,8 +10,8 @@ the smallest named region (Nino 1+2, 38,455 cells) and 12.14 s for Nino 3.4
 (201,392 cells); the North Pacific PDO box is 4.5x larger again. None of that is
 a latency an interactive panel can be built on.
 
-The result is ~121,688 rows — 8 regions x 15,211 days — against the
-113.77 billion in `sst_daily`.
+The result is ~15k rows per region — ~442k for all 29 — against the ~262
+billion in `sst_daily`.
 
 ### What it does NOT do
 
@@ -21,7 +21,7 @@ weeks here would put a second definition of "a week" in the codebase, which is
 the drift that retiring `api/prerender.py` was meant to end.
 
 **No arbitrary boxes.** `/regionTimeseries` keeps the live path — the rollup is
-keyed by region name and only the eight named regions have one.
+keyed by region name and only the named regions have one.
 
 ### The two SST columns
 

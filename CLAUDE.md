@@ -2270,8 +2270,9 @@ Speed is a 1–10 fps slider read *per frame*, so it takes effect on the next on
 Frames are **not** all preloaded: the daily archive is ~15.2k WebPs per variable, so what is
 held is a window of `AHEAD = 8` in front of the playhead,
 warmed with `new Image()` + `decode()` and capped at `CACHE_MAX = 24`. `/image` sends
-`Cache-Control: public, max-age=86400`, so Mapbox's own fetch for the same URL then resolves
-out of the browser cache. The loop waits on frame readiness rather than firing on a bare
+`Cache-Control` (30 days for a bucket ended more than 45 days ago, an hour otherwise) and an
+ETag, so Mapbox's own fetch for the same URL then resolves out of the browser cache, and a
+revalidation is a 304. The loop waits on frame readiness rather than firing on a bare
 `setInterval`, because a Mapbox `ImageSource` never retries a failed image and silently keeps
 the previous frame — a fixed interval would render that as an unexplained stutter. A 3 s
 per-frame timeout keeps one slow frame from freezing playback.

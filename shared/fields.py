@@ -48,14 +48,11 @@ log = logging.getLogger(__name__)
 # netCDF4-python releases the GIL around its HDF5 calls, and the HDF5 it links
 # is not built thread-safe. Two threads inside HDF5 at once DEADLOCK — the whole
 # process freezes at 0% CPU, `/health` included, since the stuck thread is in C
-# holding HDF5's own state. Found by opening the land overlay in swipe compare:
-# the two maps asked `/image` for two uncached land frames at the same instant,
+# holding HDF5's own state. Found when the API still rendered on demand: swipe
+# compare asked `/image` for two uncached land frames at the same instant,
 # FastAPI ran them on two pool threads, and the API never answered again.
-# Reproduced with three concurrent requests.
-#
-# The ocean path always had the same exposure and rarely hit it, because ocean
-# frames are served from the cache and only the retention window renders on
-# demand. Every uncached land frame renders on demand, so land found it at once.
+# Reproduced with three concurrent requests. The API now reads only climatology
+# attributes and single cells, and `process`'s threads are the exposure.
 #
 # Held only while a file is open and its slices are read — the reduction and
 # the WebP encode, which are most of a frame's second, run outside it. The
@@ -84,10 +81,10 @@ CLIM_DIR = Path(os.environ.get("CRW_CLIM_DIR", "/opt/data/climatology"))
 MHW_DIR = Path(os.environ.get("CRW_MHW_DIR", "/opt/data/MHW"))
 # The land archive: NOAA CPC Global Unified, from NOAA PSL. A FOURTH archive, and
 # the only one that is **one file per YEAR** rather than per date — `precip.2015.nc`
-# holds all 365 days. It also has the opposite lifetime to the dailies: nothing
-# prunes it. The whole record from 1985 is ~9.5 GB for all three variables, so it
-# is kept forever like the climatology, which is what keeps land history
-# re-ingestable and re-renderable without a re-download.
+# holds all 365 days. A staging area, not an archive: `CPC.cli prune` deletes a
+# year once its days are ingested and every frame it feeds is rendered, so
+# rebuilding the climatology or re-rendering old history means re-fetching
+# (~9.5 GB for the whole record). See `process/CPC/prune.py`.
 LAND_DIR = Path(os.environ.get("CPC_NC_DIR", "/opt/data/land"))
 
 # coraltemp_v3.1_19850101.nc

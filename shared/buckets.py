@@ -2,9 +2,8 @@
 
 **This is the single implementation, and that is the point.** It used to exist
 twice — `process/CRW/imaging.py` for the bulk and daily renders, and
-`api/modules/render.py` for the on-demand render of buckets still inside the
-retention window — which is exactly the drift the retirement of `api/prerender.py`
-was meant to end. Two copies of "what is a week" is one copy too many, and the
+`api/modules/render.py` for an on-demand render the API no longer does — which is
+exactly the drift the retirement of `api/prerender.py` was meant to end. Two copies of "what is a week" is one copy too many, and the
 MHW variable made that concrete: it aggregates a bucket differently from the
 other two, and a second copy would have quietly kept averaging it.
 
@@ -154,8 +153,8 @@ def bucket_field(
 # --- The land layers ---------------------------------------------------------
 #
 # Same contract as the ocean path above — `(field, no_value_mask, n_days)` or
-# None — so `render.encode()`, `CRW.imaging` and the API's on-demand render take
-# land with no branch of their own. What differs is where a day comes from (a
+# None — so `render.encode()` and `CRW.imaging` take land with no branch of
+# their own. What differs is where a day comes from (a
 # slice of a CPC year file, via `fields.read_land_days`) and what a bucket is,
 # which the variable DECLARES in `domain.yml` rather than this module deciding
 # by name:

@@ -13,9 +13,8 @@ Two entry points over one implementation:
 
 Both go through `shared.buckets.bucket_field()`, so a change to how a week is
 reduced cannot apply to one and not the other. That function lives in `shared/`
-rather than here because `api/modules/render.py` needs it too — it renders the
-buckets still inside the retention window on demand — and it had drifted into a
-second copy there. Two definitions of "what is a week" is one too many, and the
+because the API once rendered buckets on demand too, and had drifted into a
+second copy of it there. Two definitions of "what is a week" is one too many, and the
 MHW variable made that concrete: it reduces a bucket by **max**, not mean.
 
 A date contributes to three buckets (its day, its Monday-anchored week, its

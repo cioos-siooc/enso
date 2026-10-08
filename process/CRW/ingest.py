@@ -10,8 +10,8 @@ in a heatwave are stored**, so `mhw_daily` is ~24.2 B rows against `sst_daily`'s
 Each file holds one day of `analysed_sst` on the global 0.05-degree grid,
 encoded as `short` counts of 0.01 degC with `_FillValue = -32768` over land.
 Those raw counts go into ClickHouse untouched (see `shared/ch.py` for why),
-subset to the Pacific box and keyed by their index into the *global* grid, so
-widening the box later needs no reindex.
+subset to `domain.yml`'s box (the whole globe today) and keyed by their index
+into the *global* grid, so changing the box later needs no reindex.
 
 Grid conventions — the longitude roll and the latitude orientation — are applied
 by `shared/fields.py`, not here.

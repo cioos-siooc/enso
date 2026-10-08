@@ -211,7 +211,8 @@ DDL: tuple[str, ...] = (
     ORDER BY (gy, gx, mmdd)
     """,
     # Per named region, the cos(lat)-weighted climatology mean for each MMDD:
-    # 8 regions x 366 = 2,928 rows, computed once at `init`.
+    # up to 366 rows per region (fewer under ice), built at `init` and by
+    # `rollup --clim`.
     #
     # This is the whole precomputation layer. A region ANOMALY series does not
     # join anything, because mean(sst - clim) = mean(sst) - mean(clim) when both
@@ -229,8 +230,8 @@ DDL: tuple[str, ...] = (
     ENGINE = ReplacingMergeTree(updated_at)
     ORDER BY (region, mmdd)
     """,
-    # Per named region, the area means for each DATE: 8 regions x 15,211 days =
-    # ~121,688 rows. This is the rollup that `region_clim` is not.
+    # Per named region, the area means for each DATE: ~15k rows per region,
+    # ~442k for the 29 configured today. This is the rollup that `region_clim` is not.
     #
     # `region_clim` above precomputes the CLIMATOLOGY side of a region anomaly,
     # measured at 0.296 s live against a daily side of 12.14 s for Nino 3.4 — so
