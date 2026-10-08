@@ -48,7 +48,8 @@
 </template>
 
 <script setup lang="ts">
-import * as echarts from 'echarts'
+import type * as echarts from 'echarts'
+import { init as initChart } from '~/utils/echarts'
 import type { Series } from '~/stores/main'
 import { NO_CLASS_COLOR, legibleStops, type ColorStop } from '~/utils/colorScale'
 import { wholeClasses } from '~/utils/stats'
@@ -565,7 +566,7 @@ function onZrClick(event: {
 function render() {
   if (!container.value) return
   if (!chart) {
-    chart = echarts.init(container.value, null, { renderer: 'canvas' })
+    chart = initChart(container.value, null, { renderer: 'canvas' })
     chart.getZr().on('click', onZrClick)
   }
   chart.setOption(option(), { notMerge: true })

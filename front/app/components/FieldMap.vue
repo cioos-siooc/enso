@@ -735,7 +735,9 @@ onMounted(() => {
   map = new mapboxgl.Map({
     container: container.value,
     // style: 'mapbox://styles/mapbox/dark-v11',
-    style: 'mapbox://styles/taimazb/cmu1ilr2t000401r223kb2ghd?fresh=true',
+    // No `?fresh=true`: that bypasses Mapbox's style cache on every load and is
+    // meant for previewing a style edit, not for serving one.
+    style: 'mapbox://styles/taimazb/cmu1ilr2t000401r223kb2ghd',
     minZoom: 1,
     maxZoom:6,
     // Globe by default, opened on the North Pacific. `bounds` and `center`/`zoom`
