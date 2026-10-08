@@ -8,10 +8,12 @@ tables. `get_client()` selects between the local docker-compose instance
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 
 import clickhouse_connect
+import numpy as np
 
 DATABASE = os.environ.get("CH_DATABASE", "enso")
 
@@ -496,6 +498,63 @@ DDL: tuple[str, ...] = (
     ORDER BY (variable, year)
     """,
 )
+
+# --- Bulk inserts -------------------------------------------------------------
+#
+# The daily tables are inserted as RowBinary built straight from numpy, never as
+# Python lists. `client.insert()` with lists cost ~11 GB of objects per 5-day
+# global SST batch and serialised the Date column through `struct.pack(*column)`,
+# one Python argument per row — at 86 M rows that segfaulted Python 3.13
+# intermittently (clickhouse-connect 1.8.0), leaving part of a batch inserted.
+
+# The RowBinary layout of every column a daily table carries. `date` is a
+# ClickHouse Date, which on the wire is a UInt16 count of days since 1970-01-01.
+ROW_BINARY = {
+    "date": "<u2", "gy": "<u2", "gx": "<u2",
+    "sst_raw": "<i2", "has_clim": "u1", "cat": "u1",
+    "tmax_raw": "<i2", "tmin_raw": "<i2", "precip_raw": "<u2",
+}
+_EPOCH = dt.date(1970, 1, 1)
+
+# Blocks of up to 16 M rows rather than ClickHouse's default ~1 M, so a 5-day
+# SST batch lands as ~6 parts instead of ~86. Not one block per insert: an 86 M-row
+# block made the server throw `std::length_error` in `splitBlockIntoParts` on
+# about 1 insert in 175 (ClickHouse 26.5, 8 concurrent writers).
+INSERT_BLOCK_SETTINGS = {
+    "max_insert_block_size": 1 << 24,
+    "min_insert_block_size_rows": 0,
+    "min_insert_block_size_bytes": 0,
+}
+
+
+def row_binary(columns: list[str], dates: list[dt.date], days: list[tuple]) -> bytes:
+    """Pack per-day column arrays into one RowBinary body.
+
+    `columns` starts with `date`; `days[i]` holds the arrays for every other
+    column, in order, for `dates[i]`.
+    """
+    dtype = np.dtype([(c, ROW_BINARY[c]) for c in columns])
+    out = np.empty(sum(int(cols[0].size) for cols in days), dtype=dtype)
+    at = 0
+    for date, cols in zip(dates, days, strict=True):
+        n = int(cols[0].size)
+        out["date"][at : at + n] = (date - _EPOCH).days
+        for name, values in zip(columns[1:], cols, strict=True):
+            out[name][at : at + n] = values
+        at += n
+    return out.tobytes()
+
+
+def insert_days(client, table: str, columns: list[str], dates: list[dt.date], days: list[tuple]) -> None:
+    """One RowBinary insert of whole days into a daily table."""
+    client.raw_insert(
+        f"{DATABASE}.{table}",
+        columns,
+        insert_block=row_binary(columns, dates, days),
+        settings=INSERT_BLOCK_SETTINGS,
+        fmt="RowBinary",
+    )
+
 
 # Status values used by process/CRW. ReplacingMergeTree keyed on `date` means
 # the table always shows one row per day.

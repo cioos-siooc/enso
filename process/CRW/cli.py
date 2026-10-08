@@ -444,7 +444,7 @@ def _process_product(client, http, date, product, target, *, force) -> str:
         log.info("%s: %s not published yet", date, product.key)
         return "unpublished"
 
-    existing = status_mod.load(client, target.status_table).get(date)
+    existing = status_mod.load_one(client, date, target.status_table)
     if not force and status_mod.is_current(existing, remote):
         log.info("%s: %s already ingested and unrevised", date, product.key)
         return "skipped"

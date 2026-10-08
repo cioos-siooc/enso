@@ -96,40 +96,51 @@ def cmd_fetch(args) -> int:
     whenever the server reports a different size or mtime, which is daily, since
     the file is rewritten in place as days are appended.
     """
-    this_year = dt.date.today().year
-    fetched = failed = skipped = 0
-
     with download.new_client() as client:
-        for year in _years(args):
-            for name in _variables(args):
-                product = download.product(name)
-                path = config.land_path(name, year)
-                remote = download.head(year, product, client)
+        outcomes = [
+            _fetch_year_file(
+                client, name, year, download.head(year, download.product(name), client),
+                force=args.force,
+            )
+            for year in _years(args) for name in _variables(args)
+        ]
+    return _report_fetch(outcomes)
 
-                if remote is None:
-                    if year >= this_year:
-                        log.info("%s not published yet", product.filename(year))
-                    else:
-                        log.warning("%s unavailable at the source", product.filename(year))
-                    continue
 
-                if path.exists() and not args.force:
-                    # A past year matching on size is done. The current year is
-                    # checked on size too, which is what notices appended days.
-                    if path.stat().st_size == remote[0]:
-                        skipped += 1
-                        continue
+def _fetch_year_file(client, name: str, year: int, remote, *, force: bool) -> str:
+    """Download one year file unless the copy on disk already matches `remote`.
 
-                try:
-                    download.fetch(year, product, client=client)
-                except Exception:  # noqa: BLE001 — one year must not stop the rest
-                    log.exception("failed to download %s", product.filename(year))
-                    failed += 1
-                else:
-                    fetched += 1
+    `remote` is the file's `(size, mtime)` from a HEAD, or None if the source did
+    not answer. Returns `fetched`, `current`, `unpublished` or `failed`.
+    """
+    product = download.product(name)
+    if remote is None:
+        if year >= dt.date.today().year:
+            log.info("%s not published yet", product.filename(year))
+        else:
+            log.warning("%s unavailable at the source", product.filename(year))
+        return "unpublished"
 
-    log.info("fetch: %d downloaded, %d already current, %d failed", fetched, skipped, failed)
-    return 1 if failed else 0
+    path = config.land_path(name, year)
+    # A past year matching on size is done. The current year is checked on size
+    # too, which is what notices appended days.
+    if path.exists() and not force and path.stat().st_size == remote[0]:
+        return "current"
+
+    try:
+        download.fetch(year, product, client=client)
+    except Exception:  # noqa: BLE001 — one year must not stop the rest
+        log.exception("failed to download %s", product.filename(year))
+        return "failed"
+    return "fetched"
+
+
+def _report_fetch(outcomes: list[str]) -> int:
+    log.info(
+        "fetch: %d downloaded, %d already current, %d failed",
+        outcomes.count("fetched"), outcomes.count("current"), outcomes.count("failed"),
+    )
+    return 1 if "failed" in outcomes else 0
 
 
 def cmd_backfill(args) -> int:
@@ -141,6 +152,7 @@ def cmd_backfill(args) -> int:
     make every date look ingested while its rows were gone.
     """
     client = get_client()
+    failed = 0
     try:
         for tgt in _targets(args):
             if args.fresh:
@@ -170,9 +182,10 @@ def cmd_backfill(args) -> int:
                 tgt.key, totals["ingested"], totals["skipped"], totals["failed"],
                 f"{totals['rows']:,}",
             )
+            failed += totals["failed"]
     finally:
         client.close()
-    return 0
+    return 1 if failed else 0
 
 
 def ingest_one_year(client, year: int, tgt: ingest.Target, args, **kwargs) -> dict[str, int]:
@@ -265,9 +278,16 @@ def plan_run(
 
 
 def fetch_product(plan: RunPlan, tgt: ingest.Target) -> bool:
-    """Download `tgt`'s year files for the run. False if any download failed."""
-    args = argparse.Namespace(year=plan.years, variable=list(tgt.variables), force=False)
-    return cmd_fetch(args) == 0
+    """Download `tgt`'s year files for the run. False if any download failed.
+
+    Against the HEADs `plan_run` already made, rather than asking again.
+    """
+    with download.new_client() as client:
+        outcomes = [
+            _fetch_year_file(client, name, year, plan.remote[(name, year)], force=False)
+            for year in plan.years for name in tgt.variables
+        ]
+    return _report_fetch(outcomes) == 0
 
 
 def ingest_product_year(client, plan: RunPlan, tgt: ingest.Target, year: int) -> dict[str, int]:

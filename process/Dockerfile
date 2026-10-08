@@ -24,8 +24,11 @@ ENV OMP_NUM_THREADS=1 \
 
 RUN pip install --no-cache-dir uv
 
-COPY process/pyproject.toml ./
-RUN uv sync --no-dev
+# With the lock, and `--frozen` so a build installs exactly it rather than
+# re-resolving: the scheduler runs unattended, and a prod `--build` must not pick
+# up whatever was released that morning.
+COPY process/pyproject.toml process/uv.lock ./
+RUN uv sync --frozen --no-dev
 
 COPY process .
 COPY shared ./shared
