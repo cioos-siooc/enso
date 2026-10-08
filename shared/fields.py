@@ -410,16 +410,22 @@ def check_orientation(daily_raw: np.ndarray, clim_raw: np.ndarray) -> None:
         )
 
 
-def anomaly(daily_raw: np.ndarray, clim_raw: np.ndarray) -> np.ndarray:
+def anomaly(
+    daily_raw: np.ndarray, clim_raw: np.ndarray, daily_celsius: np.ndarray | None = None
+) -> np.ndarray:
     """`daily - climatology` in degC, NaN where either side is absent.
 
     NaN therefore means two different things, which the renderer separates:
     land (no daily value) and ice-fringe ocean (daily but no climatology). Use
     `no_clim_mask()` to tell them apart.
+
+    `daily_celsius` is `as_celsius(daily_raw)` when the caller already has it,
+    as a render of `sst` and `anom` together does.
     """
     check_orientation(daily_raw, clim_raw)
-    out = as_celsius(daily_raw) - as_celsius(clim_raw)
-    return out
+    if daily_celsius is None:
+        daily_celsius = as_celsius(daily_raw)
+    return daily_celsius - as_celsius(clim_raw)
 
 
 def no_clim_mask(daily_raw: np.ndarray, clim_raw: np.ndarray) -> np.ndarray:

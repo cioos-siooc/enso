@@ -38,10 +38,14 @@ from .periods import Period, span
 log = logging.getLogger(__name__)
 
 
-def _day_field(
-    day: dt.date, variable_name: str, nc_dir: Path | None, mhw_dir: Path | None
-) -> tuple[np.ndarray, np.ndarray | None] | None:
-    """One day's `(value, no_clim)` for a variable, or None if its file is absent.
+def _read_day(
+    day: dt.date, names: tuple[str, ...], nc_dir: Path | None, mhw_dir: Path | None
+) -> dict[str, tuple[np.ndarray, np.ndarray | None]]:
+    """One day's `(value, no_clim)` for each of `names` whose files are on disk.
+
+    **Each file is read once however many variables want it**: `sst` and `anom`
+    share the day's CoralTemp file, which is most of what a day costs. A
+    variable whose file is absent is simply missing from the result.
 
     NaN in `value` means "no value here" in every case; what that means
     physically differs by variable, and `no_clim` is the only distinction that
@@ -49,21 +53,126 @@ def _day_field(
     `mhw` there is deliberately no such distinction — land, ice and heatwave-free
     ocean are all simply not a heatwave.
     """
-    try:
-        if variable_name == "mhw":
+    out: dict[str, tuple[np.ndarray, np.ndarray | None]] = {}
+    if "sst" in names or "anom" in names:
+        try:
+            raw = fields.read_daily_raw(day, nc_dir)
+        except (FileNotFoundError, OSError):
+            raw = None
+        celsius = fields.as_celsius(raw) if raw is not None else None
+        if celsius is not None and "sst" in names:
+            out["sst"] = (celsius, None)
+        if raw is not None and "anom" in names:
+            try:
+                clim = fields.read_clim_raw(fields.mmdd_of(day))
+            except (FileNotFoundError, OSError):
+                clim = None
+            if clim is not None:
+                out["anom"] = (
+                    fields.anomaly(raw, clim, celsius), fields.no_clim_mask(raw, clim)
+                )
+    if "mhw" in names:
+        try:
             # `sst_dir` is not a fallback: on a leap day the MHW file carries
             # no land of its own and the CoralTemp file is what supplies it.
-            return (
+            out["mhw"] = (
                 fields.as_category(fields.read_mhw_raw(day, mhw_dir, sst_dir=nc_dir)),
                 None,
             )
-        raw = fields.read_daily_raw(day, nc_dir)
-        if variable_name == "sst":
-            return fields.as_celsius(raw), None
-        clim = fields.read_clim_raw(fields.mmdd_of(day))
-        return fields.anomaly(raw, clim), fields.no_clim_mask(raw, clim)
-    except (FileNotFoundError, OSError):
-        return None
+        except (FileNotFoundError, OSError):
+            pass
+    return out
+
+
+class _Reduction:
+    """One variable's running reduction over a bucket's days.
+
+    The mean, or the max for a categorical variable. Cells are reduced where
+    present: a cell that is ocean on some days of the week and ice-masked on
+    others still gets a result over the days it had.
+    """
+
+    def __init__(self, variable_name: str):
+        self.reduce_max = variable(variable_name).categorical
+        self.tracks_no_clim = variable_name == "anom"
+        self.acc: np.ndarray | None = None  # running total, or running peak
+        self.count: np.ndarray | None = None
+        self.missing_any: np.ndarray | None = None
+        self.n_days = 0
+
+    def add(self, value: np.ndarray, no_clim: np.ndarray | None) -> None:
+        finite = np.isfinite(value)
+        if self.count is None:
+            self.count = np.zeros(value.shape, dtype="int32")
+            self.missing_any = np.zeros(value.shape, dtype=bool)
+            self.acc = (
+                np.full(value.shape, -np.inf, dtype="float32") if self.reduce_max
+                else np.zeros(value.shape, dtype="float64")
+            )
+        # In place and masked by `where`, not by boolean indexing, which copies
+        # both sides out and back — 0.19 s a day against 0.06 on a global field.
+        # `where` also keeps a NaN day from erasing another day's peak.
+        if self.reduce_max:
+            np.maximum(self.acc, value, out=self.acc, where=finite)
+        else:
+            np.add(self.acc, value, out=self.acc, where=finite)
+        np.add(self.count, finite, out=self.count)
+        if no_clim is not None:
+            self.missing_any |= no_clim
+        self.n_days += 1
+
+    def result(self) -> tuple[np.ndarray, np.ndarray | None, int] | None:
+        if self.count is None or self.n_days == 0:
+            return None
+        if self.reduce_max:
+            field = np.where(self.count > 0, self.acc, np.nan).astype("float32")
+        else:
+            with np.errstate(invalid="ignore"):
+                field = np.where(
+                    self.count > 0, self.acc / np.maximum(self.count, 1), np.nan
+                ).astype("float32")
+        # A cell with no anomaly on any contributing day stays "no climatology";
+        # one that had an anomaly on at least one day carries that day's value.
+        no_clim = (self.missing_any & (self.count == 0)) if self.tracks_no_clim else None
+        return field, no_clim, self.n_days
+
+
+def bucket_fields(
+    date: dt.date,
+    period: Period,
+    variable_names: tuple[str, ...],
+    available: set[dt.date] | None = None,
+    *,
+    available_mhw: set[dt.date] | None = None,
+    nc_dir: Path | None = None,
+    mhw_dir: Path | None = None,
+) -> dict[str, tuple[np.ndarray, np.ndarray | None, int] | None]:
+    """`bucket_field` for several ocean variables at once, reading each day once.
+
+    What `CRW.imaging.render_date` uses: a date's frames are three variables
+    over the same days, and reading the CoralTemp file once for `sst` and again
+    for `anom` was a third of a run's time. `available` filters the CoralTemp
+    days and `available_mhw` the MHW ones, since the two archives are on disk
+    independently.
+    """
+    land = [name for name in variable_names if variable(name).grid == "land"]
+    if land:
+        raise ValueError(f"bucket_fields is for the ocean variables; use bucket_field for {land}")
+    first, last = span(date, period)
+    reductions = {name: _Reduction(name) for name in variable_names}
+
+    day = first
+    while day <= last:
+        wanted = tuple(
+            name for name in variable_names
+            if (pool := available_mhw if name == "mhw" else available) is None or day in pool
+        )
+        if wanted:
+            for name, (value, no_clim) in _read_day(day, wanted, nc_dir, mhw_dir).items():
+                reductions[name].add(value, no_clim)
+        day += dt.timedelta(days=1)
+
+    return {name: r.result() for name, r in reductions.items()}
 
 
 def bucket_field(
@@ -82,9 +191,6 @@ def bucket_field(
     bucket had a file. `n_days` lets the caller see how much of the bucket the
     result actually rests on.
 
-    Cells are reduced where present: a cell that is ocean on some days of the
-    week and ice-masked on others still gets a result over the days it had.
-
     `available` is an optional set of dates known to be on disk, which lets a
     caller skip the open/fail cycle on a sparse archive. It is only ever a
     filter — a date in it whose file is missing is still handled.
@@ -92,62 +198,13 @@ def bucket_field(
     var = variable(variable_name)
     if var.grid == "land":
         return _land_bucket(date, period, var, land_dir=land_dir)
-
-    first, last = span(date, period)
-    reduce_max = var.categorical
-
-    total: np.ndarray | None = None
-    count: np.ndarray | None = None
-    peak: np.ndarray | None = None
-    missing_any: np.ndarray | None = None
-    n_days = 0
-
-    day = first
-    while day <= last:
-        if available is not None and day not in available:
-            day += dt.timedelta(days=1)
-            continue
-
-        result = _day_field(day, variable_name, nc_dir, mhw_dir)
-        if result is None:
-            day += dt.timedelta(days=1)
-            continue
-        value, no_clim = result
-
-        finite = np.isfinite(value)
-        if count is None:
-            count = np.zeros(value.shape, dtype="int32")
-            missing_any = np.zeros(value.shape, dtype=bool)
-            if reduce_max:
-                peak = np.full(value.shape, -np.inf, dtype="float32")
-            else:
-                total = np.zeros(value.shape, dtype="float64")
-
-        if reduce_max:
-            # `np.maximum` would propagate the NaN; the whole point is that a day
-            # with no heatwave at a cell must not erase another day's.
-            np.maximum(peak, np.where(finite, value, -np.inf), out=peak)
-        else:
-            total[finite] += value[finite]
-        count[finite] += 1
-        if no_clim is not None:
-            missing_any |= no_clim
-        n_days += 1
-        day += dt.timedelta(days=1)
-
-    if count is None or n_days == 0:
-        return None
-
-    if reduce_max:
-        field = np.where(count > 0, peak, np.nan).astype("float32")
-    else:
-        with np.errstate(invalid="ignore"):
-            field = np.where(count > 0, total / np.maximum(count, 1), np.nan).astype("float32")
-
-    # A cell with no anomaly on any contributing day stays "no climatology"; one
-    # that had an anomaly on at least one day carries that day's value.
-    no_clim = (missing_any & (count == 0)) if variable_name == "anom" else None
-    return field, no_clim, n_days
+    mhw = variable_name == "mhw"
+    return bucket_fields(
+        date, period, (variable_name,),
+        None if mhw else available,
+        available_mhw=available if mhw else None,
+        nc_dir=nc_dir, mhw_dir=mhw_dir,
+    )[variable_name]
 
 
 # --- The land layers ---------------------------------------------------------

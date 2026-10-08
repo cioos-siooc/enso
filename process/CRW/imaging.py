@@ -43,7 +43,7 @@ import multiprocessing as mp
 import os
 import time
 
-from shared.buckets import bucket_field
+from shared.buckets import bucket_field, bucket_fields
 from shared.domain import variable as variable_meta
 from shared.periods import PERIODS, Period, span, start_of
 from shared.render import DEFAULT_WIDTH, cache_path, encode, write_cache
@@ -77,11 +77,13 @@ def render_date(
     """
     written = 0
     for period in periods:
+        # All variables of a period in one pass, so `sst` and `anom` share each
+        # day's CoralTemp read.
+        results = bucket_fields(
+            date, period, variables, available, available_mhw=available_mhw
+        )
         for name in variables:
-            result = bucket_field(
-                date, period, name,
-                available_mhw if name == "mhw" else available,
-            )
+            result = results[name]
             if result is None:
                 log.warning("no data for %s %s bucket at %s", name, period, date)
                 continue
