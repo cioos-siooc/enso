@@ -247,14 +247,29 @@ def render_range(
     if limit:
         jobs = jobs[:limit]
 
-    counts = {"rendered": 0, "empty": 0, "skipped": skipped, "bytes": 0, "seconds": 0.0}
     if dry_run or not jobs:
-        counts["pending"] = len(jobs)
-        return counts
+        return {"rendered": 0, "empty": 0, "skipped": skipped, "bytes": 0,
+                "seconds": 0.0, "pending": len(jobs)}
+    counts = render_jobs(jobs, workers=workers, progress=progress)
+    counts["skipped"] = skipped
+    return counts
 
+
+def render_jobs(
+    jobs: list[tuple[dt.date, Period, str, int]],
+    *,
+    workers: int | None = None,
+    progress=None,
+) -> dict:
+    """Render `jobs` across a `spawn` pool; see `render_range` for why spawn."""
+    counts = {"rendered": 0, "empty": 0, "skipped": 0, "bytes": 0, "seconds": 0.0,
+              "pending": len(jobs)}
+    if not jobs:
+        return counts
     started = time.time()
     done = 0
-    with mp.get_context("spawn").Pool(workers or default_workers()) as pool:
+    workers = min(workers or default_workers(), len(jobs))
+    with mp.get_context("spawn").Pool(workers) as pool:
         for _date, _period, _variable, size in pool.imap_unordered(
             render_bucket, jobs, chunksize=4
         ):
@@ -268,5 +283,4 @@ def render_range(
                 progress(done, len(jobs), counts["bytes"], time.time() - started)
 
     counts["seconds"] = time.time() - started
-    counts["pending"] = len(jobs)
     return counts

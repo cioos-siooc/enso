@@ -459,8 +459,9 @@ def render_touched(tgt: ingest.Target, since: dt.date, width: int = DEFAULT_WIDT
                     jobs.add((span(day, period)[0], period, name))
         day += dt.timedelta(days=1)
 
-    for bucket, period, name in sorted(jobs):
-        imaging.render_bucket((bucket, period, name, width))
+    # Across the render pool, like `CPC.cli render`: a 14-day recheck touches
+    # ~100 frames per product, which one at a time was minutes of every run.
+    imaging.render_jobs([(bucket, period, name, width) for bucket, period, name in sorted(jobs)])
     return len(jobs)
 
 
