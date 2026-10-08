@@ -36,7 +36,7 @@ from shared.fields import (
     valid_mask,
 )
 
-from . import status as status_mod
+from . import recent as recent_mod, status as status_mod
 from .config import NcFile
 
 log = logging.getLogger(__name__)
@@ -137,7 +137,11 @@ def delete_day(
     that day sees both copies; the merges (or the `OPTIMIZE ... FINAL` a
     backfill ends with) settle it. A day with no rows — a file that failed to
     read — issues nothing.
+
+    Either way the date is also cleared from the table's `*_recent` twin, which a
+    materialized view fills on insert but nothing empties on delete.
     """
+    recent_mod.delete_day(client, table, date)
     if lightweight:
         present = client.query(
             f"SELECT count() FROM {DATABASE}.{table} WHERE date = %(date)s",

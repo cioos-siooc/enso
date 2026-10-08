@@ -137,6 +137,7 @@ python -m CRW.cli run      [--date] [--keep-nc] [--recheck-days N]
 python -m CRW.cli status                                  # per-status day/row counts, per archive
 python -m CRW.cli check    [--days N] [--full] [--stale-after N]  # data invariants, exit 1 on failure
 python -m CRW.cli repair-mhw-land [--date]                # re-do the leap days (see below)
+python -m CRW.cli recent                                  # fill the date-ordered rollup tables (once)
 python -m CRW.cli repartition [--table] [--dry-run] [--optimize] [--finish]  # one-off
 ```
 
@@ -850,6 +851,12 @@ The small boxes take seconds each and the two basin polygons 3–5 min. One date
 22 regions, which is what `run` appends daily, takes **9.4 s** including container start.
 Expect the full rebuild to be much slower on the production HDD.
 
+**That per-date figure grew with the year, and the cause was the sort key**: `ORDER BY (gy,
+gx, date)` cannot prune a single date, so each region's one-date rollup read its share of the
+whole current-year partition (the `global` region alone: 4.64 B rows, 34.6 GiB uncompressed,
+for 17.2 M). By 2026-10-08 it was **33.5 s** a date on dev for the 29 regions. The fix is the
+`*_recent` tables below: **5.0 s**, identical rows.
+
 ##### A region can cross the prime meridian, and its longitudes then wrap
 
 **`Region.gx_range()` returns `(west, east)`, not a sorted pair, and `west > east` means
@@ -1090,6 +1097,27 @@ of **1.5827**, on the same 23,875 cells.
 the ice-covered ones**, because an MMDD gets a row only where the region has at least one
 cell with a climatology that day: `arctic_basin` 2, `western_arctic` 67, `hudson_bay` 152. The climatology side
 of a region anomaly.
+
+**`sst_recent` / `mhw_recent`** — the archive tables' last `RECENT_DAYS` (70) ordered
+**`(date, gy, gx)`**, so `run`'s one-date rollup reads that date and nothing else. Partitioned
+by month, `TTL date + 70 DAY` with `ttl_only_drop_parts`, so they hold 70–100 days: ~0.9 B a
+row, **~1.1–1.5 GB** together (59 days measured at 911 MiB).
+
+- **Filled by materialized views** (`sst_recent_mv`, `mhw_recent_mv`) on every insert into
+  the archive tables, for in-window dates only, so a backfill of 1985 writes nothing here.
+- **Deletes do not propagate through a view.** `ingest.delete_day` clears the twin as well
+  (lightweight, synchronous); `backfill --fresh` truncates both.
+- **Read only when provably complete.** `CRW/recent.py`'s `covers()` compares each date's row
+  count with the `n_rows` its status table recorded; one mismatch and the rollup reads the
+  archive tables, as before. `rollup` (bulk) always reads the archive (`source="archive"`).
+  Same SQL either way, only the table names differ.
+- **`CRW.cli recent` is the one-off after deploying them**: it copies whichever window dates
+  the views have not seen (2 m 39 s for 59 days on dev; it reads the window's archive
+  partitions once). Stop `scheduler` while it runs, or a concurrent ingest can leave a date
+  doubled — harmless, since `covers()` then falls back, but slow until the next fill.
+  `CRW.cli check` warns (`rollup.recent_tables`) when the last 30 days are not covered.
+- In January the window reaches into the previous year, which sits in a decade partition,
+  so a fill then reads that whole decade. Fill before the new year or accept the scan.
 
 **`region_daily`** — 29 regions × ~15,250 days = **~442,000 rows**, ~8 MiB. The daily side, and the
 one that actually costs something.

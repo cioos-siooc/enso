@@ -154,6 +154,28 @@ _STATUS_DDL = """
     ORDER BY date
 """
 
+# How many days back the date-ordered `*_recent` tables hold. Past `run`'s
+# 30-day revision recheck with room to spare; TTL drops a month's part only once
+# all of it is older than this, so in practice they hold 70-100 days.
+RECENT_DAYS = 70
+
+_RECENT_DDL = """
+    CREATE TABLE IF NOT EXISTS {database}.{table}
+    (
+        date      Date    CODEC(DoubleDelta, ZSTD(3)),
+        gy        UInt16  CODEC(DoubleDelta, ZSTD(3)),
+        gx        UInt16  CODEC(DoubleDelta, ZSTD(3)),
+        {columns}
+        lat       Float32 ALIAS -89.975 + gy * 0.05,
+        lon       Float32 ALIAS 0.025 + gx * 0.05
+    )
+    ENGINE = MergeTree
+    PARTITION BY toYYYYMM(date)
+    ORDER BY (date, gy, gx)
+    TTL date + INTERVAL """ + str(RECENT_DAYS) + """ DAY
+    SETTINGS ttl_only_drop_parts = 1
+"""
+
 DDL: tuple[str, ...] = (
     f"CREATE DATABASE IF NOT EXISTS {DATABASE}",
     # One row per (date, ocean cell) inside the Pacific subset. Ordered
@@ -378,6 +400,43 @@ DDL: tuple[str, ...] = (
     ENGINE = MergeTree
     PARTITION BY {DAILY_PARTITION_SQL}
     ORDER BY (gy, gx, date)
+    """,
+    # --- The recent window, ordered by DATE -----------------------------------
+    #
+    # `run` rolls each date it ingests into `region_daily`, and on the archive
+    # tables a single date cannot be pruned: `ORDER BY (gy, gx, date)` puts every
+    # day of a cell in one granule, so `WHERE date = X` reads the whole year's
+    # partition. Measured on dev for the `global` region: 4.64 B rows, 34.6 GiB
+    # uncompressed, to aggregate 17.2 M — and the 29 regions read about 2.5
+    # partitions' worth per date, growing all year.
+    #
+    # These hold the same rows for the last `RECENT_DAYS` only, ordered by date,
+    # so a date is one contiguous range. Filled by the materialized views below
+    # on every insert into the archive tables (never by hand), trimmed by TTL a
+    # whole month-part at a time. `CRW/recent.py` decides when the rollup may
+    # read them and fills the window after a deploy. Deletes do NOT propagate
+    # through a view: `ingest.delete_day` clears both tables.
+    _RECENT_DDL.format(
+        database=DATABASE, table="sst_recent",
+        columns="""sst_raw   Int16   CODEC(ZSTD(3)),
+        has_clim  UInt8   CODEC(ZSTD(3)),
+        sst       Float32 ALIAS sst_raw * 0.01,""",
+    ),
+    f"""
+    CREATE MATERIALIZED VIEW IF NOT EXISTS {DATABASE}.sst_recent_mv
+    TO {DATABASE}.sst_recent
+    AS SELECT date, gy, gx, sst_raw, has_clim FROM {DATABASE}.sst_daily
+    WHERE date >= today() - {RECENT_DAYS}
+    """,
+    _RECENT_DDL.format(
+        database=DATABASE, table="mhw_recent",
+        columns="""cat       UInt8   CODEC(ZSTD(3)),""",
+    ),
+    f"""
+    CREATE MATERIALIZED VIEW IF NOT EXISTS {DATABASE}.mhw_recent_mv
+    TO {DATABASE}.mhw_recent
+    AS SELECT date, gy, gx, cat FROM {DATABASE}.mhw_daily
+    WHERE date >= today() - {RECENT_DAYS}
     """,
     # One row per date. `remote_size`/`remote_modified` are what a re-check
     # compares against: CoralTemp v3.1_op is a near-real-time stream whose files

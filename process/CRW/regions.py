@@ -58,6 +58,8 @@ from shared.ch import DATABASE
 from shared.domain import global_grid, regions
 from shared.mask import cells_in
 
+from . import recent as recent_mod
+
 log = logging.getLogger(__name__)
 
 COLUMNS = (
@@ -167,6 +169,8 @@ def build_region_daily(
     keys: list[str] | None = None,
     start: dt.date | None = None,
     end: dt.date | None = None,
+    *,
+    source: str = "auto",
 ) -> dict:
     """Roll up `sst_daily` + `mhw_daily` into `region_daily`, one region at a time.
 
@@ -185,10 +189,23 @@ def build_region_daily(
 
     Re-running over a range is safe. `ReplacingMergeTree(updated_at)` collapses
     the re-inserted rows and every read uses FINAL.
+
+    **Which tables it reads.** `source="auto"` reads the date-ordered
+    `sst_recent`/`mhw_recent` when they provably hold every row of the range
+    (`recent.covers`), and the archive tables otherwise; `"archive"` always
+    reads the archive, which is what a bulk rebuild wants. Same SQL either way —
+    only the table names differ — so the two cannot compute different means.
     """
     selected = regions() if keys is None else {k: regions()[k] for k in keys}
     where, date_params = _date_filter(start, end)
     counts: dict[str, int] = {}
+    if source == "auto" and recent_mod.covers(client, start, end):
+        sst_table, mhw_table = "sst_recent", "mhw_recent"
+    elif source in ("auto", "archive"):
+        sst_table, mhw_table = "sst_daily", "mhw_daily"
+    else:
+        raise ValueError(f"source must be 'auto' or 'archive', not {source!r}")
+    log.info("region_daily: reading %s and %s", sst_table, mhw_table)
 
     for key, region in selected.items():
         gy0, gy1, gx0, gx1 = box_of(region)
@@ -223,7 +240,7 @@ def build_region_daily(
                           sumIf(sst * {_WEIGHT}, has_clim = 1)
                               / sumIf({_WEIGHT}, has_clim = 1),
                           nan) AS mean_sst_clim
-                FROM {DATABASE}.sst_daily
+                FROM {DATABASE}.{sst_table}
                 WHERE gy BETWEEN %(gy0)s AND %(gy1)s
                   AND {gx_where}{mask}{where}
                 GROUP BY date
@@ -238,7 +255,7 @@ def build_region_daily(
                        -- causes everywhere else.
                        sum({_WEIGHT}) AS weighted_area,
                        count() AS n_mhw
-                FROM {DATABASE}.mhw_daily
+                FROM {DATABASE}.{mhw_table}
                 WHERE gy BETWEEN %(gy0)s AND %(gy1)s
                   AND {gx_where}{mask}{where}
                 GROUP BY date

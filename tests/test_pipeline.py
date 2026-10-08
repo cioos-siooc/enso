@@ -110,3 +110,43 @@ def test_gx_clause_wraps_rather_than_sorting():
     assert gx_sql(100, 200) == "gx BETWEEN %(gx0)s AND %(gx1)s"
     # West of the prime meridian to east of it: two ranges, not the complement.
     assert gx_sql(7000, 200) == "(gx >= %(gx0)s OR gx <= %(gx1)s)"
+
+
+class CannedClient:
+    """Answers each query with the first canned rows whose needle it contains."""
+
+    def __init__(self, answers):
+        self.answers = answers
+
+    def query(self, sql, parameters=None):
+        for needle, rows in self.answers:
+            if needle in sql:
+                return FakeResult(rows)
+        raise AssertionError(f"unexpected query: {sql}")
+
+
+def test_recent_window_keeps_clear_of_the_ttl_edge():
+    from CRW import recent
+    from shared.ch import RECENT_DAYS
+
+    today = dt.date(2026, 10, 8)
+    day = today - dt.timedelta(days=1)
+    assert recent.in_window(day, day, today)
+    edge = today - dt.timedelta(days=RECENT_DAYS - 1)
+    assert not recent.in_window(edge, day, today)
+    assert not recent.in_window(None, day, today)
+
+
+def test_recent_tables_are_read_only_when_their_counts_match_status(monkeypatch):
+    from CRW import recent
+
+    day = dt.date(2026, 10, 1)
+    monkeypatch.setattr(recent, "_today", lambda: dt.date(2026, 10, 8))
+    match = CannedClient([("n_rows", [(day, 17_193_140)]), ("count()", [(day, 17_193_140)])])
+    assert recent.covers(match, day, day)
+    # A date ingested before the views existed: status has it, recent does not.
+    missing = CannedClient([("n_rows", [(day, 17_193_140)]), ("count()", [])])
+    assert not recent.covers(missing, day, day)
+    # Rows left behind by a one-sided delete.
+    doubled = CannedClient([("n_rows", [(day, 10)]), ("count()", [(day, 20)])])
+    assert not recent.covers(doubled, day, day)
