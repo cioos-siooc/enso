@@ -13,51 +13,51 @@ starts 404ing, and each miss cost ~1-9 s of an API thread besides.
 from __future__ import annotations
 
 import datetime as dt
-import logging
 from pathlib import Path
 
-from shared.periods import Period
-from shared.render import (  # noqa: F401 — re-exported for call sites
+from shared.periods import Period, span
+from shared.render import (  # noqa: F401 — re-exported for SERVER.py
     DEFAULT_WIDTH,
-    IMAGE_DIR,
-    MERCATOR_LAT_LIMIT,
     NO_CLIM_RGBA,
     bounds,
     cache_path,
-    colorize,
     colormap_stops,
-    encode,
     land_bounds,
     quantity_stops,
-    to_mercator,
-    write_cache,
 )
-
-log = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_WIDTH",
-    "IMAGE_DIR",
-    "MERCATOR_LAT_LIMIT",
     "NO_CLIM_RGBA",
     "bounds",
-    "cache_path",
-    "colorize",
+    "cached_frame",
     "colormap_stops",
-    "encode",
+    "frame_settled",
     "land_bounds",
     "quantity_stops",
-    "render",
-    "to_mercator",
 ]
 
+# How far back `process` may still rewrite a frame. CoralTemp is re-checked for
+# in-place revisions over 30 days (`CRW.cli run --recheck-days`) and CPC over 14,
+# so a bucket that ended before this is not written again by the daily runs and
+# can be cached by a browser for long. Generous on purpose: a frame wrongly
+# called settled is stale in someone's browser, one wrongly called recent costs
+# a revalidation.
+SETTLED_AFTER_DAYS = 45
 
-def render(
+
+def cached_frame(
     date: dt.date,
     width: int = DEFAULT_WIDTH,
     period: Period = "daily",
     variable_name: str = "sst",
-) -> bytes | None:
+) -> Path | None:
     """The cached WebP for one bucket, or None if `process` has not written it."""
-    path: Path = cache_path(date, width, period, variable_name)
-    return path.read_bytes() if path.is_file() else None
+    path = cache_path(date, width, period, variable_name)
+    return path if path.is_file() else None
+
+
+def frame_settled(date: dt.date, period: Period, today: dt.date | None = None) -> bool:
+    """Whether the bucket containing `date` is past every re-render window."""
+    today = today or dt.datetime.now(dt.timezone.utc).date()
+    return span(date, period)[1] < today - dt.timedelta(days=SETTLED_AFTER_DAYS)

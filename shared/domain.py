@@ -495,14 +495,20 @@ class Region:
         return np.concatenate([np.arange(west, grid.nlon), np.arange(0, east + 1)])
 
     def gx_sql(self, grid: GlobalGrid) -> str:
-        """The `gx` half of a WHERE clause, binding `%(gx0)s`/`%(gx1)s`.
+        """The `gx` half of a WHERE clause, binding `%(gx0)s`/`%(gx1)s`."""
+        return gx_sql(*self.gx_range(grid))
 
-        An OR of two ranges for a wrapping box. ClickHouse turns either form into
-        primary-key ranges within each `gy`, so the wrap costs nothing extra.
-        """
-        if self.wraps(grid):
-            return "(gx >= %(gx0)s OR gx <= %(gx1)s)"
-        return "gx BETWEEN %(gx0)s AND %(gx1)s"
+
+def gx_sql(west: int, east: int) -> str:
+    """The `gx` half of a WHERE clause for columns `west..east`, binding `%(gx0)s`/`%(gx1)s`.
+
+    An OR of two ranges when `west > east`, i.e. a box across gx = 0. ClickHouse
+    turns either form into primary-key ranges within each `gy`, so the wrap costs
+    nothing extra. Sorting the pair instead would select the complement.
+    """
+    if west > east:
+        return "(gx >= %(gx0)s OR gx <= %(gx1)s)"
+    return "gx BETWEEN %(gx0)s AND %(gx1)s"
 
 
 @functools.lru_cache(maxsize=1)
