@@ -317,6 +317,14 @@ which is why `shared/buckets.py` passes `sst_dir` alongside `mhw_dir`: on a leap
 CoralTemp file is not a nicety, it is where land comes from. Repaired, 2024-02-29 reads
 2,694,751 heatwave cells with 1,612 at Cat 5, against 02-28's 2,677,962 and 1,901.
 
+**The `mask` variable's land code changed with the 2024-07-01 re-encoding as well**: 2
+before, **1** after (`flag_meanings: valid-water land missing ice` = 0 1 2 4). The code is
+read from the variable's own `flag_values`/`flag_meanings` (`_mhw_mask_land_code`), with 2
+only as the fallback. Until 2026-10-08 it was hard-coded at 2, so every post-2024 file
+looked like a leap-day file and was "repaired" from CoralTemp: the same output (251 is
+outside 1..5 anyway), but an extra 10 MB read per MHW day and a hard failure whenever
+that day's CoralTemp file was missing.
+
 `CRW.cli repair-mhw-land` is the remediation, and it is a range rather than one file for
 the same reason `render` is: a weekly frame is a max over seven days, so re-rendering it
 with only the leap day on disk would replace a good seven-day max with a one-day one. Per

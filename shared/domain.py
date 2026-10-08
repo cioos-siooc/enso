@@ -714,6 +714,13 @@ def quantity(name: str) -> Quantity:
 _REGION_DIR = Path(__file__).with_name("regions")
 
 
+@functools.lru_cache(maxsize=None)
+def _load_feature(filename: str) -> dict:
+    """A region's GeoJSON Feature, parsed once for its rings and its provenance."""
+    with (_REGION_DIR / filename).open() as fh:
+        return json.load(fh)
+
+
 def _load_polygon(filename: str):
     """Outer rings of a stored region polygon and each one's holes, as stored.
 
@@ -725,9 +732,7 @@ def _load_polygon(filename: str):
     process and nothing here needs an operation on it beyond point-in-polygon,
     which `shared/mask.py` does itself.
     """
-    with (_REGION_DIR / filename).open() as fh:
-        feature = json.load(fh)
-    geom = feature["geometry"]
+    geom = _load_feature(filename)["geometry"]
     polys = geom["coordinates"] if geom["type"] == "MultiPolygon" else [geom["coordinates"]]
     polys = [p for p in polys if len(p[0]) >= 4]
     if not polys:
@@ -743,8 +748,7 @@ def _load_polygon(filename: str):
 
 def _load_outline(filename: str) -> Outline:
     """The provenance a polygon file records about itself, in its properties."""
-    with (_REGION_DIR / filename).open() as fh:
-        props = json.load(fh).get("properties") or {}
+    props = _load_feature(filename).get("properties") or {}
     if not props.get("source"):
         raise ValueError(f"{filename}: properties carry no `source`")
     return Outline(

@@ -130,7 +130,19 @@ MHW_VARIABLE_NAME = "heatwave_category"
 MHW_MIN_CATEGORY = 1
 MHW_MAX_CATEGORY = 5
 
-# The companion `mask` variable in the same file: 0 water, 1 ice, 2 land.
+# The companion `mask` variable in the same file. **Its land code changed with
+# the 2024-07-01 re-encoding too**, and the file says which it uses:
+#
+#     ..2024-06-30   0 water, 1 ice, 2 land
+#     2024-07-01..   flag_meanings "valid-water land missing ice" = 0 1 2 4
+#
+# So the land code is read from the variable's own `flag_values` /
+# `flag_meanings` (`_mhw_mask_land_code`), and this is only the fallback for a
+# file that declares neither. Hard-coding 2 made every post-2024 file look like
+# a leap-day file with no land (measured on 2026-08-01 and 2026-09-20: 8,726,860
+# cells at 1, none at 2), so each one was "repaired" from CoralTemp — harmless
+# to the output, since 251 is outside 1..5 either way, but a 10 MB read per day
+# and a hard failure whenever that day's CoralTemp file was not on disk.
 MHW_MASK_NAME = "mask"
 MHW_MASK_LAND = 2
 # What a repaired land cell is rewritten to. Any value outside 1..5 does, since
@@ -244,6 +256,33 @@ def read_daily_raw(date: dt.date, nc_dir: Path | None = None) -> np.ndarray:
     )
 
 
+def _mhw_mask_land_code(var) -> int:
+    """The code an MHW file's `mask` variable uses for land, per its own flags."""
+    meanings = str(getattr(var, "flag_meanings", "")).split()
+    values = getattr(var, "flag_values", None)
+    if "land" in meanings and values is not None:
+        values = np.atleast_1d(values)
+        if len(values) == len(meanings):
+            return int(values[meanings.index("land")])
+    return MHW_MASK_LAND
+
+
+def _read_mhw(path: Path) -> tuple[np.ndarray, bool]:
+    """`(category, carries_land)` for one MHW file, in a single open.
+
+    The category comes back raw, as `_read_raw` would return it. `carries_land`
+    is whether the file's own `mask` flags any land — see `mhw_carries_land`.
+    """
+    with _open(path) as ds:
+        cat = ds.variables[MHW_VARIABLE_NAME]
+        cat.set_auto_maskandscale(False)
+        category = np.asarray(cat[0])
+        mask = ds.variables[MHW_MASK_NAME]
+        mask.set_auto_maskandscale(False)
+        carries_land = bool((np.asarray(mask[0]) == _mhw_mask_land_code(mask)).any())
+    return category, carries_land
+
+
 def mhw_carries_land(date: dt.date, nc_dir: Path | None = None) -> bool:
     """Does this MHW file's own `mask` variable flag any land?
 
@@ -252,8 +291,7 @@ def mhw_carries_land(date: dt.date, nc_dir: Path | None = None) -> bool:
     `MHW_LAND_CODE` above. This is the whole detection: land is not optional on
     a global grid, so its absence is the file telling you it is wrong.
     """
-    mask = _read_raw(mhw_path(date, nc_dir), squeeze_time=True, var_name=MHW_MASK_NAME)
-    return bool((mask == MHW_MASK_LAND).any())
+    return _read_mhw(mhw_path(date, nc_dir))[1]
 
 
 def read_mhw_raw(
@@ -282,11 +320,11 @@ def read_mhw_raw(
     this raises rather than returning a field with continents at Cat 5. See
     `MHW_LAND_CODE` for the measurement.
     """
-    raw = _to_project_frame(
-        _read_raw(mhw_path(date, nc_dir), squeeze_time=True, var_name=MHW_VARIABLE_NAME),
-        flip_lat=False,
-    )
-    if mhw_carries_land(date, nc_dir):
+    # The category and the land check in one open: this runs once per day of
+    # every bucket rendered.
+    category, carries_land = _read_mhw(mhw_path(date, nc_dir))
+    raw = _to_project_frame(category, flip_lat=False)
+    if carries_land:
         return raw
     return _repair_mhw_land(raw, date, sst_dir)
 
@@ -643,12 +681,36 @@ def land_clim_path(source: str, clim_dir: Path | None = None) -> Path:
 
 
 def land_clim_attrs(source: str, clim_dir: Path | None = None) -> dict | None:
-    """What a built climatology file says about itself, or None if absent."""
+    """What a built climatology file says about itself, or None if absent.
+
+    Read once per version of the file: `/coverage` asks on every page load, for
+    every anomaly layer, and each read is an HDF5 open under `_NC_LOCK`. Keyed
+    on the mtime, so `CPC.cli clim` rebuilding it is seen on the next call.
+    """
     path = land_clim_path(source, clim_dir)
-    if not path.exists():
+    try:
+        mtime = path.stat().st_mtime_ns
+    except FileNotFoundError:
         return None
+    return _clim_attrs_at(path, mtime)
+
+
+@functools.lru_cache(maxsize=16)
+def _clim_attrs_at(path: Path, _mtime_ns: int) -> dict:
     with _open(path) as ds:
         return {a: ds.getncattr(a) for a in ds.ncattrs()}
+
+
+def _check_clim_baseline(ds, path: Path, period: str, window_days: int) -> None:
+    """Raise unless an open climatology file was built for this baseline."""
+    got_period = str(ds.getncattr("baseline_period"))
+    got_window = int(ds.getncattr("window_days"))
+    if got_period != period or got_window != window_days:
+        raise ValueError(
+            f"{path.name} was built for {got_period} with a {got_window}-day "
+            f"window, but domain.yml declares {period} with {window_days}. "
+            "Rebuild it with `CPC.cli clim`."
+        )
 
 
 def read_land_clim(
@@ -673,14 +735,7 @@ def read_land_clim(
             f"no land climatology for {source!r} at {path}; run `CPC.cli clim`"
         )
     with _open(path) as ds:
-        got_period = str(ds.getncattr("baseline_period"))
-        got_window = int(ds.getncattr("window_days"))
-        if got_period != period or got_window != window_days:
-            raise ValueError(
-                f"{path.name} was built for {got_period} with a {got_window}-day "
-                f"window, but domain.yml declares {period} with {window_days}. "
-                "Rebuild it with `CPC.cli clim`."
-            )
+        _check_clim_baseline(ds, path, period, window_days)
         idx = [_MMDD_INDEX[m] for m in mmdds]
         unique = sorted(set(idx))
         block = np.asarray(ds.variables[source][unique], dtype="float32")
@@ -710,14 +765,7 @@ def read_land_clim_cell(
             f"no land climatology for {source!r} at {path}; run `CPC.cli clim`"
         )
     with _open(path) as ds:
-        got_period = str(ds.getncattr("baseline_period"))
-        got_window = int(ds.getncattr("window_days"))
-        if got_period != period or got_window != window_days:
-            raise ValueError(
-                f"{path.name} was built for {got_period} with a {got_window}-day "
-                f"window, but domain.yml declares {period} with {window_days}. "
-                "Rebuild it with `CPC.cli clim`."
-            )
+        _check_clim_baseline(ds, path, period, window_days)
         column = np.ma.filled(ds.variables[source][:, gy, gx], np.nan).astype("float64")
     return {k: float(v) for k, v in zip(MMDD_KEYS, column) if np.isfinite(v)}
 
