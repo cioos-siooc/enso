@@ -189,7 +189,7 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod \
   run --rm process python -m CRW.cli repartition --dry-run
 ```
 
-Full runbook in [CLAUDE.md](CLAUDE.md).
+Full runbook in [docs/operations.md](docs/operations.md) and [docs/database.md](docs/database.md).
 
 ### Scale
 
@@ -266,10 +266,10 @@ the **max** category over a week or month (a category's mean is not a category),
 reports the **share of its ocean area** in a heatwave, and `/monthlyRanking` ranks a month
 by its mean daily category.
 
-Full endpoint notes, schema rationale and gotchas: [CLAUDE.md](CLAUDE.md). Ideas not yet built,
+Full endpoint notes, schema rationale and gotchas: [docs/](docs/), indexed from [CLAUDE.md](CLAUDE.md). Ideas not yet built,
 with what each would cost: [ROADMAP.md](ROADMAP.md).
 
 > Two conventions in this codebase are load-bearing and fail silently if broken: the
 > longitude roll onto a 0–360 grid, and the north-up→south-up flip of the climatology
 > files. Both live in `shared/fields.py`, along with the land files' opposite conventions.
-> See CLAUDE.md before touching either.
+> See [docs/ocean-data.md](docs/ocean-data.md) and [docs/land.md](docs/land.md) before touching either.

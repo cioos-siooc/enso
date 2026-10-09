@@ -34,6 +34,14 @@ Anomaly averaged over 5°S–5°N, drawn as time × longitude.
 - **Why:** the standard ENSO view. Kelvin waves and the eastward push of the warm pool show as diagonal bands months before an event peaks.
 - **Builds on:** a new `hovmoller_daily` rollup (~15k days × 190 1° longitude bins ≈ 2.9 M rows), built with the same shape as `process/CRW/regions.py`. Like `region_daily`, it should be built once after backfill and appended per date by `run`.
 - **Watch:** the anomaly must use the `has_clim = 1` identity, exactly as `region_daily.mean_sst_clim` does.
+- **Previewed 2026-10-09, not yet decided.** `explore/hovmoller/hovmoller.py` draws six plots from the dev database (the plots are gitignored; re-running takes ~2 min). The script's anomaly for Niño 3.4 matches `/region/nino34` within 0.01–0.09 °C. What they showed:
+  - **Strongest case: telling El Niño types apart.** 1997 grows out of the South American coast, 2009–10 stays near the dateline, 2023 starts at the coast and spreads west, 2026 builds eastward from the central Pacific. Neither a map nor a box mean shows this.
+  - **Band width is a trade-off.** In 2015, a single row at 0° is only a little noisier than ±5° (median day-to-day change 0.12 vs 0.08 °C), and ±5° visibly weakens the equatorial core. CPC and IRI use 5°N–5°S; ±2° looked best here. The averaging across the line goes back to Hovmöller (1949, *Tellus* 1, 62–66), and an equatorial Kelvin wave's width is the equatorial Rossby radius, ~220 km or about 2° of latitude.
+  - **Kelvin waves are mainly below the surface.** SST shows their effect, mostly in the east; CPC tracks the waves themselves with heat content (see B5).
+  - **Daily 0.05° data shows tropical instability waves** (0–5°N, 0.25° bins, Jun–Dec 2010) as clear westward streaks.
+  - **MHW extent along the line works**: 2023–24 shows the coastal heatwave spreading west, then the warm-pool heatwave after April 2024.
+  - **Lines other than the equator are weaker.** On Line P (Juan de Fuca to Station Papa, 2013–16) the Blob's offshore start and its arrival at the coast show, but the whole line mostly varies together. Other candidates discussed: the equatorial Indian Ocean and Atlantic, the Americas' Pacific coast (coastally trapped waves), and Western Australia (Ningaloo Niño).
+  - **Cost:** full record, 120°E–80°W, 1° bins: 82 s live on dev, ~4 s per year, so a precomputed rollup is still the right shape. A straight line at any angle is a SQL projection (`line_anom` in the script), cheap for short windows.
 
 ### A3. Calendar heatmap / warming stripes (S)
 Year × day-of-year, coloured by anomaly or MHW category, for the current cell or region.

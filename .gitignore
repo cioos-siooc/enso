@@ -30,6 +30,8 @@ clickhouse/logs/
 # === Generated tiles / rendered imagery ===
 out_tiles/
 front/public/tiles/
+explore/*/out/
+explore/*/cache/
 
 # === Node / Nuxt (front) ===
 node_modules/
