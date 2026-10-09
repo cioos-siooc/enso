@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getRequestIP } from 'h3'
+import { getRequestHeader, getRequestIP, parseCookies } from 'h3'
 import type { Period } from '~/utils/periods'
 
 /** Mirrors `shared/render.py`'s DEFAULT_WIDTH — see `imageUrl` below. */
@@ -23,10 +23,11 @@ export function useApi() {
   const publicBase = String(config.public.apiBaseUrl ?? '').replace(/\/+$/, '')
   const internalBase = String(config.apiInternalBaseUrl ?? '').replace(/\/+$/, '')
   const requestBase = import.meta.server ? internalBase : publicBase
-  // During SSR the API's TCP peer is this container, so without this every
+  // During SSR the API's TCP peer is this container and the posthog-js header
+  // is not set (the plugin is client-only), so without this every
   // server-rendered request is attributed in PostHog to `front`'s Docker IP.
   // Read here, in the synchronous part of setup, where the request event exists.
-  const headers = import.meta.server ? visitorHeaders() : undefined
+  const headers = import.meta.server ? visitorHeaders(String(config.public.posthogKey ?? '')) : undefined
 
   return {
     baseURL: publicBase,
@@ -53,9 +54,34 @@ export function useApi() {
   }
 }
 
-/** The visitor's IP as `X-Forwarded-For`, for the API's `client_ip()`. */
-function visitorHeaders(): Record<string, string> | undefined {
+/**
+ * The visitor's identity, for the API's `capture_event()`: what posthog-js would
+ * have sent from the browser, plus the visitor's address.
+ *
+ * The distinct_id comes from posthog-js's own cookie, `ph_<key>_posthog`, so a
+ * returning visitor's server-rendered requests land on the same person as their
+ * clicks. A first visit has no cookie yet and falls back to the IP. The IP
+ * forwards the proxy's own headers where it sent them rather than re-deriving
+ * one: a proxy that sets only `X-Real-IP` would otherwise leave `getRequestIP`
+ * the proxy's socket address, which is the Docker IP this exists to avoid.
+ */
+function visitorHeaders(posthogKey: string): Record<string, string> | undefined {
   const event = useRequestEvent()
-  const ip = event && getRequestIP(event, { xForwardedFor: true })
-  return ip ? { 'X-Forwarded-For': ip } : undefined
+  if (!event) return undefined
+  const headers: Record<string, string> = {}
+
+  if (posthogKey) {
+    const cookie = parseCookies(event)[`ph_${posthogKey.replace(/\+/g, 'PL').replace(/\//g, 'SL')}_posthog`]
+    try {
+      const id = cookie && JSON.parse(cookie).distinct_id
+      if (typeof id === 'string' && id) headers['X-PostHog-Distinct-Id'] = id
+    } catch { /* a malformed cookie is no identity, not an error */ }
+  }
+
+  const realIp = getRequestHeader(event, 'x-real-ip')?.trim()
+  const ip = getRequestIP(event, { xForwardedFor: true })
+  if (realIp && !getRequestHeader(event, 'x-forwarded-for')) headers['X-Real-IP'] = realIp
+  else if (ip) headers['X-Forwarded-For'] = ip
+
+  return Object.keys(headers).length ? headers : undefined
 }
