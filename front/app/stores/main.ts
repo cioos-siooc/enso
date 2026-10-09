@@ -322,12 +322,33 @@ export interface PacificState {
     threshold: number
     baseline: string
     /**
-     * False, always. NOAA's ONI uses a shifting 30-year base period and this
-     * archive has one fixed climatology, so the numbers do not agree to the
-     * tenth. The ribbon says so rather than publishing under the ONI's name.
+     * False, always. NOAA rates ENSO with its RONI, which subtracts the
+     * tropical-mean anomaly; this is Nino 3.4 against one fixed climatology.
+     * The ribbon says so rather than publishing under NOAA's name.
      */
     official: boolean
+    /** NOAA's RONI for its newest season, read from CPC's file; null if unreadable. */
+    noaa: (RoniSeason & { source: string, url: string }) | null
+    /** The last 24 seasons of both indices, for the ribbon popover's chart. */
+    history: EnsoSeason[]
   } | null
+}
+
+/** One season of the ribbon's index beside NOAA's RONI (null until published). */
+export interface EnsoSeason {
+  season: string
+  middle: string
+  osta: number
+  noaa: number | null
+}
+
+/** One season of NOAA's Relative Oceanic Nino Index, as CPC publishes it. */
+export interface RoniSeason {
+  /** e.g. "JAS 2026". */
+  season: string
+  /** First day of the season's middle month. */
+  middle: string
+  value: number
 }
 
 export interface Series {

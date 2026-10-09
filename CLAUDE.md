@@ -1594,10 +1594,16 @@ was asked for.** Everything else answers a question the visitor has already fram
 cell, that region, this date — and none of it says whether anything is happening out there.
 It reports one finding:
 
-- **ENSO phase**, from Nino 3.4. **This is ONI-*style*, not the ONI, and the payload says
-  so** (`official: false`, `baseline`). NOAA's index uses a base period that shifts every
-  five years; this archive has one fixed 1991–2020 climatology, so the value here runs
-  warm relative to the official one and the two will not agree to the tenth. Everything
+- **ENSO phase**, from Nino 3.4. **This is ONI-*style*, not NOAA's index, and the payload
+  says so** (`official: false`, `baseline`). Since February 2025 NOAA rates ENSO with its
+  **RONI** (Relative Oceanic Niño Index): Nino 3.4's anomaly minus the 20°S–20°N tropical
+  mean, rescaled. This archive has one fixed 1991–2020 climatology and subtracts nothing, so
+  when the tropics are warm it runs well above NOAA's (JAS 2026: +2.65 against +1.69).
+  **NOAA's own number rides along, read and never computed**: `api/modules/roni.py` fetches
+  CPC's `RONI.ascii.txt`, holds it 6 h per worker and keeps the last copy on failure;
+  `enso.noaa` is the newest season and `enso.history` the last 24 of both, which the
+  popover charts (`EnsoCompare.vue`). The API needs outbound HTTPS to
+  `cpc.ncep.noaa.gov`; without it both are null and the ribbon omits them. Everything
   else is NOAA's: overlapping three-month seasons, the ±0.5 °C threshold, the five
   consecutive seasons that separate an **episode** from **conditions** (the ribbon's
   wording turns on it), and the strength bands. Seasons are built from **complete calendar
@@ -1877,7 +1883,10 @@ marine-heatwave chart of Nino 3.4 would be a non-sequitur. The heatwave half is 
 `/state` above.
 
 Its caveats live in an on-demand popover, not in the sentences. The one that must not be
-left unsaid is that the index is not NOAA's ONI, and that is what the popover leads with.
+left unsaid is that the index is not NOAA's RONI, and that is what the popover says, with a
+chart of the two. NOAA's number is also in the ribbon itself, linking to CPC's page; it was
+tried as a line on the Nino 3.4 chart and removed, since it appeared only for one region and
+variable and read as a second measurement of the same thing.
 
 **`store.series*` are a second set of getters beside `store.active*`, and they must stay
 separate.** The `active*` pair describes the **map**, which in region scope still draws
