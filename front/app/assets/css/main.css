@@ -3,6 +3,16 @@
 
 @theme static {
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  /* The stories' faces (pages/stories). Archivo is drawn wide (font-stretch
+     112-118%), so nuxt.config asks for its width axis as well as its weights. */
+  --font-display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+  --font-serif: 'Literata', Georgia, 'Times New Roman', serif;
+  --font-data: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  /* The El Nino 2026 tracker's faces. Its page points the three roles above at
+     these, so the shared story components follow without a prop. */
+  --font-anybody: 'Anybody', 'Arial Narrow', Arial, sans-serif;
+  --font-source-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-martian: 'Martian Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
 html,

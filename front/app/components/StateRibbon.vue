@@ -16,36 +16,16 @@
        period's average is a normal worth comparing to. -->
   <div
     v-if="enso"
-    class="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-default bg-elevated/40 px-3 py-1.5 text-xs md:px-4"
+    class="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b md:gap-x-5 border-default bg-elevated/40 px-3 py-1.5 text-xs md:px-4"
   >
-    <button
-      v-if="enso"
-      type="button"
-      class="group flex cursor-pointer items-center gap-2 text-left"
-      :title="`Show ${enso.label} — ${ensoTitle}`"
-      @click="showEnso()"
-    >
-      <span
-        class="rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
-        :class="phaseClass"
-      >{{ phaseWord }}</span>
-      <span class="text-muted group-hover:text-default">
-        <!-- The month leads, not the season: it is the most recent thing the
-             archive knows and the number the rank is about. The ONI-style
-             season index is the formal basis for the phase word beside it, and
-             is said second. -->
-        <span class="font-medium text-highlighted tabular-nums">{{ signed(enso.latestMonth.value) }}{{ unit }}</span>
-        in {{ enso.label }} for {{ monthName }}<span v-if="rankPhrase">, {{ rankPhrase }}</span>
-      </span>
-    </button>
-
-    <div class="ml-auto flex items-center gap-2 text-dimmed">
+    <!-- First, so the caveats are found before the number they qualify. -->
+    <div class="flex items-center gap-1 text-dimmed">
       <span v-if="asOf" class="hidden tabular-nums sm:inline">as of {{ asOf }}</span>
 
-      <!-- On demand, not always on. The sentence above is written to be read
-           without it; this is where the caveats that would otherwise clutter
-           it live — chiefly that the index is not NOAA's ONI, which is the one
-           thing here that would be wrong to leave unsaid. -->
+      <!-- On demand, not always on. The sentence beside it is written to be
+           read without it; this is where the caveats that would otherwise
+           clutter it live — chiefly that the index is not NOAA's official one,
+           which is the one thing here that would be wrong to leave unsaid. -->
       <UPopover :ui="{ content: 'max-w-sm' }">
         <UButton
           icon="i-mdi-information-outline"
@@ -67,15 +47,70 @@
               NOAA calls five in a row an episode.
             </p>
             <p v-if="enso" class="text-dimmed">
-              This is not NOAA's official ONI. That index uses a base period that
-              shifts every five years; this archive has one fixed
-              {{ enso.baseline }} climatology, so the value here runs warmer than
-              the official one and the two will not agree to the tenth.
+              This is not NOAA's official index. NOAA rates El Niño and La Niña
+              with its Relative Oceanic Niño Index (RONI), which measures Niño 3.4
+              against the tropical ocean around it. The number here measures it
+              against a fixed {{ enso.baseline }} average, so when the whole
+              tropical ocean is warm it runs higher than NOAA's.
+              <template v-if="enso.noaa">
+                NOAA's RONI for {{ enso.noaa.season }} is
+                <span class="tabular-nums">{{ signed(enso.noaa.value) }}{{ unit }}</span>;
+                its newest values can change for up to two months.
+              </template>
             </p>
+            <figure v-if="enso.history?.length" class="space-y-1.5">
+              <EnsoCompare :history="enso.history" :threshold="enso.threshold" :colors="COLORS" />
+              <figcaption class="flex flex-wrap gap-x-3 gap-y-0.5">
+                <span class="flex items-center gap-1.5">
+                  <span class="h-0.5 w-3 rounded" :style="{ background: COLORS.osta }" />OSTA, vs {{ enso.baseline }}
+                </span>
+                <span class="flex items-center gap-1.5">
+                  <span class="h-0.5 w-3 rounded" :style="{ background: COLORS.noaa }" />NOAA RONI
+                </span>
+                <span class="text-dimmed">three-month means, dashed at +{{ enso.threshold }}{{ unit }}</span>
+              </figcaption>
+            </figure>
           </div>
         </template>
       </UPopover>
     </div>
+
+    <button
+      v-if="enso"
+      type="button"
+      class="group flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left md:flex-none"
+      :title="`Show ${enso.label} — ${ensoTitle}`"
+      @click="showEnso()"
+    >
+      <span
+        class="rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
+        :class="phaseClass"
+      >{{ phaseWord }}</span>
+      <span class="text-muted group-hover:text-default">
+        <!-- The month leads, not the season: it is the most recent thing the
+             archive knows and the number the rank is about. The ONI-style
+             season index is the formal basis for the phase word beside it, and
+             is said second. -->
+        <span class="font-medium text-highlighted tabular-nums">{{ signed(enso.latestMonth.value) }}{{ unit }}</span>
+        in {{ enso.label }} for {{ monthName }}<span v-if="rankPhrase">, {{ rankPhrase }}</span>
+      </span>
+    </button>
+
+    <!-- NOAA's official number beside OSTA's own, because the two differ by
+         most of a degree in a year when the whole tropics are warm, and the news
+         quotes NOAA's. A link to CPC's page, not a selection: it is their index. -->
+    <a
+      v-if="enso.noaa"
+      :href="enso.noaa.url"
+      target="_blank"
+      rel="noopener"
+      class="w-full text-muted hover:text-default md:w-auto"
+      :title="`${enso.noaa.source}: Relative Oceanic Niño Index for ${enso.noaa.season}`"
+    >
+      NOAA RONI <span class="font-medium text-highlighted tabular-nums">{{ signed(enso.noaa.value) }}{{ unit }}</span>
+      for {{ enso.noaa.season }}
+    </a>
+
   </div>
 </template>
 
@@ -88,6 +123,9 @@ const store = useMainStore()
 const enso = computed(() => store.pacific?.enso ?? null)
 
 const unit = '°C'
+
+/** The popover chart's two lines: the ribbon's phase red, and NOAA's in sky. */
+const COLORS = { osta: '#f87171', noaa: '#38bdf8' }
 
 /** The date the finding is as of: the archive's last day. */
 const asOf = computed(() => {

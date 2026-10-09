@@ -26,6 +26,7 @@ import datetime as dt
 
 from shared.domain import regions, variable
 
+from . import roni
 from .clickhouse_helpers import DATABASE, client
 from .timeseries import MMDD_SQL, data_through
 
@@ -136,16 +137,32 @@ def _run_length(seasons: list[float], sign: int) -> int:
     return n
 
 
+HISTORY = 24
+
+
+def _history(seasons: list[tuple[dt.date, float]]) -> list[dict]:
+    noaa = {r["middle"]: r["value"] for r in roni.seasons() or []}
+    return [
+        {
+            "season": f"{_SEASONS[middle.month - 1]} {middle.year}",
+            "middle": str(middle),
+            "osta": round(value, 2),
+            "noaa": noaa.get(str(middle)),
+        }
+        for middle, value in seasons[-HISTORY:]
+    ]
+
+
 def enso_state() -> dict | None:
     """The ENSO phase, ONI-style, from the Nino 3.4 anomaly.
 
-    **This is not the ONI, and the payload says so.** NOAA's Oceanic Nino Index
-    is the 3-month running mean of the Nino 3.4 SST anomaly against a *shifting*
-    30-year base period, updated every five years so a warming trend does not
-    accumulate into the index. This archive carries one fixed 1991-2020
-    climatology, so the index here runs warm relative to the official one by
-    however much the tropical Pacific has warmed since that baseline's centre,
-    and the two will not agree to the tenth. Everything else is NOAA's: the
+    **This is not NOAA's index, and the payload says so.** Since February 2025
+    NOAA rates ENSO with its Relative Oceanic Nino Index (RONI): the Nino 3.4
+    anomaly minus the tropical-mean anomaly, rescaled, so warming the whole
+    tropics shares is taken out. This archive carries one fixed 1991-2020
+    climatology and subtracts nothing, so in a year when the tropics are warm
+    the index here runs well above NOAA's (+2.65 against +1.69 for JAS 2026).
+    NOAA's own number rides along as `noaa`, read from CPC's file. Everything else is NOAA's: the
     three-month overlapping seasons, the +/-0.5 degC threshold, the five
     consecutive seasons that separate an *episode* from *conditions*, and the
     strength bands.
@@ -225,6 +242,12 @@ def enso_state() -> dict | None:
         "baseline": BASELINE,
         # Not NOAA's index. See the docstring.
         "official": False,
+        # NOAA's official index for its newest season, shown beside this one.
+        # None when CPC's file could not be read; the ribbon then omits it.
+        "noaa": roni.latest(),
+        # The last HISTORY seasons of both, for the popover's chart. `noaa` is
+        # null for a season CPC has not published yet.
+        "history": _history(seasons),
     }
 
 
