@@ -25,6 +25,9 @@ tmin and precipitation, their anomalies against a 1991–2020 climatology built 
 precipitation as a percentage of normal. It is drawn over whichever ocean layer is showing,
 cut exactly to CoralTemp's coastline, and a click on land charts the land cell.
 
+**Live at <https://osta.cioospacific.ca>** (API at `https://mhw-api.cioospacific.ca`). Prod
+runs the same global v2.1 as dev.
+
 ## Services
 
 | Service | Description | Port |
