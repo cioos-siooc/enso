@@ -1,0 +1,80 @@
+[
+ {
+  "name": "hero",
+  "query": "v=anom&p=monthly&d=2026-01-01&at=-5.07,-81.28",
+  "camera": {
+   "center": [
+    -125,
+    -4
+   ],
+   "zoom": 1.65
+  },
+  "hideOverlays": true,
+  "clip": "map",
+  "frames": [
+   "2026-01-01",
+   "2026-02-01",
+   "2026-03-01",
+   "2026-04-01",
+   "2026-05-01",
+   "2026-06-01",
+   "2026-07-01",
+   "2026-08-01",
+   "2026-09-01"
+  ],
+  "storage": {
+   "enso.scale.anom": "{\"vmin\":-5,\"vmax\":5}"
+  }
+ },
+ {
+  "name": "nino34",
+  "query": "v=anom&p=monthly&d=2026-09-01&r=nino34"
+ },
+ {
+  "name": "peru",
+  "query": "v=mhw&p=daily&d=2026-09-30&at=-5.07,-81.28",
+  "camera": {
+   "center": [
+    -84,
+    -6
+   ],
+   "zoom": 3.4
+  }
+ },
+ {
+  "name": "galapagos",
+  "query": "v=anom&p=monthly&d=2026-09-01&c=1997-09-01&at=-0.52,-91.72",
+  "camera": {
+   "center": [
+    -88,
+    -4
+   ],
+   "zoom": 3.1
+  },
+  "storage": {
+   "enso.scale.anom": "{\"vmin\":-5,\"vmax\":5}"
+  }
+ },
+ {
+  "name": "indonesia",
+  "query": "v=anom&p=monthly&d=2026-09-01&land=precip&lm=difference&at=-2.21,113.92",
+  "camera": {
+   "center": [
+    110,
+    -1
+   ],
+   "zoom": 3.4
+  }
+ },
+ {
+  "name": "global",
+  "query": "v=anom&p=monthly&d=2026-09-01&r=global",
+  "storage": {
+   "enso.map.projection": "mercator"
+  }
+ },
+ {
+  "name": "bc",
+  "query": "v=anom&p=monthly&d=2026-09-01&r=nino34&r2=pacific_bioregions"
+ }
+]

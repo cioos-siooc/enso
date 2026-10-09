@@ -7,6 +7,30 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
+  // The stories' faces. @nuxt/fonts (through Nuxt UI) resolves families named
+  // in the CSS on its own, but only at their default width: Archivo's headings
+  // are set wide, which needs the `wdth` axis requested explicitly.
+  fonts: {
+    families: [
+      {
+        name: 'Archivo',
+        provider: 'google',
+        weights: ['400 800'],
+        providerOptions: { google: { experimental: { variableAxis: { wdth: [['62', '125']] } } } },
+      },
+      { name: 'Literata', provider: 'google', weights: [400, 600], styles: ['normal', 'italic'] },
+      { name: 'IBM Plex Mono', provider: 'google', weights: [400, 500] },
+      {
+        name: 'Anybody',
+        provider: 'google',
+        weights: ['500 900'],
+        providerOptions: { google: { experimental: { variableAxis: { wdth: [['75', '150']] } } } },
+      },
+      { name: 'Source Serif 4', provider: 'google', weights: [400, 600], styles: ['normal', 'italic'] },
+      { name: 'Martian Mono', provider: 'google', weights: [400, 500] },
+    ],
+  },
+
   app: {
     head: {
       title: 'Ocean Surface Temperature Atlas (OSTA)',

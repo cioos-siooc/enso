@@ -18,6 +18,8 @@ venv/
 
 # === Downloaded data (the OISST archive lives here, untracked) ===
 data/
+# ...except the story pages' measured numbers, which the build reads.
+!front/app/data/
 
 # === ClickHouse local volumes ===
 clickhouse/data/
