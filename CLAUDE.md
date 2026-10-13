@@ -38,7 +38,7 @@ not intended to merge).
 | [docs/imagery.md](docs/imagery.md) | value-encoded WebP frames, `raster-color`, categorical `mhw` |
 | [docs/frontend.md](docs/frontend.md) | components, store getters, URL state, compare modes, phone layout, CSV, colour range, map, **story pages (the `<StoryScroll>` template)** |
 | [docs/analytics.md](docs/analytics.md) | PostHog: what is and is deliberately not instrumented |
-| [docs/testing.md](docs/testing.md) | CI, `CRW.cli check`, driving the app in headless Chromium |
+| [docs/testing.md](docs/testing.md) | tests, `CRW.cli check`, driving the app in headless Chromium |
 | [docs/gotchas.md](docs/gotchas.md) | every gotcha in full (one-liners below) |
 | [docs/verification.md](docs/verification.md) | what has been verified, with numbers — history, not instructions |
 
@@ -68,6 +68,9 @@ docker compose -f docker-compose.dev.yml --env-file .env.dev up -d
 
 # prod — see docs/operations.md for the seven divergences before deploying
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+
+# preview — the front end alone, reading the production API (for sharing a branch)
+docker compose -f docker-compose.preview.yml --env-file .env.preview up -d --build
 
 # the pipeline (process idles on sleep infinity)
 docker compose -f docker-compose.dev.yml --env-file .env.dev run --rm process \
@@ -173,7 +176,7 @@ touching anything.
 
 ## Tests
 
-CI runs pytest (`uv run --project process pytest tests`) and, in `front/`, lint + vitest +
-`nuxt build`. `vue-tsc` is not gated. Host `front/node_modules` is a root-owned Docker mount:
+There is no CI; run pytest (`uv run --project process pytest tests`) and, in `front/`, lint +
+vitest + `nuxt build` by hand. `vue-tsc` is not gated. Host `front/node_modules` is a root-owned Docker mount:
 copy `front/` to a scratch dir to run tooling. Browser checks: headless Chromium recipe in
 [docs/testing.md](docs/testing.md) — screenshot the map, never read its canvas back.

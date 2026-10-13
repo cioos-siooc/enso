@@ -1,0 +1,40 @@
+# Preview stack: the front end alone, built from this checkout and reading the
+# production API. For sharing a branch's frontend from any host — there is no
+# api, db-ch or process here, so API changes on the branch do not show.
+#
+#   docker compose -f docker-compose.preview.yml --env-file .env.preview up -d --build
+#
+# The container gets only the variables listed below, not the whole env file,
+# so a PostHog key that finds its way into .env.preview is still not passed:
+# preview visits must not be counted as visitors.
+
+name: enso-preview
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  front:
+    logging: *logging
+    build:
+      context: ./front
+      target: production
+      args:
+        - NUXT_PUBLIC_API_BASE_URL=${NUXT_PUBLIC_API_BASE_URL:-https://mhw-api.cioospacific.ca}
+        - NUXT_PUBLIC_VERSION=${NUXT_PUBLIC_VERSION:-preview}
+    ports:
+      - "${FRONT_PORT:-3000}:3000"
+    environment:
+      - NUXT_PUBLIC_API_BASE_URL=${NUXT_PUBLIC_API_BASE_URL:-https://mhw-api.cioospacific.ca}
+      # SSR's API URL. There is no `api` service on this network, so the Nitro
+      # server fetches the public API too. The NUXT_ name, not prod's
+      # API_INTERNAL_BASE_URL: nuxt.config.ts reads the plain name only at build
+      # time, which baked in http://api:4000; the NUXT_ name overrides it at run time.
+      - NUXT_API_INTERNAL_BASE_URL=${NUXT_PUBLIC_API_BASE_URL:-https://mhw-api.cioospacific.ca}
+      - NUXT_PUBLIC_MAPBOX_TOKEN=${NUXT_PUBLIC_MAPBOX_TOKEN:?set NUXT_PUBLIC_MAPBOX_TOKEN or the map renders blank}
+      - NUXT_PUBLIC_VERSION=${NUXT_PUBLIC_VERSION:-preview}
+    command: node .output/server/index.mjs
+    restart: unless-stopped

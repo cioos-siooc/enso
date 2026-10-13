@@ -88,6 +88,18 @@ gotcha below is unaffected by the count. `front` runs the built Nitro entry
 (`node .output/server/index.mjs`) rather than `npm run start`, which is `nuxt preview`, a
 dev wrapper that re-reads `.env` and needs the full nuxt devDependency tree at runtime.
 
+**Start a preview (the front end alone, on production data):**
+```bash
+docker compose -f docker-compose.preview.yml --env-file .env.preview up -d --build
+```
+For sharing a branch's frontend from any host: `front` only, built from the checkout, with
+both the browser and SSR reading the production API — so API changes on the branch do not
+show. `.env.preview.example` is the template; only `NUXT_PUBLIC_MAPBOX_TOKEN` is required.
+SSR's URL is set as **`NUXT_API_INTERNAL_BASE_URL`**, not prod's `API_INTERNAL_BASE_URL`:
+`nuxt.config.ts` reads the plain name only at build time, which baked in `http://api:4000`.
+The container gets only the variables the file lists, so PostHog stays off. Verified
+2026-10-13: SSR rendered "as of 12 Oct 2026" from the production API and the map drew.
+
 **Pipeline CLI** (the `process` service idles on `sleep infinity` and is driven on demand):
 ```bash
 docker compose -f docker-compose.dev.yml --env-file .env.dev run --rm process \

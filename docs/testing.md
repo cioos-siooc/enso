@@ -1,18 +1,19 @@
-# Tests, CI and browser verification
+# Tests and browser verification
 
-CI, `CRW.cli check`, and how to drive the app in headless Chromium.
+The tests, `CRW.cli check`, and how to drive the app in headless Chromium.
 
 ## Tests and CI
 
-`.github/workflows/ci.yml` runs **only on pushes to the `preview` branch** — never on `main`
-or on PRs, since production is built and hosted elsewhere. It runs **pytest** over `shared/`
-and `CRW.checks` (`uv run --project process pytest tests`); in `front/`, **lint, vitest and
-`nuxt build`**; and **`preview`**, which deploys the branch's frontend to GitHub Pages at
-**<https://cioos-siooc.github.io/enso/>**, reading the production API. That build is a static
-client-only one (`OSTA_SPA=1` turns `ssr` off in `nuxt.config.ts`; Pages has no server) under
-the base path `/enso/`, so a plain `src`/`href` to a `public/` file must go through
-`withAppBase()` (`app/utils/base.ts`) or it 404s there — NuxtLink adds the base itself. Its
-Mapbox token is the repo secret `NUXT_PUBLIC_MAPBOX_TOKEN`; PostHog is deliberately unset.
+**There is no CI.** `.github/workflows/ci.yml` was removed on 2026-10-13: production is built
+and hosted elsewhere, and a branch's frontend is shared with `docker-compose.preview.yml`
+(docs/operations.md). Run the checks by hand: **pytest** over `shared/` and `CRW.checks`
+(`uv run --project process pytest tests`) and, in `front/`, **lint, vitest and `nuxt build`**.
+
+**A plain `src`/`href` to a `public/` file goes through `withAppBase()`**
+(`app/utils/base.ts`), so the app also works under a base path (`NUXT_APP_BASE_URL`, e.g.
+`/enso/`); NuxtLink and the router add the base themselves. A bare `/osta-logo.svg` is a 404
+there. Verified 2026-10-13 with a static build served under `/enso/`.
+
 Type checking is not gated: `vue-tsc` reports ~100 errors on the existing
 code (mostly `mapbox-gl` having no bundled types, and Pinia getters losing inference in
 `main.ts`).
@@ -22,7 +23,7 @@ code (mostly `mapbox-gl` having no bundled types, and Pinia getters losing infer
   test; editing only the TypeScript week rule fails 20 cases.
 - **The Python tests use synthetic arrays, never NetCDF.** The orientation and leap-day
   tests build 3600×7200 grids in memory and monkeypatch `_read_raw`.
-- **CI installs with `npm install --legacy-peer-deps`, not `npm ci`**, the same as
+- **Install with `npm install --legacy-peer-deps`, not `npm ci`**, the same as
   `front/Dockerfile`. The committed lock had drifted out of sync with `package.json` and
   was regenerated that way.
 - **Running front tooling on the host:** `front/node_modules` on the host is an empty,
