@@ -41,7 +41,9 @@ app/stores/main.ts                 Pinia store
 **`StateRibbon.vue` is the answer to the question a visitor arrives with**, before they have
 touched a control: the ENSO phase, in one sentence. It sits under the header rather than in
 the dock because it describes the whole basin and must not move when the selection does.
-It is a button, and sets the **variable as well as the region** — reading "El Niño" and landing on a
+Story pages (`/stories/*`) hide it, since each tells its own state; there the header's logo
+and title become a link back to `/` (on the map they stay inert — a link would wipe the URL
+state). The ribbon is a button, and sets the **variable as well as the region** — reading "El Niño" and landing on a
 marine-heatwave chart of Nino 3.4 would be a non-sequitur. The heatwave half is gone; see
 `/state` above.
 
