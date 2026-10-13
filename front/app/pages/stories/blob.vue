@@ -86,6 +86,11 @@ const REFERENCES: Record<string, StoryReference> = {
     full: 'Dying sea birds washing ashore in Bay Area due to effects of warming ocean. CNN, via CTV News, September 17, 2026.',
     url: 'https://www.ctvnews.ca/climate-and-environment/article/dying-sea-birds-washing-ashore-in-bay-area-due-to-effects-of-warming-ocean/',
   },
+  ctvSwordfish2026: {
+    short: 'CTV News, October 2026',
+    full: 'Yamoah, M. 2026. What is a six-foot swordfish doing in B.C.? El Niño may hold the answer. CTV News, October 8, 2026.',
+    url: 'https://www.ctvnews.ca/vancouver/vancouver-island/article/what-is-a-six-foot-swordfish-doing-in-bc-el-nino-may-hold-the-answer/',
+  },
   noaaHab: {
     short: 'NOAA National Ocean Service 2016',
     full: 'NOAA National Ocean Service. 2016. West Coast harmful algal bloom.',
@@ -284,6 +289,7 @@ const steps: StoryStep[] = [
     body: [
       'Warm water carried southern species north. Albacore tuna were unusually abundant northwest of Haida Gwaii in 2014, and ocean sunfish turned up in BC waters.',
       'By June 2017 the surface had cooled, as the map shows, but pyrosomes, colonies of gelatinous animals, swarmed along the whole BC coast, clogging fishing gear and washing up on Vancouver Island and Haida Gwaii. DFO scientists suspect the warm years behind them.',
+      'It may be starting again. This fall a swordfish almost two metres long, a fish of warmer seas, washed up on Haida Gwaii, and El Niño may be the reason.',
     ],
     photo: {
       src: '/story-assets/blob/img/pyrosomes.webp',
@@ -291,7 +297,7 @@ const steps: StoryStep[] = [
       credit: 'Alaina Dowling sorting a trawl catch of mostly pyrosomes, spring 2017. Photo: Linnea Flostrand, DFO',
       href: 'https://waves-vagues.dfo-mpo.gc.ca/library-bibliotheque/40717914.pdf',
     },
-    refs: ['dfo2015', 'dfo2017'],
+    refs: ['dfo2015', 'dfo2017', 'ctvSwordfish2026'],
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '2017-06-01', region: 'pacific_bioregions' },
     camera: { center: [-131.5, 52.5], zoom: 4.6, pitch: 40, bearing: 15 },
   },
