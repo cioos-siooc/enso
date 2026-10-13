@@ -96,7 +96,7 @@
             ]"
           >
             <figure v-if="s.photo" class="-mx-6 -mt-6 mb-5 overflow-hidden rounded-t-2xl md:-mx-7 md:-mt-7">
-              <img :src="s.photo.src" :alt="s.photo.alt" class="max-h-52 w-full object-cover" loading="lazy">
+              <img :src="withAppBase(s.photo.src)" :alt="s.photo.alt" class="max-h-52 w-full object-cover" loading="lazy">
               <figcaption class="bg-black/40 px-4 py-1.5 font-data text-[0.65rem] text-white/60">
                 <a :href="s.photo.href" target="_blank" rel="noopener" class="underline-offset-2 hover:underline">{{ s.photo.credit }}</a>
               </figcaption>
@@ -131,7 +131,7 @@
             </p>
             <a
               v-if="!s.noLink"
-              :href="viewLink(s.view)"
+              :href="withAppBase(viewLink(s.view))"
               target="_blank"
               rel="noopener"
               class="mt-4 inline-flex items-center gap-1 font-sans text-sm font-medium text-orange-300 hover:text-orange-200"

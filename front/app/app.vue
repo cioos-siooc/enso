@@ -10,7 +10,7 @@
           class="flex min-w-0 items-center gap-2 md:gap-3"
           :class="onStory && 'transition-opacity hover:opacity-80'"
         >
-          <img src="/osta-logo.svg" alt="" class="size-6 shrink-0 md:size-8" >
+          <img :src="withAppBase('/osta-logo.svg')" alt="" class="size-6 shrink-0 md:size-8" >
           <div class="min-w-0">
             <h1 class="truncate text-sm font-semibold leading-tight">
               <!-- A phone has room for the abbreviation beside the CIOOS logo, not
@@ -39,7 +39,7 @@
           class="shrink-0 opacity-90 transition-opacity hover:opacity-100"
           aria-label="CIOOS Pacific"
         >
-          <img src="/cioospacific-logo.svg" alt="CIOOS Pacific" class="h-6 w-auto md:h-8" >
+          <img :src="withAppBase('/cioospacific-logo.svg')" alt="CIOOS Pacific" class="h-6 w-auto md:h-8" >
         </a>
         <!-- <UBadge v-if="store.coverage" variant="subtle" color="neutral">
           {{ store.coverage.start }} &ndash; {{ store.coverage.end }}

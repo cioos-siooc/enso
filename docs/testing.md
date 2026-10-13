@@ -7,10 +7,13 @@ CI, `CRW.cli check`, and how to drive the app in headless Chromium.
 `.github/workflows/ci.yml` runs **only on pushes to the `preview` branch** — never on `main`
 or on PRs, since production is built and hosted elsewhere. It runs **pytest** over `shared/`
 and `CRW.checks` (`uv run --project process pytest tests`); in `front/`, **lint, vitest and
-`nuxt build`**; and **`preview`**, which builds the frontend against the production API,
-serves it, and attaches desktop and phone screenshots of the front page
-(`.github/scripts/screenshot.mjs`) to the run. Its Mapbox token is the repo secret
-`NUXT_PUBLIC_MAPBOX_TOKEN`; PostHog is deliberately unset. Type checking is not gated: `vue-tsc` reports ~100 errors on the existing
+`nuxt build`**; and **`preview`**, which deploys the branch's frontend to GitHub Pages at
+**<https://cioos-siooc.github.io/enso/>**, reading the production API. That build is a static
+client-only one (`OSTA_SPA=1` turns `ssr` off in `nuxt.config.ts`; Pages has no server) under
+the base path `/enso/`, so a plain `src`/`href` to a `public/` file must go through
+`withAppBase()` (`app/utils/base.ts`) or it 404s there — NuxtLink adds the base itself. Its
+Mapbox token is the repo secret `NUXT_PUBLIC_MAPBOX_TOKEN`; PostHog is deliberately unset.
+Type checking is not gated: `vue-tsc` reports ~100 errors on the existing
 code (mostly `mapbox-gl` having no bundled types, and Pinia getters losing inference in
 `main.ts`).
 

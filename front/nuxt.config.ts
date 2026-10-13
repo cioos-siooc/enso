@@ -3,6 +3,11 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-01-01',
   devtools: { enabled: true },
 
+  // The `preview` branch's GitHub Pages deploy (.github/workflows/ci.yml) is a
+  // static client-only build: Pages has no server to render on, and a page
+  // prerendered at build time would freeze the data at that day. Prod is SSR.
+  ssr: process.env.OSTA_SPA !== '1',
+
   modules: ['@nuxt/ui', '@pinia/nuxt', '@nuxt/eslint'],
 
   css: ['~/assets/css/main.css'],
@@ -34,7 +39,7 @@ export default defineNuxtConfig({
   app: {
     head: {
       title: 'Ocean Surface Temperature Atlas (OSTA)',
-      link: [{ rel: 'icon', type: 'image/svg+xml', href: '/osta-logo.svg' }],
+      link: [{ rel: 'icon', type: 'image/svg+xml', href: `${(process.env.NUXT_APP_BASE_URL || '/').replace(/\/+$/, '')}/osta-logo.svg` }],
     },
   },
 
