@@ -2,8 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, v2.0]
-  pull_request:
+    branches: [preview]
 
 jobs:
   python:
@@ -36,3 +35,60 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+  # The branch's frontend on prod data: build it, serve it, screenshot the front
+  # page and attach the PNGs to the run. Nothing here talks to ClickHouse, so
+  # API changes on the branch do not show — the page reads the production API
+  # (which allows any origin). PostHog is left blank on purpose, so CI is not
+  # counted as visitors.
+  preview:
+    name: front/ (preview screenshot)
+    runs-on: ubuntu-latest
+    env:
+      NUXT_PUBLIC_API_BASE_URL: https://mhw-api.cioospacific.ca
+      # SSR's API URL. Read at build time by nuxt.config.ts and, under the NUXT_
+      # name, at run time — both point at prod, since there is no `api` service.
+      API_INTERNAL_BASE_URL: https://mhw-api.cioospacific.ca
+      NUXT_API_INTERNAL_BASE_URL: https://mhw-api.cioospacific.ca
+      # Empty on PRs from forks, which then render a blank map.
+      NUXT_PUBLIC_MAPBOX_TOKEN: ${{ secrets.NUXT_PUBLIC_MAPBOX_TOKEN }}
+      NUXT_PUBLIC_VERSION: ci-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+      - run: npm install --legacy-peer-deps
+        working-directory: front
+      - run: npm run build
+        working-directory: front
+      - name: Serve the build
+        working-directory: front
+        run: |
+          PORT=3000 node .output/server/index.mjs > "$RUNNER_TEMP/front.log" 2>&1 &
+          for i in $(seq 60); do
+            curl -sf -o /dev/null http://localhost:3000 && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/front.log"
+          exit 1
+      # Playwright is not a dependency of front/; it gets a scratch dir of its own.
+      - name: Screenshot
+        working-directory: ${{ runner.temp }}
+        env:
+          PREVIEW_OUT: ${{ github.workspace }}/screenshots
+        run: |
+          mkdir -p shot "$PREVIEW_OUT" && cd shot
+          cp "$GITHUB_WORKSPACE/.github/scripts/screenshot.mjs" .
+          npm init -y > /dev/null
+          npm install playwright
+          npx playwright install --with-deps chromium
+          node screenshot.mjs
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-screenshots
+          path: screenshots/
+          if-no-files-found: warn

@@ -4,9 +4,13 @@ CI, `CRW.cli check`, and how to drive the app in headless Chromium.
 
 ## Tests and CI
 
-`.github/workflows/ci.yml` runs two jobs on push and PR: **pytest** over `shared/` and
-`CRW.checks` (`uv run --project process pytest tests`), and, in `front/`, **lint, vitest and
-`nuxt build`**. Type checking is not gated: `vue-tsc` reports ~100 errors on the existing
+`.github/workflows/ci.yml` runs **only on pushes to the `preview` branch** — never on `main`
+or on PRs, since production is built and hosted elsewhere. It runs **pytest** over `shared/`
+and `CRW.checks` (`uv run --project process pytest tests`); in `front/`, **lint, vitest and
+`nuxt build`**; and **`preview`**, which builds the frontend against the production API,
+serves it, and attaches desktop and phone screenshots of the front page
+(`.github/scripts/screenshot.mjs`) to the run. Its Mapbox token is the repo secret
+`NUXT_PUBLIC_MAPBOX_TOKEN`; PostHog is deliberately unset. Type checking is not gated: `vue-tsc` reports ~100 errors on the existing
 code (mostly `mapbox-gl` having no bundled types, and Pinia getters losing inference in
 `main.ts`).
 
