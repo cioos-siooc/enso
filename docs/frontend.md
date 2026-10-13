@@ -197,6 +197,93 @@ written (the only one was a draft placeholder). Gone with them: `StoryPicker`, `
 `store.currentView()`/`mapCamera`/`cameraRequest`, and playback's `until` bound. A
 `story=` link now opens on its other keys and the story key is dropped from the URL.
 
+### Story pages (`pages/stories/`)
+
+Stories are pages of their own, not a mode of the app. Both are scrolling map stories:
+`<StoryScroll>` (`components/story/Scroll.vue`) keeps the live `FieldMap` fixed behind the
+page while cards scroll over it. As a step reaches the middle of the screen, the map switches
+to that step's view and the camera flies there, in the manner of Mapbox's storytelling
+template. `pages/stories/blob.vue` is the worked example (2026-10-12); `el-nino-2026.vue` is
+the same template updated monthly from its runbook (`stories/el-nino-2026/UPDATE.md`), with
+its readouts and opening scrub read from `data/stories/el-nino-2026.json`. The older
+article components (`StoryChapter`, `StoryFigure`, `StoryPlayer`, `StoryWire`, …) are no
+longer used by either page.
+
+A new scrolling story is a page that supplies data and nothing else:
+
+```vue
+<template>
+  <div>
+    <StoryScroll :steps="steps" :references="REFERENCES">
+      <template #outro><!-- buttons, a "Data and credits" panel --></template>
+    </StoryScroll>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { STORY_BASE, type StoryReference, type StoryStep } from '~/utils/story'
+const REFERENCES: Record<string, StoryReference> = { dfo2015: { short, full, url } }
+const steps: StoryStep[] = [
+  { id: 'intro', align: 'center', eyebrow, title, body: [...], view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '2013-09-01', region: 'ne_pacific' }, camera: { center: [-152, 36], zoom: 1.9 } },
+  // ...cards: readout, quote, photo, refs, scrub, figure
+  { id: 'outro', align: 'center', outro: true, ... },
+]
+</script>
+```
+
+`StoryStep` in `utils/story.ts` documents every field. The mechanics:
+
+- **A step's `view` goes through `store.applyView`**, the same path a pasted link takes, and
+  the card's "Open this view in OSTA" link is built from that same view (`viewLink`), so the
+  two cannot disagree. **Spread `STORY_BASE` into every view.** `applyView` leaves anything
+  a view does not mention alone, so without it the land overlay, B or compare would carry
+  over from the previous step. The story drives the app's own store, so its links open in a
+  new tab rather than navigating in place.
+- **`camera` longitudes are signed** (−180…180), as Mapbox takes them, not the API's 0–360.
+  On a phone every zoom drops by 0.7.
+- **A `scrub` step is monthly only.** It is 4.2 screens tall, its card stays pinned, and
+  scrolling picks the month. Its frames are prefetched as the reader reaches the step before
+  it, at ~850 KB each at the app's 4096 px width: the Blob's 40 months are ~34 MB. Keep
+  scrubs short; a lighter image tier is not possible for history (ROADMAP's constraints).
+- **The corner key is read from the store** (`stopsFor` / `scaleFor`), so it shows the range
+  actually in force, including one the reader set in the app, and adds a row for the land
+  overlay when a step turns it on. A step cannot set a colour range: the URL has no key for
+  one, so its link would open on a different scale. Anomalies past ±3 °C saturate.
+- **Swipe compare is not drawn**: the story has one map. A view's `compareDate` still goes
+  into the card's link, so "Open this view" can open both dates side by side (the El Niño
+  story's Galápagos card); show the two dates as consecutive steps on the same camera.
+- **`figure`** names a page slot drawn inside the card, for what the map cannot show (the
+  El Niño race chart); `wide` gives that card more room. Keep every card shorter than a
+  laptop screen.
+- **`line`** draws a dashed line with a dot per vertex for that step only (the Blob's Line P),
+  labelled with a DOM marker. A single vertex is a labelled dot for a place (Kamloops on the
+  Blob's land step). It is not part of the view, so the card's link leaves it off.
+- **A scrub's `values`**, one per month, make its readout follow the clock instead of
+  counting up.
+- **Readouts count up** when their step arrives (instantly under `prefers-reduced-motion`,
+  which also swaps flights for jumps). Numbers are formatted `en-GB`, as SSR requires.
+- **Photos** go in `public/story-assets/<story>/img/` as WebP, at most ~1200 px, re-encoded
+  so EXIF is dropped (phone photos carry GPS). Each needs `credit` and an `href` to where
+  it came from.
+
+What the stories are agreed to do:
+
+- **Lead with what is happening now**; a past event is the comparison (the Blob story opens
+  on September 2025 breaking its records).
+- **Canadian sources and examples first**, mixed with US and other ones. For Pacific
+  impacts, DFO's annual *State of the Physical, Biological and Selected Fishery Resources of
+  Pacific Canadian Marine Ecosystems* reports (Can. Tech. Rep. Fish. Aquat. Sci., one per
+  year) come first; their web pages have moved, but the PDFs at `waves-vagues.dfo-mpo.gc.ca`
+  still resolve.
+- **Every claim beyond the map links its source on its own card** (`refs`), not in a list
+  at the end. The outro keeps only data and credits.
+- **Photos must be cleared for reuse.** US federal agency photos (USFWS, NOAA) are public
+  domain. DFO photos are Crown copyright and need DFO's or the photographer's agreement.
+  Press photos (CBC, Alamy) are not usable.
+- **The data are NOAA's**: OSTA draws them; it never holds "records" of its own.
+- **Check it in headless Chromium, a screenshot per step** (docs/testing.md), at desktop
+  and phone widths.
+
 ### Downloading what is plotted
 
 Two download buttons, both exporting **the data the chart already has** rather than issuing

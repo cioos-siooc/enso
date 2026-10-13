@@ -44,18 +44,21 @@ const props = withDefaults(defineProps<{
   label: string
   domain?: [number, number]
   thresholds?: Array<{ value: number, label: string }>
-}>(), { domain: () => [-2.5, 3.5], thresholds: () => [] })
+  /** The drawing's own size; text stays 11-12 units, so a narrower one reads larger. */
+  width?: number
+  height?: number
+}>(), { domain: () => [-2.5, 3.5], thresholds: () => [], width: 960, height: 380 })
 
-const W = 960
-const H = 380
+const W = computed(() => props.width)
+const H = computed(() => props.height)
 const L = 48
 const R = 116
 const T = 16
 const B = 40
 const MONTHS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
 
-const x = (i: number) => L + i * (W - L - R) / 23
-const y = (v: number) => T + (props.domain[1] - v) * (H - T - B) / (props.domain[1] - props.domain[0])
+const x = (i: number) => L + i * (W.value - L - R) / 23
+const y = (v: number) => T + (props.domain[1] - v) * (H.value - T - B) / (props.domain[1] - props.domain[0])
 
 const ticks = computed(() => {
   const out: number[] = []

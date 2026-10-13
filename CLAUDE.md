@@ -33,7 +33,7 @@ not intended to merge).
 | [docs/pipeline.md](docs/pipeline.md) | `process/`: download, ingest, `run`, retention window, `repartition`, Prefect |
 | [docs/api.md](docs/api.md) | endpoints, how `mhw` is bucketed per query shape, `/state`, rankings |
 | [docs/imagery.md](docs/imagery.md) | value-encoded WebP frames, `raster-color`, categorical `mhw` |
-| [docs/frontend.md](docs/frontend.md) | components, store getters, URL state, compare modes, phone layout, CSV, colour range, map |
+| [docs/frontend.md](docs/frontend.md) | components, store getters, URL state, compare modes, phone layout, CSV, colour range, map, **story pages (the `<StoryScroll>` template)** |
 | [docs/analytics.md](docs/analytics.md) | PostHog: what is and is deliberately not instrumented |
 | [docs/testing.md](docs/testing.md) | CI, `CRW.cli check`, driving the app in headless Chromium |
 | [docs/gotchas.md](docs/gotchas.md) | every gotcha in full (one-liners below) |

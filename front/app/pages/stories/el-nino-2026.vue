@@ -1,406 +1,512 @@
 <template>
   <div>
-    <!-- Scrolls in its own container, like every story (see blob.vue). The
-         three font roles the story components use are pointed at this story's
-         faces here, so the components need no prop for it. -->
-    <div class="h-full overflow-y-auto bg-default font-serif text-[1.1rem] leading-[1.65] text-default [--font-data:var(--font-martian)] [--font-display:var(--font-anybody)] [--font-serif:var(--font-source-serif)] [--story-stretch:120%]">
-      <!-- ============ edition strip ============ -->
-      <!-- Sticky from md up; on a phone it would take four lines of a short pane. -->
-      <div class="z-10 border-b border-default bg-default/95 backdrop-blur md:sticky md:top-0">
-        <div class="mx-auto flex w-full max-w-280 flex-wrap items-center gap-x-5 gap-y-1.5 px-5 py-2.5 font-data text-[0.7rem] tracking-wide text-muted">
-          <span class="flex items-center gap-2 uppercase text-orange-400">
-            <span class="size-2 rounded-full bg-orange-400 motion-safe:animate-pulse" /> Ongoing · edition {{ edition.number }}
+    <StoryScroll :steps="steps" :references="REFERENCES">
+      <template #race>
+        <div class="mb-2 flex flex-wrap gap-x-4 gap-y-1 font-data text-[0.68rem]">
+          <span v-for="(k, n) in RACE_KEY" :key="k" class="flex items-center gap-1.5" :style="{ color: RACE_COLORS[n] }">
+            <i class="inline-block h-0.75 w-4" :style="{ background: RACE_COLORS[n] }" />{{ k }}
           </span>
-          <span>OSTA data through <b class="font-medium text-highlighted">{{ edition.through }}</b></span>
-          <span>News checked <b class="font-medium text-highlighted">{{ edition.checked }}</b></span>
-          <span>Next update <b class="font-medium text-highlighted">{{ edition.next }}</b></span>
-          <a href="#log" class="underline underline-offset-3">Update log</a>
         </div>
-      </div>
+        <StoryRace
+          :series="data.race"
+          :colors="RACE_COLORS"
+          :thresholds="[{ value: 0.5, label: 'El Niño +0.5' }, { value: 2, label: 'very strong +2.0' }]"
+          :width="640"
+          :height="300"
+          label="Monthly Niño 3.4 anomaly for three El Niño events, from January of each event's first year. 2026 runs above both 1997 and 2015."
+        />
+      </template>
 
-      <main class="px-5 pb-16">
-        <!-- ============ hero ============ -->
-        <header class="mx-auto grid w-full max-w-280 items-center gap-8 py-9 md:grid-cols-[minmax(0,1fr)_minmax(0,34rem)] md:gap-12 md:py-13">
-          <div class="flex flex-col gap-5">
-            <span class="font-data text-xs uppercase tracking-wider text-muted">CIOOS Pacific · Ocean Surface Temperature Atlas</span>
-            <h1 class="font-display text-[clamp(2.35rem,6vw,4.4rem)] font-[850] leading-[1.02] tracking-[-0.015em] text-balance text-highlighted [font-stretch:112%] md:[font-stretch:130%]">
-              El Niño 2026, month by month
-            </h1>
-            <p class="text-[1.18rem]">
-              The central and eastern equatorial Pacific is warmer than at any time in NOAA's satellite record, which begins in 1985. This page follows the 2026 El Niño as it unfolds: each month it adds the newest month of that data, viewed in the Ocean Surface Temperature Atlas (OSTA), and the news from the places it reaches.
-            </p>
-            <p>Every map and chart here is a screenshot of OSTA. The links under each one open the same view in the app, so you can click a cell, change the date or compare a past event yourself.</p>
-          </div>
-          <figure class="flex flex-col gap-2.5">
-            <StoryPlayer
-              :frames="heroFrames"
-              :notes="heroNotes"
-              base="/story-assets/el-nino-2026/hero"
-              alt="Globe centred on the eastern Pacific showing the monthly SST anomaly"
-              :legend="['−5 °C', '+5 °C']"
-              :interval="800"
-              start-at-end
-            />
-            <figcaption class="font-data text-xs leading-relaxed text-muted">
-              Monthly SST anomaly against the 1991–2020 normal, from January 2026, drawn on OSTA's “Wide ±5” colour range.
-              <NuxtLink :to="storyLink({ v: 'anom', p: 'monthly', d: '2026-01-01', at: '-5.07,-81.28' })" target="_blank" class="text-primary underline underline-offset-3">Open January 2026 in OSTA</NuxtLink> and press play.
-            </figcaption>
-          </figure>
-        </header>
-
-        <!-- ============ the month in five numbers ============ -->
-        <section class="mx-auto w-full max-w-280" :aria-label="`${edition.month} in five numbers`">
-          <p class="mb-3 font-data text-xs uppercase tracking-wider text-muted">
-            {{ edition.month }} in five numbers · records are since 1985, when NOAA's satellite data begin
-          </p>
-          <div class="grid grid-cols-2 border-y border-default lg:grid-cols-5">
-            <div
-              v-for="(tile, i) in tiles"
-              :key="tile.to"
-              class="flex min-w-0 flex-col gap-2 border-default px-4 py-5"
-              :class="[i % 2 ? 'border-l' : '', i < tiles.length - 1 ? 'border-b lg:border-b-0' : 'col-span-2 lg:col-span-1', i ? 'lg:border-l' : '']"
-            >
-              <span class="font-display text-[clamp(1.9rem,3.2vw,2.5rem)] font-[850] leading-none text-orange-400 tabular-nums [font-stretch:125%]">
-                {{ tile.value }}<small class="text-[0.5em] font-bold"> {{ tile.unit }}</small>
-              </span>
-              <p class="text-[0.9rem] leading-snug">{{ tile.text }}</p>
-              <span class="mt-auto font-data text-[0.66rem] text-muted">{{ tile.was }}</span>
-              <NuxtLink :to="tile.to" target="_blank" class="font-data text-[0.66rem] text-primary hover:underline">Open in OSTA ↗</NuxtLink>
-            </div>
-          </div>
-        </section>
-
-        <!-- ============ 1. Niño 3.4 ============ -->
-        <StoryChapter id="index" accent eyebrow="01 · Niño 3.4" title="Warmer than 1997 and 2015, two months earlier">
-          <div class="mx-auto flex w-full max-w-160 flex-col gap-5">
-            <p>In January, Niño 3.4 was still slightly cool at −0.46 °C, the tail of last winter's La Niña. It crossed the +0.5 °C El Niño threshold in April and gained about half a degree a month from there. By September it averaged +3.07 °C, the warmest month this region has had in the 42-year satellite record.</p>
-            <p>The comparison that matters is the calendar. The two strongest El Niños since the record began, 1997–98 and 2015–16, both peaked in November, at +2.42 and +2.81 °C. This one passed 1997's peak in August and 2015's in September. Day by day, the Niño 3.4 mean broke its previous record (+2.99 °C on 19 November 2015) on 13 September and reached +3.27 °C on 30 September.</p>
-          </div>
-
-          <figure class="mx-auto flex w-full max-w-280 flex-col gap-2.5">
-            <div class="rounded-xl border border-default bg-elevated/50 px-4 pb-2 pt-4">
-              <div class="mb-2 flex flex-wrap gap-x-5 gap-y-1 font-data text-[0.68rem] text-muted">
-                <span v-for="(k, n) in raceKey" :key="k" class="flex items-center gap-1.5" :style="{ color: RACE_COLORS[n] }">
-                  <i class="inline-block h-0.75 w-4" :style="{ background: RACE_COLORS[n] }" />{{ k }}
-                </span>
-                <span>monthly Niño 3.4 anomaly, °C, from January of the first year</span>
-              </div>
-              <StoryRace
-                :series="data.race"
-                :colors="RACE_COLORS"
-                :thresholds="[{ value: 0.5, label: 'El Niño +0.5' }, { value: 2, label: 'very strong +2.0' }]"
-                label="Monthly Niño 3.4 anomaly for three El Niño events, from January of each event's first year. 2026 runs above both 1997 and 2015."
-              />
-            </div>
-            <figcaption class="font-data text-xs leading-relaxed text-muted">
-              NOAA Coral Reef Watch CoralTemp data averaged over Niño 3.4 (5°S–5°N, 170°W–120°W): monthly means of the daily area-mean anomaly against 1991–2020, as OSTA plots them. Dashed lines mark NOAA's thresholds for El Niño (+0.5 °C) and a very strong event (+2.0 °C).
-            </figcaption>
-          </figure>
-
-          <div class="mx-auto grid w-full max-w-280 items-start gap-7 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-            <StoryFigure
-              src="/story-assets/el-nino-2026/nino34.webp"
-              :to="links.nino34"
-              alt="OSTA with the Niño 3.4 region selected for September 2026. The dock shows +3.1 °C and the September ranking with 2026 at the top, ahead of 2015 and 1997. The chart below shows the anomaly since 1985 ending in a spike above 3 °C."
-            >
-              OSTA in region mode on Niño 3.4. The ranking under the numbers puts every September since 1985 in order; 2026 is first at +3.07 °C, then 2015 (+2.19) and 1997 (+2.00). The red bar across the top of the app is OSTA's ENSO summary, worked out from the same NOAA data.
-            </StoryFigure>
-            <div class="flex flex-col gap-5">
-              <p>These are not NOAA's official El Niño numbers. OSTA measures how much warmer Niño 3.4 is than its 1991–2020 average. NOAA's official index, the Relative Oceanic Niño Index (RONI), measures how much warmer Niño 3.4 is than the tropical ocean around it. This year the whole tropical ocean is unusually warm, so OSTA's number comes out higher than NOAA's.</p>
-              <p>Measured OSTA's way, July to September 2026 averaged +2.65 °C, just under the +2.67 °C of November 2015 to January 2016. That compares the two events on one method; it is not an official ranking. Official statements on how strong this El Niño is come from NOAA and the World Meteorological Organization, and are in the news below.</p>
-            </div>
-          </div>
-
-          <StoryWire :items="news.index" />
-          <StoryOpen
-            :links="[
-              { label: 'Niño 3.4, September 2026', to: links.nino34, note: 'Switch the ranking from Month to Year to rank whole years' },
-              { label: 'Niño 3.4 against Niño 1+2', to: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', r: 'nino34', r2: 'nino12' }), note: 'Two regions on one chart; the coastal box runs two degrees hotter' },
-              { label: 'The bar across the top of the app reads Very strong El Niño', note: 'Its ⓘ button explains how OSTA makes that reading' },
-            ]"
-            :features="['Region scope', 'Monthly and yearly rankings', 'Compare B', 'ENSO ribbon']"
-          />
-        </StoryChapter>
-
-        <!-- ============ 2. Peru ============ -->
-        <StoryChapter id="peru" accent eyebrow="02 · Peru's coast" title="“Beyond extreme” off northern Peru">
-          <div class="mx-auto flex w-full max-w-160 flex-col gap-5">
-            <p>El Niño is strongest where the warm water piles up against South America. In September the sea off Paita, in northern Peru, averaged 7.1 °C above normal; the warmest September there before this was 1997, at +4.3 °C. Further south, Chimbote was +5.8 °C and Callao, Lima's port, +4.8 °C. All three are records for September.</p>
-            <p>OSTA also shows NOAA's daily marine heatwave category for every cell. The water off Paita has been in a heatwave since 14 May, 140 days by the end of September, and spent 23 September days in the top class, “Beyond extreme”. The dock keeps count. It also lists the cell's longest run on record: 370 days, from April 1997 to May 1998.</p>
-          </div>
-          <StoryFigure
-            src="/story-assets/el-nino-2026/peru.webp"
-            :to="links.paita"
-            alt="OSTA showing NOAA's marine heatwave categories off Ecuador and Peru on 30 September 2026, mostly orange and red. A pin off Paita; the dock reads category 3 Severe, in a heatwave for 143 days since 14 May 2026, longest heatwave 370 days from 1997 to 1998."
-          >
-            Heatwave categories on 30 September 2026, with a pin off Paita. The dock's “In a heatwave for” card is counted up to the newest day in the archive (143 days on 3 October). The chart below has two spikes reaching Cat 5: 1997–98 and now.
-          </StoryFigure>
-          <div class="mx-auto flex w-full max-w-160 flex-col gap-5">
-            <p>
-              A category is not an anomaly. NOAA applies the definition of
-              <a href="https://doi.org/10.1016/j.pocean.2015.12.014" target="_blank" rel="noopener" class="text-primary underline underline-offset-3">Hobday et al. (2016)</a>:
-              the water stays above its 90th percentile for that time of year, measured against 1985–2012. The classes, from
-              <a href="https://doi.org/10.5670/oceanog.2018.205" target="_blank" rel="noopener" class="text-primary underline underline-offset-3">Hobday et al. (2018)</a>,
-              count multiples of the gap between that percentile and the normal: Moderate, Strong, Severe and Extreme. NOAA adds an open-ended fifth class above them, “Beyond extreme”.
-            </p>
-            <p>On land, Peru's coast is in its dry season, so OSTA cannot express its rainfall as a share of normal there. Temperatures can be: September nights at Piura were 5.2 °C warmer than normal, and days 3.7 °C warmer.</p>
-          </div>
-          <StoryWire :items="news.peru" />
-          <StoryOpen
-            :links="[
-              { label: 'Heatwave categories off Paita', to: links.paita, note: 'Click anywhere on the coast for that cell\'s heatwave run' },
-              { label: 'Paita against Callao', to: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', at: '-5.07,-81.28', at2: '-12.07,-77.28' }), note: 'Alt-click the map to drop your own second point' },
-              { label: 'Night-time temperature at Piura', to: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', land: 'tmin', lm: 'anomaly', at: '-5.19,-80.63' }), note: 'The land overlay; a pin on land charts the land cell' },
-            ]"
-            :features="['MHW categories', 'Heatwave runs', 'Compare two points', 'Land overlay']"
-          />
-        </StoryChapter>
-
-        <!-- ============ 3. Galápagos and Ecuador ============ -->
-        <StoryChapter id="galapagos" accent eyebrow="03 · Galápagos and Ecuador" title="The Galápagos, against 1997">
-          <div class="mx-auto flex w-full max-w-160 flex-col gap-5">
-            <p>The west coast of Isabela, where cold water normally wells up around the Galápagos, averaged 6.5 °C above normal in September. That beats September 1997 there by more than a degree, and the cell has been in a heatwave since 18 May, at Severe or Extreme for the whole month. On Ecuador's mainland coast, the sea off Santa Elena was 4.7 °C above normal, well clear of its previous September high (+3.0 °C in 2023).</p>
-            <p>OSTA's swipe compare puts two dates side by side on one map. Below, September 2026 is on the left and September 1997 on the right, on the same colour range.</p>
-          </div>
-          <StoryFigure
-            src="/story-assets/el-nino-2026/galapagos.webp"
-            :to="links.galapagos"
-            alt="OSTA swipe compare over the eastern equatorial Pacific: September 2026 on the left, September 1997 on the right, both deep red near the Galápagos. A pin on west Isabela; the dock reads +6.5 °C and ranks September 2026 first, 1997 second."
-          >
-            Swipe compare, September 2026 (left) and September 1997 (right), on the ±5 °C range. The chart marks both dates: amber MAP for 2026, blue CMP for 1997. Drag the divider in the app to sweep between them.
-          </StoryFigure>
-          <StoryWire :items="news.galapagos" />
-          <p class="mx-auto w-full max-w-160 text-[0.92rem] text-muted">
-            Those floods came at the very end of September. NOAA's gauge data still had the month as dry at Quinindé in Esmeraldas (0.5 mm a day, 1.7 below normal), so the rain should show in October's map.
-          </p>
-          <StoryOpen
-            :links="[
-              { label: 'September 2026 against September 1997', to: links.galapagos, note: 'Choose Wide ±5 from the colour legend to see past +3 °C' },
-              { label: 'With compare on, Alt-click the chart to move the second date' },
-            ]"
-            :features="['Swipe compare', 'Colour range presets', 'Chart-driven dates']"
-          />
-        </StoryChapter>
-
-        <!-- ============ 4. Indonesia ============ -->
-        <StoryChapter id="indonesia" accent eyebrow="04 · Across the Pacific" title="On the other side, the rain stopped">
-          <div class="mx-auto flex w-full max-w-160 flex-col gap-5">
-            <p>El Niño moves the tropical Pacific's rain east with the warm water, so the western side dries out. NOAA's daily gauge analysis, which OSTA draws as a land overlay, shows it plainly. At Palangka Raya, in Central Kalimantan, the record has essentially no rain for August or September; September came in 3.5 mm a day below normal. Palembang, in South Sumatra, had 0.1 mm a day. Afternoons in both were 2 °C warmer than normal.</p>
-          </div>
-          <StoryFigure
-            src="/story-assets/el-nino-2026/indonesia.webp"
-            :to="links.indonesia"
-            :width="920"
-            :height="813"
-            alt="OSTA map of Indonesia for September 2026 with precipitation versus normal drawn on land: most of Kalimantan and southern Sumatra deep brown, meaning drier than normal. Below, a chart of monthly precipitation departure at Palangka Raya since 1985."
-          >
-            September 2026, with the land overlay on precipitation in “mm vs normal”: brown is drier, teal wetter, and the ocean anomaly sits underneath. The pin is on Palangka Raya, so the chart plots that land cell on its own right-hand axis.
-          </StoryFigure>
-          <StoryWire :items="news.indonesia" />
-          <StoryOpen
-            :links="[
-              { label: 'Precipitation over Indonesia, September 2026', to: links.indonesia, note: 'Use the time bar\'s back arrow to step through July and August' },
-              { label: 'Switch Land to Tmax for the heat that came with it' },
-            ]"
-            :features="['Land overlay', 'Tmax, Tmin, precipitation', 'Land charts on a second axis']"
-          />
-        </StoryChapter>
-
-        <!-- ============ 5. West coast and BC ============ -->
-        <StoryChapter id="bc" accent eyebrow="05 · Up the coast" title="California's seabirds, and what BC is watching">
-          <div class="mx-auto flex w-full max-w-160 flex-col gap-5">
-            <p>The North American coast was already warm before El Niño arrived. The water off San Diego was above normal in every month of 2026 so far, by 1.0 to 2.4 °C, and it was back in a heatwave from 9 September. In July, AP reported pelicans, murres and cormorants starving along the California coast.</p>
-            <p>BC's waters are not there yet. Across DFO's Pacific bioregions, September was 0.4 °C above normal, 16th of 42 Septembers. During the 1997–98 El Niño the same water stayed warm through the winter, from +0.6 °C in November to +1.05 °C in March, and February 1998 is still the region's third-warmest February. OSTA can put the tropics and BC on one chart, which is how to see whether that happens again.</p>
-          </div>
-          <StoryFigure
-            src="/story-assets/el-nino-2026/bc.webp"
-            :to="links.bc"
-            alt="OSTA comparing two regions: A, Niño 3.4, and B, Pacific Bioregions (DFO). The chart shows both anomalies since 1985, the tropical line with large El Niño spikes and the BC line smaller."
-          >
-            Two regions on one chart: A is Niño 3.4 (green), B is BC's Pacific bioregions (violet). Follow the violet line through the winters of 1997–98 and 2015–16.
-          </StoryFigure>
-          <StoryWire :items="news.bc" />
-          <StoryOpen
-            :links="[
-              { label: 'Niño 3.4 against BC\'s waters', to: links.bc, note: 'Drag the slider under the chart to zoom into 1997–98' },
-              { label: 'Heatwave categories off San Diego', to: storyLink({ v: 'mhw', p: 'daily', d: '2026-09-30', at: '32.72,-117.43' }) },
-              { label: 'Night-time temperature at Kamloops', to: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', land: 'tmin', lm: 'anomaly', at: '50.67,-120.33' }), note: 'The winter signal to watch on land' },
-            ]"
-            :features="['Two regions on one chart', 'DFO bioregions', 'Chart zoom', 'Land overlay']"
-          />
-        </StoryChapter>
-
-        <!-- ============ 6. Global ============ -->
-        <StoryChapter id="global" accent eyebrow="06 · The whole ocean" title="A record September for the world's oceans">
-          <div class="mx-auto flex w-full max-w-160 flex-col gap-5">
-            <p>Averaged over the whole global ocean, September was 0.78 °C above normal, the warmest September in the satellite record; the Pacific alone was +0.85 °C. On an average September day, 45.6% of the global ocean's area was in a marine heatwave, against 40.4% in September 2023, the previous high.</p>
-            <p>That extent needs one caution. NOAA's heatwave threshold is fixed to 1985–2012, so as the ocean warms, more of it crosses the line every year. Part of any new record is the trend, and OSTA prints it beside the number.</p>
-          </div>
-          <StoryFigure
-            src="/story-assets/el-nino-2026/global.webp"
-            :to="links.global"
-            alt="OSTA flat map of the world's oceans for September 2026 with the global ocean selected. The equatorial Pacific is deep red. The dock reads +0.8 °C and ranks September 2026 first; the chart shows the global anomaly rising since 1985."
-          >
-            The Flat projection and the Global ocean region. The chart under the map is the whole ocean's anomaly since 1985; the dock prints its trend, +0.19 °C per decade.
-          </StoryFigure>
-          <StoryWire :items="news.global" />
-          <StoryOpen
-            :links="[
-              { label: 'The global ocean, September 2026', to: links.global, note: 'Switch to Flat to see the whole map' },
-              { label: 'Heatwave extent, global ocean', to: storyLink({ v: 'mhw', p: 'monthly', d: '2026-09-01', r: 'global' }), note: 'In region mode, MHW is the share of the area in a heatwave' },
-              { label: 'Use Download data to save any series as a CSV' },
-            ]"
-            :features="['Globe and flat projections', 'Heatwave extent', 'Trend', 'CSV export']"
-          />
-        </StoryChapter>
-
-        <!-- ============ watch list ============ -->
-        <StoryChapter id="watch" accent eyebrow="Next edition" :title="`What to watch in ${edition.nextMonth}`">
-          <ul class="mx-auto grid w-full max-w-280 border-t border-default sm:grid-cols-2">
-            <li
-              v-for="(w, i) in watch"
-              :key="w.title"
-              class="flex min-w-0 flex-col gap-1.5 border-b border-default py-4.5"
-              :class="i % 2 ? 'sm:border-l sm:pl-5' : 'sm:pr-5'"
-            >
-              <strong class="font-display text-[1.05rem] font-bold text-highlighted [font-stretch:110%]">{{ w.title }}</strong>
-              <p class="text-[0.95rem] leading-normal">{{ w.text }}</p>
-            </li>
-          </ul>
-        </StoryChapter>
-
-        <!-- ============ log and sources ============ -->
-        <footer id="log" class="mx-auto mt-16 flex w-full max-w-160 scroll-mt-14 flex-col gap-4 border-t border-default pt-9">
-          <p class="font-data text-xs uppercase tracking-wider text-muted">Update log</p>
-          <ol class="flex flex-col gap-1 font-data text-xs leading-relaxed">
-            <li v-for="entry in log" :key="entry.date" class="grid gap-x-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
-              <span class="text-muted">{{ entry.date }}</span><span>{{ entry.text }}</span>
+      <template #outro>
+        <ul class="grid w-full max-w-3xl gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 text-left sm:grid-cols-2">
+          <li v-for="w in WATCH" :key="w.title" class="flex flex-col gap-1 bg-[#0f1219]/90 p-4 backdrop-blur-md">
+            <strong class="font-display text-base font-bold text-white [font-stretch:110%]">{{ w.title }}</strong>
+            <p class="text-[0.95rem] leading-normal text-white/80">{{ w.text }}</p>
+          </li>
+        </ul>
+        <UButton :to="viewLink(steps.at(-1)!.view)" target="_blank" label="Open OSTA" trailing-icon="i-mdi-open-in-new" size="lg" class="mt-6 font-sans" />
+        <div class="mt-10 flex max-w-xl flex-col gap-3 rounded-2xl border border-white/10 bg-[#0f1219]/90 p-6 text-left font-data text-[0.7rem] leading-relaxed text-white/70 backdrop-blur-md">
+          <h2 class="font-display text-base font-bold text-white">Update log</h2>
+          <ol class="flex flex-col gap-1">
+            <li v-for="entry in LOG" :key="entry.date" class="grid gap-x-3 sm:grid-cols-[6rem_minmax(0,1fr)]">
+              <span class="text-white/50">{{ entry.date }}</span><span>{{ entry.text }}</span>
             </li>
           </ol>
-
-          <p class="mt-4 font-data text-xs uppercase tracking-wider text-muted">How this page is made</p>
-          <p class="text-[0.92rem] text-muted">
-            The data are NOAA's (listed below). Every number on this page was read from them through OSTA on the day of the edition, for the last complete month, and the screenshots are of OSTA itself. A record means a record since 1 January 1985, where NOAA's satellite data begin. News items are summarised from the linked articles, and quotes are as they appear there. Claims about records in the news are those outlets' and their sources', on their own datasets.
+          <h2 class="mt-3 font-display text-base font-bold text-white">Data and credits</h2>
+          <p>
+            Maps: NOAA Coral Reef Watch CoralTemp v3.1 (anomaly against a 1991–2020 daily climatology) and Marine Heatwave v1.0.1 (against NOAA's 1985–2012 90th percentile); NOAA CPC Global Unified gauge-based temperature and precipitation on land, against 1991–2020 normals computed in OSTA. Basemap © Mapbox © OpenStreetMap.
           </p>
-
-          <p class="mt-4 font-data text-xs uppercase tracking-wider text-muted">Data and references</p>
-          <ol class="flex list-decimal flex-col gap-2 pl-5 text-[0.88rem] leading-normal">
-            <li>NOAA Coral Reef Watch, CoralTemp v3.1 daily sea surface temperature, 0.05°. Anomalies in OSTA are against a 1991–2020 daily climatology.</li>
-            <li>NOAA Coral Reef Watch, Marine Heatwave category v1.0.1, after Hobday et al. 2016 and 2018.</li>
-            <li>NOAA Climate Prediction Center, Global Unified gauge-based precipitation and temperature (land overlay), 1991–2020 normals computed in OSTA.</li>
-            <li v-for="r in references" :key="r.doi">
-              {{ r.text }} <i>{{ r.journal }}</i> {{ r.where }}.
-              <a :href="`https://doi.org/${r.doi}`" target="_blank" rel="noopener" class="text-primary underline underline-offset-3">doi:{{ r.doi }}</a>
-            </li>
-          </ol>
-        </footer>
-      </main>
-    </div>
+          <p>
+            Every number on the map cards was read from NOAA's data through OSTA on {{ EDITION.checked }}, for the last complete month. A record means a record since 1 January 1985, where NOAA's satellite data begin. News is summarised from the articles linked on each card, quotes as they appear there; records claimed in the news are those outlets' and their sources', on their own datasets.
+          </p>
+        </div>
+      </template>
+    </StoryScroll>
   </div>
 </template>
 
 <script setup lang="ts">
-/**
- * The 2026 El Nino, followed month by month. Updated at the start of each
- * month with the last closed month of OSTA data and that month's news; the
- * runbook is stories/el-nino-2026/UPDATE.md at the repo root.
- *
- * `data` is written by that directory's measure.py and drives the hero's
- * frames and readings and the race chart. Everything else an edition changes
- * (the numbers in the prose, `edition`, `tiles`, `news`, `watch`, `log`) is
- * edited here by hand, from the same file.
- */
 import data from '~/data/stories/el-nino-2026.json'
-import type { WireItem } from '~/components/story/Wire.vue'
+import { STORY_BASE, viewLink, type StoryReference, type StoryStep } from '~/utils/story'
 
+/**
+ * The 2026 El Nino, followed month by month over the live map
+ * (components/story/Scroll.vue). Updated at the start of each month with the
+ * last closed month of NOAA data and that month's news; the runbook is
+ * stories/el-nino-2026/UPDATE.md at the repo root.
+ *
+ * `data` is written by that directory's measure.py. The readouts, the first
+ * scrub and the race chart read it directly; the prose, `EDITION`, `WATCH` and
+ * `LOG` are edited by hand from the same file.
+ */
 useSeoMeta({
   title: 'El Niño 2026, month by month · OSTA',
-  description: 'The record 2026 El Niño followed through OSTA\'s data and the news from the places it reaches, updated monthly.',
+  description: 'The record 2026 El Niño followed over the live map, from Peru to British Columbia, with the news from the places it reaches. Updated monthly.',
 })
 
-const edition = {
+const EDITION = {
   number: 1,
   month: 'September 2026',
-  through: '30 Sep 2026',
-  checked: '8 Oct 2026',
+  through: '30 September 2026',
+  checked: '8 October 2026',
   next: 'early November',
   nextMonth: 'October',
 }
 
-const links = {
-  nino34: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', r: 'nino34' }),
-  paita: storyLink({ v: 'mhw', p: 'daily', d: '2026-09-30', at: '-5.07,-81.28' }),
-  galapagos: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', c: '1997-09-01', at: '-0.52,-91.72' }),
-  indonesia: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', land: 'precip', lm: 'difference', at: '-2.21,113.92' }),
-  bc: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', r: 'nino34', r2: 'pacific_bioregions' }),
-  global: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', r: 'global' }),
+/** The edition's month as a monthly bucket: the latest month in `data`. */
+const months2026 = data.nino.nino34.months_2026 as Array<[string, number]>
+const MONTH = `${months2026.at(-1)![0]}-01`
+const DAY = data.edition.through
+
+const WARM = '#f4a582'
+const HOT = '#ff8000'
+const IMPACT = '#e2e8f0'
+
+/** 1997 grey, 2015 cool, 2026 in the accent; follows data.race's order. */
+const RACE_COLORS = ['#a3a3a3', '#79b5c8', '#ef6a3a']
+const RACE_KEY = ['1997–98, peak +2.42 in Nov', '2015–16, peak +2.81 in Nov', '2026–27']
+
+/** 1st, 2nd, 3rd, 16th, 21st. */
+function ordinal(n: number): string {
+  const tail = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th'
+  return `${n}${tail}`
 }
 
-/** One hero frame per month of 2026 read so far, each with its Niño 3.4 reading. */
-const months2026 = data.nino.nino34.months_2026 as Array<[string, number]>
-const heroFrames = months2026.map(([m]) => `${m}-01`)
-const heroNotes = months2026.map(([, v]) => `Niño 3.4 ${signed(v)} °C`)
+const P = data.points
+const L = data.land
+const R = data.regions
 
-/** 2026 in the accent; 2015 cool; 1997 grey. Follows data.race's order. */
-const RACE_COLORS = ['#a3a3a3', '#79b5c8', '#ef6a3a']
-const raceKey = ['1997–98, peak +2.42 in Nov', '2015–16, peak +2.81 in Nov', '2026–27']
+const REFERENCES: Record<string, StoryReference> = {
+  cpc: {
+    short: 'NOAA Climate Prediction Center, 8 Oct 2026',
+    full: 'NOAA Climate Prediction Center. ENSO Diagnostic Discussion, 8 October 2026.',
+    url: 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml',
+  },
+  wmo: {
+    short: 'WMO, 3 Sep 2026',
+    full: 'World Meteorological Organization. 3 September 2026. El Niño set to become very strong, raising risks of extreme weather into 2027.',
+    url: 'https://wmo.int/news/media-centre/el-nino-set-become-very-strong-raising-risks-of-extreme-weather-2027',
+  },
+  icn: {
+    short: 'Inside Climate News, 29 Sep 2026',
+    full: 'Inside Climate News. 29 September 2026. Incoming El Niño is so extreme it doesn\'t have a scientific name.',
+    url: 'https://insideclimatenews.org/news/29092026/record-breaking-el-nino-grows-in-pacific/',
+  },
+  scienceNews: {
+    short: 'Science News, 24 Sep 2026',
+    full: 'Science News. 24 September 2026. This year\'s El Niño just broke a record months before it\'s expected to peak.',
+    url: 'https://www.sciencenews.org/article/record-breaking-el-nino-temperatures',
+  },
+  cole2026: {
+    short: 'Cole et al. 2026, Science',
+    full: 'Cole, J.E. et al. 2026. Recent strengthening of eastern Pacific ENSO in the last millennium paleorecord. Science 394: 192–196.',
+    url: 'https://doi.org/10.1126/science.ady2660',
+  },
+  hobday2016: {
+    short: 'Hobday et al. 2016',
+    full: 'Hobday, A.J. et al. 2016. A hierarchical approach to defining marine heatwaves. Progress in Oceanography 141: 227–238.',
+    url: 'https://doi.org/10.1016/j.pocean.2015.12.014',
+  },
+  hobday2018: {
+    short: 'Hobday et al. 2018',
+    full: 'Hobday, A.J. et al. 2018. Categorizing and naming marine heatwaves. Oceanography 31(2): 162–173.',
+    url: 'https://doi.org/10.5670/oceanog.2018.205',
+  },
+  grist: {
+    short: 'Grist, 8 Jul 2026',
+    full: 'Grist. 8 July 2026. El Niño is here, and it\'s already scrambling fisheries throughout the Pacific.',
+    url: 'https://grist.org/economics/el-nino-scrambling-fisheries-throughout-the-pacific/',
+  },
+  watchers: {
+    short: 'The Watchers, 3 Jul 2026',
+    full: 'The Watchers. 3 July 2026. Peru declares state of emergency ahead of 2026–2027 El Niño rains.',
+    url: 'https://watchers.news/2026/07/03/peru-declares-state-of-emergency-ahead-of-2026-2027-el-nino-rains/',
+  },
+  cdf: {
+    short: 'Charles Darwin Foundation, 4 Sep 2026',
+    full: 'Charles Darwin Foundation. 4 September 2026. El Niño 2026 in Galápagos.',
+    url: 'https://www.darwinfoundation.org/en/news/all-news-stories/el-nino-2026-in-galapagos/',
+  },
+  abcBirds: {
+    short: 'American Bird Conservancy, 6 Aug 2026',
+    full: 'American Bird Conservancy. 6 August 2026. Pacific seabird die-offs demonstrate the need for fishery action.',
+    url: 'https://abcbirds.org/news/pacific-seabird-dieoff-2026/',
+  },
+  elComercio: {
+    short: 'El Comercio, 3 Oct 2026 (Spanish)',
+    full: 'El Comercio. 3 October 2026. El fenómeno de El Niño deja ríos desbordados en Esmeraldas y Pastaza.',
+    url: 'https://www.elcomercio.com/actualidad/ecuador/fenomeno-nino-inundaciones-esmeraldas/',
+  },
+  ap: {
+    short: 'Associated Press, 1 Jul 2026',
+    full: 'Associated Press, via the Press Democrat. 1 July 2026. A marine heat wave caused seabird deaths off California. El Niño could worsen the die-off.',
+    url: 'https://www.pressdemocrat.com/2026/07/01/record-ocean-heat-and-el-nino-are-leading-to-mass-california-seabird-die-offs/',
+  },
+  noaaFisheries: {
+    short: 'NOAA Fisheries, 12 Jun 2026',
+    full: 'NOAA Fisheries. 12 June 2026. 7 ways El Niño and large marine heatwave could affect West Coast marine species.',
+    url: 'https://www.fisheries.noaa.gov/feature-story/7-ways-el-nino-and-large-marine-heatwave-could-affect-west-coast-marine-species',
+  },
+  dfo2016: {
+    short: 'DFO, State of the Pacific Ocean 2016',
+    full: 'Chandler, P.C., King, S.A. and Boldt, J. (eds.) 2017. State of the physical, biological and selected fishery resources of Pacific Canadian marine ecosystems in 2016. Can. Tech. Rep. Fish. Aquat. Sci. 3225.',
+    url: 'https://waves-vagues.dfo-mpo.gc.ca/Library/40617944.pdf',
+  },
+  watershed: {
+    short: 'Watershed Watch Salmon Society, 25 Mar 2026',
+    full: 'Watershed Watch Salmon Society. 25 March 2026. 2026 salmon outlook, part 1: environmental conditions.',
+    url: 'https://watershedwatch.ca/stories/2026-salmon-outlook-part-1-environmental-conditions/',
+  },
+  climateData: {
+    short: 'ClimateData.ca, 21 Aug 2026',
+    full: 'ClimateData.ca, Canadian Centre for Climate Services. 21 August 2026. What the developing exceptional El Niño means for Canada in 2026–27.',
+    url: 'https://climatedata.ca/news/what-the-developing-exceptional-el-nino-means-for-canada-in-2026-27/',
+  },
+  abcNews: {
+    short: 'ABC News (Australia), 7 Sep 2026',
+    full: 'ABC News (Australia). 7 September 2026. Indonesian wildfires spurred by super El Niño choke South-East Asia.',
+    url: 'https://www.abc.net.au/news/2026-09-07/indonesia-wildfires-haze-poor-air-quality-smog-drought-el-nino/107122922',
+  },
+  nasa: {
+    short: 'NASA Earth Observatory, 3 Sep 2026',
+    full: 'NASA Earth Observatory. 3 September 2026. Peatland fires darken skies in Indonesia. Story by Adam Voiland.',
+    url: 'https://science.nasa.gov/missions/aqua/peatland-fires-darken-skies-in-indonesia/',
+  },
+  carbonBrief: {
+    short: 'Carbon Brief, 15 Sep 2026',
+    full: 'Carbon Brief. 15 September 2026. Temperature "overshoot", world\'s warmest month and the catastrophic 1877–78 El Niño.',
+    url: 'https://www.carbonbrief.org/cited-15-september-2026-temperature-overshoot-worlds-warmest-month-catastrophic-1877-78-el-nino',
+  },
+}
 
-const tiles = [
-  { value: '+3.07', unit: '°C', text: 'Niño 3.4, the region NOAA uses to track El Niño. Its warmest month since the satellite record began in 1985.', was: 'previous high: Nov 2015, +2.81', to: links.nino34 },
-  { value: '+5.29', unit: '°C', text: 'Niño 1+2, the water off Ecuador and northern Peru. Also its warmest month.', was: 'previous high: Aug 1997, +4.27', to: storyLink({ v: 'anom', p: 'monthly', d: '2026-09-01', r: 'nino12' }) },
-  { value: '23', unit: 'of 30 days', text: 'Off Paita, Peru, in NOAA\'s top heatwave category, “Beyond extreme”.', was: 'in a heatwave since 14 May', to: links.paita },
-  { value: '+0.78', unit: '°C', text: 'The global ocean\'s warmest September since 1985.', was: 'previous high: Sep 2023, +0.64', to: links.global },
-  { value: '48.8', unit: '%', text: 'Share of the Pacific in a marine heatwave on an average September day. The most for any September.', was: 'previous high: Sep 2023, 44.4%', to: storyLink({ v: 'mhw', p: 'monthly', d: '2026-09-01', r: 'pacific' }) },
+const steps: StoryStep[] = [
+  {
+    id: 'intro',
+    align: 'center',
+    eyebrow: `Ongoing · edition ${EDITION.number} · NOAA data through ${EDITION.through}`,
+    title: 'El Niño 2026, month by month',
+    body: [
+      'The central and eastern equatorial Pacific is warmer than at any time since NOAA\'s satellite record began in 1985.',
+      'This page follows the 2026 El Niño as it unfolds, from the coast of Peru to British Columbia. Each month it adds the newest month of NOAA\'s data and the news from the places it reaches.',
+    ],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'nino34' },
+    camera: { center: [-118, 4], zoom: 1.9 },
+  },
+  {
+    id: 'growth',
+    eyebrow: `January – ${EDITION.month}`,
+    title: 'From La Niña to a record',
+    body: [
+      'Keep scrolling to run the clock. Each frame is a month of sea surface temperature against the 1991–2020 normal: red is warmer, blue cooler.',
+      'Niño 3.4, the stretch of equator NOAA watches, was still slightly cool in January, the tail of last winter\'s La Niña. It crossed the +0.5 °C El Niño threshold in April and gained about half a degree a month from there.',
+    ],
+    quote: { text: 'The transition has been very rapid, from a La Niña last winter to a very strong El Niño in less than a year.', cite: 'Nathaniel Johnson, NOAA Geophysical Fluid Dynamics Laboratory, to Science News' },
+    refs: ['scienceNews'],
+    readout: { value: months2026.at(-1)![1], digits: 2, unit: ' °C', signed: true, label: 'Niño 3.4 that month', color: WARM },
+    scrub: { from: '2026-01-01', to: MONTH, values: months2026.map(([, v]) => v) },
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '2026-01-01', region: 'nino34' },
+    camera: { center: [-128, -2], zoom: 2.4 },
+  },
+  {
+    id: 'race',
+    wide: true,
+    eyebrow: `${EDITION.month} · Niño 3.4`,
+    title: 'Warmer than 1997 and 2015, two months earlier',
+    readout: { value: data.nino.nino34.value, digits: 2, unit: ' °C', signed: true, label: 'Niño 3.4\'s warmest month since 1985', color: WARM },
+    body: [
+      'The two strongest El Niños since 1985, 1997–98 and 2015–16, both peaked in November, at +2.42 and +2.81 °C. This one passed 1997\'s peak in August and 2015\'s in September. Day by day, Niño 3.4 broke its record (+2.99 °C on 19 November 2015) on 13 September and reached +3.27 °C on 30 September.',
+    ],
+    figure: 'race',
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'nino34' },
+    camera: { center: [-150, 2], zoom: 2.7, pitch: 30 },
+  },
+  {
+    id: 'strength',
+    align: 'right',
+    eyebrow: 'How strong?',
+    title: 'Off the end of NOAA\'s scale',
+    body: [
+      'These are not NOAA\'s official numbers. NOAA\'s index measures Niño 3.4 against the tropical ocean around it, which is also unusually warm this year, so it reads lower.',
+      'Even so, NOAA gives October–December an 83% chance of beating every event since 1950, and the WMO puts the chance that El Niño lasts through February 2027 at nearly 100%. Talk of a "millennium" comes from a coral study of past El Niños, not this one.',
+    ],
+    quote: { text: 'We don\'t have a categorization for this.', cite: 'Daniel Swain, climate scientist, to Inside Climate News' },
+    refs: ['cpc', 'wmo', 'icn', 'cole2026'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'nino34' },
+    camera: { center: [-140, 0], zoom: 2.2 },
+  },
+  {
+    id: 'peru',
+    eyebrow: `${EDITION.month} · Paita, Peru`,
+    title: '"Beyond extreme" off northern Peru',
+    readout: { value: P.paita.category_days['5'], digits: 0, unit: ' days', label: `of ${EDITION.month} in NOAA's top heatwave class, "Beyond extreme"`, color: HOT },
+    body: [
+      'El Niño is strongest where the warm water piles up against South America. In September the sea off Paita averaged 7.1 °C above normal; its warmest September before was 1997, at +4.3 °C. Chimbote was +5.8 °C and Callao, Lima\'s port, +4.8 °C. All three are records for September.',
+      'The map now shows NOAA\'s daily heatwave classes. Off Paita a heatwave began on 14 May and had run 140 days by the end of September. The longest there ran 370 days, from April 1997 to May 1998.',
+    ],
+    refs: ['hobday2016', 'hobday2018'],
+    view: { ...STORY_BASE, variable: 'mhw', period: 'daily', date: DAY, point: { lat: -5.07, lon: -81.28 } },
+    camera: { center: [-84, -7], zoom: 4.4, pitch: 45, bearing: 15 },
+  },
+  {
+    id: 'anchoveta',
+    align: 'right',
+    eyebrow: 'July 2026 · Peru',
+    title: 'The world\'s biggest fishery, out of reach',
+    body: [
+      'Peru suspended its anchoveta fishery, the largest single-species fishery in the world. Boats with sonar found the fish more than 100 m down, beyond their nets, and prices for jack mackerel and corvina reportedly doubled.',
+      'The government declared a 60-day emergency in 796 districts for "the imminent threat of intense rainfall".',
+    ],
+    quote: { text: 'Our vulnerability is increasing.', cite: 'Juan Carlos Sueiro, Oceana Peru, to Grist' },
+    refs: ['grist', 'watchers'],
+    view: { ...STORY_BASE, variable: 'mhw', period: 'daily', date: DAY, point: { lat: -12.07, lon: -77.28 } },
+    camera: { center: [-80, -11], zoom: 4.6, pitch: 40, bearing: -10 },
+  },
+  {
+    id: 'piura',
+    eyebrow: `${EDITION.month} · Piura, Peru`,
+    title: 'Warm nights on land',
+    readout: { value: L.piura.land_tmin_anom, digits: 1, unit: ' °C', signed: true, label: 'overnight lows at Piura against normal', color: WARM },
+    body: [
+      'The land overlay is NOAA\'s gauge-based analysis. September nights at Piura were 5.2 °C warmer than normal, and days 3.7 °C warmer.',
+      'Peru\'s coast is in its dry season, so its rainfall cannot yet be read as a share of normal.',
+    ],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, point: { lat: -5.19, lon: -80.63 }, landLayer: 'tmin', landMode: 'anomaly' },
+    camera: { center: [-79.5, -6], zoom: 5.2, pitch: 35 },
+  },
+  {
+    id: 'galapagos-1997',
+    align: 'right',
+    eyebrow: 'September 1997 · Isabela, Galápagos',
+    title: 'The Galápagos, last time…',
+    readout: { value: P.isabela.next[0]![1] as number, digits: 2, unit: ' °C', signed: true, label: 'west of Isabela, September 1997', color: WARM },
+    body: ['West of Isabela, cold water normally wells up around the Galápagos. This is September 1997, as the 1997–98 El Niño built toward its peak.'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '1997-09-01', point: { lat: -0.52, lon: -91.72 } },
+    camera: { center: [-89, -1], zoom: 4.2, pitch: 40, bearing: -10 },
+  },
+  {
+    id: 'galapagos-2026',
+    align: 'right',
+    eyebrow: EDITION.month,
+    title: '…and now',
+    readout: { value: P.isabela.anom, digits: 2, unit: ' °C', signed: true, label: 'west of Isabela: more than a degree past 1997', color: WARM },
+    body: [
+      'The same water has been in a heatwave since 18 May, Severe or Extreme for the whole of September. On Ecuador\'s mainland coast, the sea off Santa Elena was 4.7 °C above normal, well clear of its previous September high (+3.0 °C in 2023).',
+      'The link opens both Septembers side by side, in OSTA\'s swipe compare.',
+    ],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, compareDate: '1997-09-01', point: { lat: -0.52, lon: -91.72 } },
+    camera: { center: [-89, -1], zoom: 4.2, pitch: 40, bearing: -10 },
+  },
+  {
+    id: 'galapagos-life',
+    eyebrow: 'June – October 2026 · Ecuador and the Galápagos',
+    title: 'Hungry iguanas, dying seabirds',
+    readout: { value: 968, digits: 0, unit: '', label: 'dead seabirds counted on Ecuador\'s coast in July, against a few dozen a month before', color: IMPACT },
+    body: [
+      'Marine iguanas lose weight as the algae they graze die back, and seabirds may abandon their nests. Sooty shearwaters, boobies and critically endangered waved albatrosses were among the dead on Ecuador\'s coast.',
+      'At the end of September nine rivers burst their banks in Esmeraldas and Pastaza, affecting about 800 families. That rain came too late for September\'s map.',
+    ],
+    quote: { text: 'Corals will probably be among the biggest losers.', cite: 'María José Barragán, Charles Darwin Foundation' },
+    refs: ['cdf', 'abcBirds', 'elComercio'],
+    view: { ...STORY_BASE, variable: 'mhw', period: 'daily', date: DAY, point: { lat: -2.22, lon: -81.08 } },
+    camera: { center: [-85.5, -1.5], zoom: 4.3, pitch: 35 },
+  },
+  {
+    id: 'north',
+    align: 'center',
+    eyebrow: 'Up the coast',
+    title: 'What it means for BC',
+    body: ['California\'s coast is already feeling the heat. In BC, El Niño\'s mark has been a warm winter, on land and at sea.'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'pacific_bioregions' },
+    camera: { center: [-135, 40], zoom: 2.6 },
+  },
+  {
+    id: 'california',
+    eyebrow: `${EDITION.month} · San Diego`,
+    title: 'California\'s coast, already hot',
+    photo: {
+      src: '/story-assets/el-nino-2026/img/sea-lion-pup.webp',
+      alt: 'A thin California sea lion pup, its ribs showing, resting on wet rocks by a beach.',
+      credit: 'An underweight California sea lion pup, 2015. Photo: NOAA Fisheries (public domain)',
+      href: 'https://www.fisheries.noaa.gov/feature-story/7-ways-el-nino-and-large-marine-heatwave-could-affect-west-coast-marine-species',
+    },
+    readout: { value: P.san_diego.anom, digits: 1, unit: ' °C', signed: true, label: `off San Diego, ${EDITION.month}`, color: WARM },
+    body: [
+      'The water off San Diego has been above normal in every month of 2026 and back in a heatwave since 9 September. In July, AP reported pelicans, murres and cormorants starving along the coast, and NOAA Fisheries warns of hungry sea lion pups, as in 2015.',
+    ],
+    quote: { text: 'We\'ve been seeing cormorants walk to shore and then just die within the hour.', cite: 'Tammy Russell, Scripps Institution of Oceanography, to AP' },
+    refs: ['ap', 'noaaFisheries'],
+    view: { ...STORY_BASE, variable: 'mhw', period: 'daily', date: DAY, point: { lat: 32.72, lon: -117.43 } },
+    camera: { center: [-120.5, 33], zoom: 4.6, pitch: 40, bearing: -15 },
+  },
+  {
+    id: 'bc-now',
+    align: 'right',
+    eyebrow: `${EDITION.month} · British Columbia`,
+    title: 'BC\'s waters are not there yet',
+    readout: { value: R.pacific_bioregions.anom.value, digits: 2, unit: ' °C', signed: true, label: `DFO's Pacific bioregions, ${ordinal(R.pacific_bioregions.anom.rank)} warmest of ${R.pacific_bioregions.anom.of} Septembers`, color: WARM },
+    body: [
+      'Across DFO\'s Pacific bioregions, September was only a little warmer than normal. In the last two big El Niños, this water warmed through the winter.',
+      'The link opens Niño 3.4 and BC\'s waters on one chart, to watch whether it happens again.',
+    ],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'pacific_bioregions', region2: 'nino34' },
+    camera: { center: [-131, 51.5], zoom: 4.3, pitch: 35, bearing: -10 },
+  },
+  {
+    id: 'bc-1997',
+    eyebrow: 'November 1997 – March 1998',
+    title: 'Last time: a warm winter offshore',
+    body: [
+      'Scroll through the 1997–98 winter. BC\'s waters warmed from +0.6 °C in November to +1.05 °C in March. February and March 1998 are still the third-warmest of those months since 1985.',
+    ],
+    readout: { value: 1.05, digits: 2, unit: ' °C', signed: true, label: 'BC\'s waters that month', color: WARM },
+    scrub: { from: '1997-11-01', to: '1998-03-01', values: [0.6, 0.7, 0.66, 0.85, 1.05] },
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '1997-11-01', region: 'pacific_bioregions' },
+    camera: { center: [-133, 50], zoom: 3.8, pitch: 30 },
+  },
+  {
+    id: 'bc-2016',
+    align: 'right',
+    eyebrow: 'Winter 2015–16 · British Columbia',
+    title: 'Mild nights, a high sea',
+    body: [
+      'DFO\'s review of 2016 found the El Niño winter typical for BC: very warm in January and February, with overnight lows even further above normal than daytime highs. In February, highs ran more than 5 °C above normal.',
+      'Sea level at Tofino, Victoria and Prince Rupert sat above its century-long trend, raised by El Niño. Off Vancouver Island, surveys caught southern copepods rarely seen there except in large El Niño events.',
+    ],
+    refs: ['dfo2016'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '2016-02-01', region: 'pacific_bioregions', landLayer: 'tmin', landMode: 'anomaly' },
+    camera: { center: [-125, 51.5], zoom: 4.3, pitch: 30 },
+  },
+  {
+    id: 'salmon',
+    eyebrow: '2016 and 2026 · BC salmon',
+    title: 'Hard years for young salmon',
+    photo: {
+      src: '/story-assets/el-nino-2026/img/skinny-coho.webp',
+      alt: 'Three juvenile coho salmon on a measuring board; the two lower fish are visibly thinner.',
+      credit: 'Juvenile coho from offshore surveys in the Blob years; the two at bottom are skinny. Photo: NOAA Fisheries (public domain)',
+      href: 'https://www.fisheries.noaa.gov/feature-story/7-ways-el-nino-and-large-marine-heatwave-could-affect-west-coast-marine-species',
+    },
+    body: [
+      'DFO judged that a warm ocean in 2015, followed by El Niño in spring 2016, left poor conditions for juvenile salmon going to sea from BC\'s central and south coasts, and expected fewer of them to return in 2017–18.',
+      'Watershed Watch\'s 2026 outlook makes the same point: El Niño years tend to bring warmer, less productive conditions for BC salmon.',
+    ],
+    refs: ['dfo2016', 'watershed', 'noaaFisheries'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'pacific_bioregions' },
+    camera: { center: [-128, 50], zoom: 5, pitch: 45, bearing: 10 },
+  },
+  {
+    id: 'bc-winter',
+    align: 'right',
+    eyebrow: 'Winter 2026–27 · Canada',
+    title: 'A winter forecast off the charts',
+    body: [
+      'Canada\'s climate services expect a warmer-than-normal winter in BC, and a drier one over the Rockies and the Okanagan. In past very strong El Niños, warm, dry weather lasted through the spring in BC, the coast included.',
+      'Kamloops, pinned on the map, is one place to watch: its September nights were near normal.',
+    ],
+    quote: { text: '…some ensemble members including from ECCC approaching or exceeding 4°C, which would be unprecedented in the modern record by a substantial margin.', cite: 'Bill Merryfield, Environment and Climate Change Canada, on forecasts for Niño 3.4' },
+    refs: ['climateData'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, point: { lat: 50.67, lon: -120.33 }, landLayer: 'tmin', landMode: 'anomaly' },
+    camera: { center: [-122, 51], zoom: 4.6, pitch: 35 },
+  },
+  {
+    id: 'indonesia',
+    eyebrow: `${EDITION.month} · Kalimantan and Sumatra`,
+    title: 'Across the Pacific, the rain stopped',
+    readout: { value: L.palangka_raya.land_precip_anom, digits: 1, unit: ' mm', signed: true, label: 'a day: rain at Palangka Raya against normal', color: '#bf812d' },
+    body: [
+      'El Niño moves the tropical Pacific\'s rain east with the warm water, and the western side dries out. On land the map now shows rain against normal: brown is drier.',
+      'NOAA\'s gauges had essentially no rain at Palangka Raya in August or September, and 0.1 mm a day at Palembang. Afternoons in both were 2 °C warmer than normal.',
+    ],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, point: { lat: -2.21, lon: 113.92 }, landLayer: 'precip', landMode: 'difference' },
+    camera: { center: [110, -2], zoom: 4.2, pitch: 30 },
+  },
+  {
+    id: 'fires',
+    align: 'right',
+    eyebrow: 'September 2026 · Borneo',
+    title: 'Fire and smoke',
+    photo: {
+      src: '/story-assets/el-nino-2026/img/borneo-smoke.webp',
+      alt: 'Satellite image of Borneo half hidden under grey smoke streaming from fires, with the Java Sea to the south.',
+      credit: 'Smoke over Borneo, 1 September 2026. NASA Earth Observatory image by Lauren Dauphin, MODIS data from NASA EOSDIS LANCE and GIBS/Worldview',
+      href: 'https://science.nasa.gov/missions/aqua/peatland-fires-darken-skies-in-indonesia/',
+    },
+    readout: { value: 200000, digits: 0, unit: ' ha', label: 'burned in Indonesia by early September, at least', color: IMPACT },
+    body: [
+      'Drained peat burns, slowly and underground. The air quality index passed 900 in Pontianak, and smoke reached the Philippines.',
+    ],
+    quote: { text: 'Indeed worse than in 2015.', cite: 'Andri Susanto, firefighter, to ABC News' },
+    refs: ['abcNews', 'nasa'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, point: { lat: -2.21, lon: 113.92 }, landLayer: 'tmax', landMode: 'anomaly' },
+    camera: { center: [112, -0.5], zoom: 5, pitch: 40 },
+  },
+  {
+    id: 'global',
+    eyebrow: `${EDITION.month} · The whole ocean`,
+    title: 'A record September for the world\'s oceans',
+    readout: { value: R.global.anom.value, digits: 2, unit: ' °C', signed: true, label: 'the global ocean, warmest September since 1985', color: WARM },
+    body: [
+      'Averaged over every ocean, September was the warmest since 1985; the Pacific alone was +0.85 °C. Copernicus found that August 2026 tied July 2023 as the planet\'s warmest month on record.',
+    ],
+    refs: ['carbonBrief'],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'global' },
+    camera: { center: [-150, 8], zoom: 1.5 },
+  },
+  {
+    id: 'extent',
+    align: 'right',
+    eyebrow: `${EDITION.month} · The whole ocean`,
+    title: 'Nearly half the ocean in a heatwave',
+    readout: { value: R.global.mhw_extent.value, digits: 1, unit: '%', label: 'of the global ocean in a heatwave on an average September day; 40.4% in 2023, the previous high', color: HOT },
+    body: [
+      'One caution: NOAA\'s heatwave threshold is fixed to 1985–2012, so as the ocean warms, more of it crosses the line every year. Part of any new record is the trend, and OSTA prints the trend beside the number.',
+    ],
+    view: { ...STORY_BASE, variable: 'mhw', period: 'monthly', date: MONTH, region: 'global' },
+    camera: { center: [-60, 8], zoom: 1.5 },
+  },
+  {
+    id: 'outro',
+    align: 'center',
+    outro: true,
+    eyebrow: `Next edition ${EDITION.next}`,
+    title: `What to watch in ${EDITION.nextMonth}`,
+    body: [],
+    view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'nino34' },
+    camera: { center: [-125, 5], zoom: 1.7 },
+  },
 ]
 
-/** Each article was opened and checked against these lines before it went in. */
-const news: Record<string, WireItem[]> = {
-  index: [
-    { date: '8 Oct 2026', iso: '2026-10-08', source: 'NOAA Climate Prediction Center', title: 'ENSO Diagnostic Discussion', href: 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml', text: '“El Niño continues to strengthen.” NOAA puts an 83% chance on October–December beating every event since 1950, meaning a three-month RONI above +2.5 °C.' },
-    { date: '29 Sep 2026', iso: '2026-09-29', source: 'Inside Climate News', title: 'Incoming El Niño is so extreme it doesn\'t have a scientific name', href: 'https://insideclimatenews.org/news/29092026/record-breaking-el-nino-grows-in-pacific/', text: 'NOAA\'s strength scale stops at “very strong”. Climate scientist Daniel Swain: “We don\'t have a categorization for this.”' },
-    { date: '24 Sep 2026', iso: '2026-09-24', source: 'Science News', title: 'This year\'s El Niño just broke a record months before it\'s expected to peak', href: 'https://www.sciencenews.org/article/record-breaking-el-nino-temperatures', text: 'On 21 September, Niño 3.4 was 3.08 °C above its 1991–2020 average, beating the 3.02 °C of November 2015. “The transition has been very rapid, from a La Niña last winter to a very strong El Niño in less than a year,” said Nathaniel Johnson of NOAA\'s Geophysical Fluid Dynamics Laboratory.' },
-    { date: '3 Sep 2026', iso: '2026-09-03', source: 'World Meteorological Organization', title: 'El Niño set to become very strong, raising risks of extreme weather into 2027', href: 'https://wmo.int/news/media-centre/el-nino-set-become-very-strong-raising-risks-of-extreme-weather-2027', text: 'A nearly 100% likelihood that El Niño lasts through February 2027. “This exceptional El Niño demands exceptional preparation and response,” said WMO Secretary-General Celeste Saulo.' },
-    { date: '27 Aug 2026', iso: '2026-08-27', source: 'Science · Cole et al.', title: 'Recent strengthening of eastern Pacific ENSO in the last millennium paleorecord', href: 'https://doi.org/10.1126/science.ady2660', text: 'Galápagos coral cores show El Niños of the last four decades were stronger than any in the 1,000 years before about 1850. The study is about past events, not this one, but it is where talk of a “millennium” comes from.' },
-  ],
-  peru: [
-    { date: '8 Jul 2026', iso: '2026-07-08', source: 'Grist', title: 'El Niño is here, and it\'s already scrambling fisheries throughout the Pacific', href: 'https://grist.org/economics/el-nino-scrambling-fisheries-throughout-the-pacific/', text: 'Peru suspended its anchoveta fishery, the world\'s largest single-species fishery, and boats with sonar found the fish more than 100 m down, beyond the reach of their nets. Prices for jack mackerel and corvina reportedly doubled. “Our vulnerability is increasing,” said Oceana Peru economist Juan Carlos Sueiro.' },
-    { date: '3 Jul 2026', iso: '2026-07-03', source: 'The Watchers', title: 'Peru declares state of emergency ahead of 2026–2027 El Niño rains', href: 'https://watchers.news/2026/07/03/peru-declares-state-of-emergency-ahead-of-2026-2027-el-nino-rains/', text: 'A 60-day emergency in 796 districts across 22 departments and Callao, for “the imminent threat of intense rainfall”.' },
-  ],
-  galapagos: [
-    { date: '3 Oct 2026', iso: '2026-10-03', source: 'El Comercio (Spanish)', title: 'El fenómeno de El Niño deja ríos desbordados en Esmeraldas y Pastaza', href: 'https://www.elcomercio.com/actualidad/ecuador/fenomeno-nino-inundaciones-esmeraldas/', text: 'Nine rivers burst their banks in Esmeraldas and Pastaza provinces, affecting about 800 families.' },
-    { date: '4 Sep 2026', iso: '2026-09-04', source: 'Charles Darwin Foundation', title: 'El Niño 2026 in Galápagos', href: 'https://www.darwinfoundation.org/en/news/all-news-stories/el-nino-2026-in-galapagos/', text: 'Marine iguanas lose weight as their algae die back, and seabirds may abandon nests. “Corals will probably be among the biggest losers,” said science director María José Barragán.' },
-    { date: '6 Aug 2026', iso: '2026-08-06', source: 'American Bird Conservancy', title: 'Pacific seabird die-offs demonstrate the need for fishery action', href: 'https://abcbirds.org/news/pacific-seabird-dieoff-2026/', text: 'Surveys on Ecuador\'s coast counted 638 dead seabirds in June and 968 in July, against a few dozen a month before. Sooty shearwaters, boobies and the critically endangered waved albatross were among them. “Our recent surveys have been reporting seabird strandings and deaths every day, but it started to explode in June,” said Sebástian Cruz, the group\'s marine program coordinator for South America.' },
-  ],
-  indonesia: [
-    { date: '7 Sep 2026', iso: '2026-09-07', source: 'ABC News (Australia)', title: 'Indonesian wildfires spurred by super El Niño choke South-East Asia', href: 'https://www.abc.net.au/news/2026-09-07/indonesia-wildfires-haze-poor-air-quality-smog-drought-el-nino/107122922', text: 'At least 200,000 hectares burned, an air quality index above 900 in Pontianak, and smoke reaching the Philippines. “Indeed worse than in 2015,” said firefighter Andri Susanto.' },
-  ],
-  bc: [
-    { date: '21 Aug 2026', iso: '2026-08-21', source: 'ClimateData.ca · Canadian Centre for Climate Services', title: 'What the developing exceptional El Niño means for Canada in 2026–27', href: 'https://climatedata.ca/news/what-the-developing-exceptional-el-nino-means-for-canada-in-2026-27/', text: 'A warmer-than-normal winter across much of BC, drier especially over the Rockies and the Okanagan. ECCC\'s Bill Merryfield: some forecasts approach or exceed 4 °C, “which would be unprecedented in the modern record by a substantial margin.”' },
-    { date: '1 Jul 2026', iso: '2026-07-01', source: 'Associated Press, via the Press Democrat', title: 'A marine heat wave caused seabird deaths off California. El Niño could worsen the die-off', href: 'https://www.pressdemocrat.com/2026/07/01/record-ocean-heat-and-el-nino-are-leading-to-mass-california-seabird-die-offs/', text: '“We\'ve been seeing cormorants walk to shore and then just die within the hour,” said Tammy Russell of Scripps Institution of Oceanography.' },
-    { date: '12 Jun 2026', iso: '2026-06-12', source: 'NOAA Fisheries', title: '7 ways El Niño and large marine heatwave could affect West Coast marine species', href: 'https://www.fisheries.noaa.gov/feature-story/7-ways-el-nino-and-large-marine-heatwave-could-affect-west-coast-marine-species', text: 'Hungry sea lion pups, harmful algal blooms that close crab and shellfish fisheries, poorer salmon survival, and whales pushed into fishing gear.' },
-    { date: '25 Mar 2026', iso: '2026-03-25', source: 'Watershed Watch Salmon Society', title: '2026 salmon outlook, part 1: environmental conditions', href: 'https://watershedwatch.ca/stories/2026-salmon-outlook-part-1-environmental-conditions/', text: 'El Niño years tend to bring warmer, less productive conditions for BC salmon.' },
-  ],
-  global: [
-    { date: '15 Sep 2026', iso: '2026-09-15', source: 'Carbon Brief', title: 'Temperature “overshoot”, world\'s warmest month and the catastrophic 1877–78 El Niño', href: 'https://www.carbonbrief.org/cited-15-september-2026-temperature-overshoot-worlds-warmest-month-catastrophic-1877-78-el-nino', text: 'Copernicus found August 2026 tied July 2023 as the warmest month on record, at 16.96 °C, 1.65 °C above pre-industrial.' },
-  ],
-}
-
-const watch = [
+const WATCH = [
   { title: 'Does Niño 3.4 keep climbing?', text: 'The first three days of October averaged +3.30 °C. NOAA gives October–December an 83% chance of beating every event since 1950.' },
   { title: 'Paita\'s heatwave: day 140', text: 'The 1997–98 run off Paita lasted 370 days. This one began on 14 May.' },
   { title: 'Rain on Ecuador\'s and Peru\'s coast', text: 'The Esmeraldas floods came at the end of September. October\'s land map will show how widespread the rain was.' },
   { title: 'Peru\'s anchovy fishery', text: 'Whether a second fishing season opens this year, after the first was cut short.' },
-  { title: 'Indonesia\'s dry season', text: 'Palangka Raya had essentially no rain in August or September. October\'s map will show whether the rains have started.' },
   { title: 'BC\'s waters', text: '+0.4 °C in September. In 1997–98 the same water stayed 0.6 to 1.05 °C above normal from November to March.' },
+  { title: 'Indonesia\'s dry season', text: 'Palangka Raya had essentially no rain in August or September. October\'s map will show whether the rains have started.' },
 ]
 
-const log = [
-  { date: '8 Oct 2026', text: 'Edition 1. OSTA data through 30 September 2026; news to 8 October.' },
-]
-
-const references = [
-  { text: 'Hobday, A. J. et al. (2016). A hierarchical approach to defining marine heatwaves.', journal: 'Progress in Oceanography', where: '141, 227–238', doi: '10.1016/j.pocean.2015.12.014' },
-  { text: 'Hobday, A. J. et al. (2018). Categorizing and naming marine heatwaves.', journal: 'Oceanography', where: '31(2), 162–173', doi: '10.5670/oceanog.2018.205' },
-  { text: 'Cole, J. E. et al. (2026). Recent strengthening of eastern Pacific ENSO in the last millennium paleorecord.', journal: 'Science', where: '394, 192–196', doi: '10.1126/science.ady2660' },
+const LOG = [
+  { date: '12 Oct 2026', text: 'Retold over the live map; same edition, same numbers. BC chapter extended from DFO\'s State of the Pacific Ocean 2016.' },
+  { date: '8 Oct 2026', text: 'Edition 1. NOAA data through 30 September 2026; news to 8 October.' },
 ]
 </script>

@@ -20,36 +20,28 @@ Each edition = the newest closed month of OSTA data + that month's news.
 python3 stories/el-nino-2026/measure.py 2026-10   # public API, ~2 min
 ```
 
-It writes the app's data file. The page reads two things from it directly: the
-race chart (`race`) and the hero's frames and readings (`nino.nino34.months_2026`,
-one hero frame per month listed there, so add the frame image too). Every other
-number the page prints is in the prose or in the script's `tiles`, and comes
-from this file's printout: Niño 3.4, 3 and 1+2 ranks, the three-month index
-against its record, Paita's heatwave run and category days, the land cells,
-BC's waters, global and Pacific ranks. **Print nothing that isn't in this file
-or measured the same way.**
+It writes the app's data file, and the page reads it directly in three places:
+the race chart (`race`), the opening scrub (`nino.nino34.months_2026`: its last
+month is the edition's month, the date every "now" step shows, and its values
+are the scrub's readout), and the map cards' readouts (Paita's "Beyond extreme"
+days, Isabela, Piura, Palangka Raya, San Diego, BC's waters, the global ocean).
+Everything else it prints goes into the prose by hand: Niño 3.4, 3 and 1+2
+ranks, the three-month index against its record, Paita's heatwave run, the land
+cells, Pacific ranks. **Print nothing that isn't in this file or measured the
+same way.**
 
 When the race chart's 2026 line reaches month 24, the event is over; stop
 updating `race` and say so.
 
-## 2. Screenshots (dev stack)
+## 2. No screenshots
 
-Screenshots come from the dev frontend (`localhost:9020`) because the camera
-framing uses the dev-only `window.__map`. Check that dev has the month first.
+The page is a `<StoryScroll>` story (docs/frontend.md, "Story pages"): every
+map is the live app, drawn from each step's `view`, and every card links to the
+same view. There is nothing to shoot. `shots.json` and `shoot.mjs` are left
+from the screenshot edition and are not used.
 
-```bash
-# Playwright is not a repo dependency: install it in a scratch dir
-cd <scratch> && npm i playwright --no-save
-cp /Projects/enso/stories/el-nino-2026/shoot.mjs .
-PATH=$HOME/.nvm/versions/node/v22.23.1/bin:$PATH \
-  node shoot.mjs /Projects/enso/stories/el-nino-2026/shots.json <scratch>/raw
-```
-
-Before running, move every date in `shots.json` to the new month (`d=`, the
-`frames` list for the hero, Paita's `d=YYYY-MM-last`). Then convert to WebP into
-`front/public/story-assets/el-nino-2026/`: hero frames crop `(170, 0, 750, 504)`
-into `hero/YYYY-MM-01.webp`, `indonesia` crops `(520, 87, 1440, 900)`, the rest
-are full 1440×900. Look at every shot before using it.
+Do look at the result: scroll the page in the dev stack, or screenshot a step
+per section in headless Chromium (docs/testing.md), at desktop and phone width.
 
 ## 3. News
 
@@ -66,20 +58,25 @@ opened (SeafoodSource 403s to fetchers) or dated.
 
 All in `el-nino-2026.vue`:
 
-- `edition`: number, month, data through, news checked, next update.
-- `tiles`: the month's five numbers and their previous highs.
-- The prose in each chapter: update its numbers. Move or add chapters as the
-  story shifts (winter on BC's coast; coastal rain in Peru and Ecuador; the decline).
-- `news`: add new items at the top of each chapter's list and keep the older
-  ones, since it is a running record.
-- `links` and the inline `storyLink(...)` calls: move every `d=` that should
-  follow the month.
-- `watch`: answer last month's items in the prose, write new ones.
-- `log`: one line per edition.
+- `EDITION`: number, month, data through, news checked, next update.
+- `steps`: update the numbers in each card's `body`. Steps that show "now" take
+  `MONTH` / `DAY` and move by themselves; dates in the past (1997, 2016) stay.
+  Move or add steps as the story shifts (winter on BC's coast; coastal rain in
+  Peru and Ecuador; the decline). Canadian examples and sources first, DFO's
+  State of the Pacific Ocean reports among them.
+- News: a new article is a `REFERENCES` entry (`short` carries the outlet and
+  date) plus a sentence, quote or readout on the card it belongs to, with the
+  key in that card's `refs`. Keep older items while they still tell the story;
+  the log records what changed.
+- Photos: only cleared ones (US federal and NASA images are public domain; DFO
+  and press photos are not), re-encoded to WebP in
+  `front/public/story-assets/el-nino-2026/img/`, with `credit` and `href`.
+- `WATCH`: answer last month's items in the cards, write new ones.
+- `LOG`: one line per edition.
 
 Then check the page at desktop and phone width (no console errors, no
-horizontal overflow), and lint: `npx eslint app/pages/stories` in the front
-container.
+horizontal overflow, no card taller than the screen), and lint:
+`npx eslint app/pages/stories` in the front container.
 
 ## Known app issue
 
