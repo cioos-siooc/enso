@@ -206,7 +206,12 @@ const mapDate = computed(() => {
   return frames[scrubIndex.value]!
 })
 
-const dateLabel = computed(() => mapDate.value ? bucketLabel(mapDate.value, store.period) : '')
+// Stories write dates month first ("April 1, 2016"); the app keeps its own.
+const dateLabel = computed(() => {
+  if (!mapDate.value) return ''
+  if (store.period !== 'daily') return bucketLabel(mapDate.value, store.period)
+  return new Date(`${mapDate.value}T00:00:00Z`).toLocaleDateString('en-US', { dateStyle: 'long', timeZone: 'UTC' })
+})
 const layerLabel = computed(() => {
   const ocean = store.variable === 'mhw'
     ? 'Marine heatwave category'

@@ -37,7 +37,7 @@
             Maps: NOAA Coral Reef Watch CoralTemp v3.1 (anomaly against a 1991–2020 daily climatology) and Marine Heatwave v1.0.1 (against NOAA's 1985–2012 90th percentile); NOAA CPC Global Unified gauge-based temperature and precipitation on land, against 1991–2020 normals computed in OSTA. Basemap © Mapbox © OpenStreetMap.
           </p>
           <p>
-            Every number on the map cards was read from NOAA's data through OSTA on {{ EDITION.checked }}, for the last complete month. A record means a record since 1 January 1985, where NOAA's satellite data begin. News is summarised from the articles linked on each card, quotes as they appear there; records claimed in the news are those outlets' and their sources', on their own datasets.
+            Every number on the map cards was read from NOAA's data through OSTA on {{ EDITION.checked }}, for the last complete month. A record means a record since January 1, 1985, where NOAA's satellite data begin. News is summarised from the articles linked on each card, quotes as they appear there; records claimed in the news are those outlets' and their sources', on their own datasets.
           </p>
         </div>
       </template>
@@ -67,8 +67,8 @@ useSeoMeta({
 const EDITION = {
   number: 1,
   month: 'September 2026',
-  through: '30 September 2026',
-  checked: '8 October 2026',
+  through: 'September 30, 2026',
+  checked: 'October 8, 2026',
   next: 'early November',
   nextMonth: 'October',
 }
@@ -99,22 +99,22 @@ const R = data.regions
 const REFERENCES: Record<string, StoryReference> = {
   cpc: {
     short: 'NOAA Climate Prediction Center, 8 Oct 2026',
-    full: 'NOAA Climate Prediction Center. ENSO Diagnostic Discussion, 8 October 2026.',
+    full: 'NOAA Climate Prediction Center. ENSO Diagnostic Discussion, October 8, 2026.',
     url: 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml',
   },
   wmo: {
     short: 'WMO, 3 Sep 2026',
-    full: 'World Meteorological Organization. 3 September 2026. El Niño set to become very strong, raising risks of extreme weather into 2027.',
+    full: 'World Meteorological Organization. September 3, 2026. El Niño set to become very strong, raising risks of extreme weather into 2027.',
     url: 'https://wmo.int/news/media-centre/el-nino-set-become-very-strong-raising-risks-of-extreme-weather-2027',
   },
   icn: {
     short: 'Inside Climate News, 29 Sep 2026',
-    full: 'Inside Climate News. 29 September 2026. Incoming El Niño is so extreme it doesn\'t have a scientific name.',
+    full: 'Inside Climate News. September 29, 2026. Incoming El Niño is so extreme it doesn\'t have a scientific name.',
     url: 'https://insideclimatenews.org/news/29092026/record-breaking-el-nino-grows-in-pacific/',
   },
   scienceNews: {
     short: 'Science News, 24 Sep 2026',
-    full: 'Science News. 24 September 2026. This year\'s El Niño just broke a record months before it\'s expected to peak.',
+    full: 'Science News. September 24, 2026. This year\'s El Niño just broke a record months before it\'s expected to peak.',
     url: 'https://www.sciencenews.org/article/record-breaking-el-nino-temperatures',
   },
   cole2026: {
@@ -134,37 +134,37 @@ const REFERENCES: Record<string, StoryReference> = {
   },
   grist: {
     short: 'Grist, 8 Jul 2026',
-    full: 'Grist. 8 July 2026. El Niño is here, and it\'s already scrambling fisheries throughout the Pacific.',
+    full: 'Grist. July 8, 2026. El Niño is here, and it\'s already scrambling fisheries throughout the Pacific.',
     url: 'https://grist.org/economics/el-nino-scrambling-fisheries-throughout-the-pacific/',
   },
   watchers: {
     short: 'The Watchers, 3 Jul 2026',
-    full: 'The Watchers. 3 July 2026. Peru declares state of emergency ahead of 2026–2027 El Niño rains.',
+    full: 'The Watchers. July 3, 2026. Peru declares state of emergency ahead of 2026–2027 El Niño rains.',
     url: 'https://watchers.news/2026/07/03/peru-declares-state-of-emergency-ahead-of-2026-2027-el-nino-rains/',
   },
   cdf: {
     short: 'Charles Darwin Foundation, 4 Sep 2026',
-    full: 'Charles Darwin Foundation. 4 September 2026. El Niño 2026 in Galápagos.',
+    full: 'Charles Darwin Foundation. September 4, 2026. El Niño 2026 in Galápagos.',
     url: 'https://www.darwinfoundation.org/en/news/all-news-stories/el-nino-2026-in-galapagos/',
   },
   abcBirds: {
     short: 'American Bird Conservancy, 6 Aug 2026',
-    full: 'American Bird Conservancy. 6 August 2026. Pacific seabird die-offs demonstrate the need for fishery action.',
+    full: 'American Bird Conservancy. August 6, 2026. Pacific seabird die-offs demonstrate the need for fishery action.',
     url: 'https://abcbirds.org/news/pacific-seabird-dieoff-2026/',
   },
   elComercio: {
     short: 'El Comercio, 3 Oct 2026 (Spanish)',
-    full: 'El Comercio. 3 October 2026. El fenómeno de El Niño deja ríos desbordados en Esmeraldas y Pastaza.',
+    full: 'El Comercio. October 3, 2026. El fenómeno de El Niño deja ríos desbordados en Esmeraldas y Pastaza.',
     url: 'https://www.elcomercio.com/actualidad/ecuador/fenomeno-nino-inundaciones-esmeraldas/',
   },
   ap: {
     short: 'Associated Press, 1 Jul 2026',
-    full: 'Associated Press, via the Press Democrat. 1 July 2026. A marine heat wave caused seabird deaths off California. El Niño could worsen the die-off.',
+    full: 'Associated Press, via the Press Democrat. July 1, 2026. A marine heat wave caused seabird deaths off California. El Niño could worsen the die-off.',
     url: 'https://www.pressdemocrat.com/2026/07/01/record-ocean-heat-and-el-nino-are-leading-to-mass-california-seabird-die-offs/',
   },
   noaaFisheries: {
     short: 'NOAA Fisheries, 12 Jun 2026',
-    full: 'NOAA Fisheries. 12 June 2026. 7 ways El Niño and large marine heatwave could affect West Coast marine species.',
+    full: 'NOAA Fisheries. June 12, 2026. 7 ways El Niño and large marine heatwave could affect West Coast marine species.',
     url: 'https://www.fisheries.noaa.gov/feature-story/7-ways-el-nino-and-large-marine-heatwave-could-affect-west-coast-marine-species',
   },
   dfo2016: {
@@ -174,27 +174,27 @@ const REFERENCES: Record<string, StoryReference> = {
   },
   watershed: {
     short: 'Watershed Watch Salmon Society, 25 Mar 2026',
-    full: 'Watershed Watch Salmon Society. 25 March 2026. 2026 salmon outlook, part 1: environmental conditions.',
+    full: 'Watershed Watch Salmon Society. March 25, 2026. 2026 salmon outlook, part 1: environmental conditions.',
     url: 'https://watershedwatch.ca/stories/2026-salmon-outlook-part-1-environmental-conditions/',
   },
   climateData: {
     short: 'ClimateData.ca, 21 Aug 2026',
-    full: 'ClimateData.ca, Canadian Centre for Climate Services. 21 August 2026. What the developing exceptional El Niño means for Canada in 2026–27.',
+    full: 'ClimateData.ca, Canadian Centre for Climate Services. August 21, 2026. What the developing exceptional El Niño means for Canada in 2026–27.',
     url: 'https://climatedata.ca/news/what-the-developing-exceptional-el-nino-means-for-canada-in-2026-27/',
   },
   abcNews: {
     short: 'ABC News (Australia), 7 Sep 2026',
-    full: 'ABC News (Australia). 7 September 2026. Indonesian wildfires spurred by super El Niño choke South-East Asia.',
+    full: 'ABC News (Australia). September 7, 2026. Indonesian wildfires spurred by super El Niño choke South-East Asia.',
     url: 'https://www.abc.net.au/news/2026-09-07/indonesia-wildfires-haze-poor-air-quality-smog-drought-el-nino/107122922',
   },
   nasa: {
     short: 'NASA Earth Observatory, 3 Sep 2026',
-    full: 'NASA Earth Observatory. 3 September 2026. Peatland fires darken skies in Indonesia. Story by Adam Voiland.',
+    full: 'NASA Earth Observatory. September 3, 2026. Peatland fires darken skies in Indonesia. Story by Adam Voiland.',
     url: 'https://science.nasa.gov/missions/aqua/peatland-fires-darken-skies-in-indonesia/',
   },
   carbonBrief: {
     short: 'Carbon Brief, 15 Sep 2026',
-    full: 'Carbon Brief. 15 September 2026. Temperature "overshoot", world\'s warmest month and the catastrophic 1877–78 El Niño.',
+    full: 'Carbon Brief. September 15, 2026. Temperature "overshoot", world\'s warmest month and the catastrophic 1877–78 El Niño.',
     url: 'https://www.carbonbrief.org/cited-15-september-2026-temperature-overshoot-worlds-warmest-month-catastrophic-1877-78-el-nino',
   },
 }
@@ -234,7 +234,7 @@ const steps: StoryStep[] = [
     title: 'Warmer than 1997 and 2015, two months earlier',
     readout: { value: data.nino.nino34.value, digits: 2, unit: ' °C', signed: true, label: 'Niño 3.4\'s warmest month since 1985', color: WARM },
     body: [
-      'The two strongest El Niños since 1985, 1997–98 and 2015–16, both peaked in November, at +2.42 and +2.81 °C. This one passed 1997\'s peak in August and 2015\'s in September. Day by day, Niño 3.4 broke its record (+2.99 °C on 19 November 2015) on 13 September and reached +3.27 °C on 30 September.',
+      'The two strongest El Niños since 1985, 1997–98 and 2015–16, both peaked in November, at +2.42 and +2.81 °C. This one passed 1997\'s peak in August and 2015\'s in September. Day by day, Niño 3.4 broke its record (+2.99 °C on November 19, 2015) on September 13 and reached +3.27 °C on September 30.',
     ],
     figure: 'race',
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'nino34' },
@@ -261,7 +261,7 @@ const steps: StoryStep[] = [
     readout: { value: P.paita.category_days['5'], digits: 0, unit: ' days', label: `of ${EDITION.month} in NOAA's top heatwave class, "Beyond extreme"`, color: HOT },
     body: [
       'El Niño is strongest where the warm water piles up against South America. In September the sea off Paita averaged 7.1 °C above normal; its warmest September before was 1997, at +4.3 °C. Chimbote was +5.8 °C and Callao, Lima\'s port, +4.8 °C. All three are records for September.',
-      'The map now shows NOAA\'s daily heatwave classes. Off Paita a heatwave began on 14 May and had run 140 days by the end of September. The longest there ran 370 days, from April 1997 to May 1998.',
+      'The map now shows NOAA\'s daily heatwave classes. Off Paita a heatwave began on May 14 and had run 140 days by the end of September. The longest there ran 370 days, from April 1997 to May 1998.',
     ],
     refs: ['hobday2016', 'hobday2018'],
     view: { ...STORY_BASE, variable: 'mhw', period: 'daily', date: DAY, point: { lat: -5.07, lon: -81.28 } },
@@ -310,7 +310,7 @@ const steps: StoryStep[] = [
     title: '…and now',
     readout: { value: P.isabela.anom, digits: 2, unit: ' °C', signed: true, label: 'west of Isabela: more than a degree past 1997', color: WARM },
     body: [
-      'The same water has been in a heatwave since 18 May, Severe or Extreme for the whole of September. On Ecuador\'s mainland coast, the sea off Santa Elena was 4.7 °C above normal, well clear of its previous September high (+3.0 °C in 2023).',
+      'The same water has been in a heatwave since May 18, Severe or Extreme for the whole of September. On Ecuador\'s mainland coast, the sea off Santa Elena was 4.7 °C above normal, well clear of its previous September high (+3.0 °C in 2023).',
       'The link opens both Septembers side by side, in OSTA\'s swipe compare.',
     ],
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, compareDate: '1997-09-01', point: { lat: -0.52, lon: -91.72 } },
@@ -351,7 +351,7 @@ const steps: StoryStep[] = [
     },
     readout: { value: P.san_diego.anom, digits: 1, unit: ' °C', signed: true, label: `off San Diego, ${EDITION.month}`, color: WARM },
     body: [
-      'The water off San Diego has been above normal in every month of 2026 and back in a heatwave since 9 September. In July, AP reported pelicans, murres and cormorants starving along the coast, and NOAA Fisheries warns of hungry sea lion pups, as in 2015.',
+      'The water off San Diego has been above normal in every month of 2026 and back in a heatwave since September 9. In July, AP reported pelicans, murres and cormorants starving along the coast, and NOAA Fisheries warns of hungry sea lion pups, as in 2015.',
     ],
     quote: { text: 'We\'ve been seeing cormorants walk to shore and then just die within the hour.', cite: 'Tammy Russell, Scripps Institution of Oceanography, to AP' },
     refs: ['ap', 'noaaFisheries'],
@@ -448,7 +448,7 @@ const steps: StoryStep[] = [
     photo: {
       src: '/story-assets/el-nino-2026/img/borneo-smoke.webp',
       alt: 'Satellite image of Borneo half hidden under grey smoke streaming from fires, with the Java Sea to the south.',
-      credit: 'Smoke over Borneo, 1 September 2026. NASA Earth Observatory image by Lauren Dauphin, MODIS data from NASA EOSDIS LANCE and GIBS/Worldview',
+      credit: 'Smoke over Borneo, September 1, 2026. NASA Earth Observatory image by Lauren Dauphin, MODIS data from NASA EOSDIS LANCE and GIBS/Worldview',
       href: 'https://science.nasa.gov/missions/aqua/peatland-fires-darken-skies-in-indonesia/',
     },
     readout: { value: 200000, digits: 0, unit: ' ha', label: 'burned in Indonesia by early September, at least', color: IMPACT },
@@ -498,7 +498,7 @@ const steps: StoryStep[] = [
 
 const WATCH = [
   { title: 'Does Niño 3.4 keep climbing?', text: 'The first three days of October averaged +3.30 °C. NOAA gives October–December an 83% chance of beating every event since 1950.' },
-  { title: 'Paita\'s heatwave: day 140', text: 'The 1997–98 run off Paita lasted 370 days. This one began on 14 May.' },
+  { title: 'Paita\'s heatwave: day 140', text: 'The 1997–98 run off Paita lasted 370 days. This one began on May 14.' },
   { title: 'Rain on Ecuador\'s and Peru\'s coast', text: 'The Esmeraldas floods came at the end of September. October\'s land map will show how widespread the rain was.' },
   { title: 'Peru\'s anchovy fishery', text: 'Whether a second fishing season opens this year, after the first was cut short.' },
   { title: 'BC\'s waters', text: '+0.4 °C in September. In 1997–98 the same water stayed 0.6 to 1.05 °C above normal from November to March.' },
@@ -507,6 +507,6 @@ const WATCH = [
 
 const LOG = [
   { date: '12 Oct 2026', text: 'Retold over the live map; same edition, same numbers. BC chapter extended from DFO\'s State of the Pacific Ocean 2016.' },
-  { date: '8 Oct 2026', text: 'Edition 1. NOAA data through 30 September 2026; news to 8 October.' },
+  { date: 'Oct 8, 2026', text: 'Edition 1. NOAA data through September 30, 2026; news to October 8.' },
 ]
 </script>

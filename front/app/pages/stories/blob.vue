@@ -6,7 +6,7 @@
         <div class="mt-10 flex max-w-xl flex-col gap-3 rounded-2xl border border-white/10 bg-[#0f1219]/90 p-6 text-left font-data text-[0.7rem] leading-relaxed text-white/70 backdrop-blur-md">
           <h2 class="font-display text-base font-bold text-white">Data and credits</h2>
           <p>
-            Maps: NOAA Coral Reef Watch CoralTemp v3.1 (anomaly against a 1991–2020 daily climatology) and Marine Heatwave v1.0.1 (against NOAA's 1985–2012 90th percentile); NOAA CPC Global Unified on land. Basemap © Mapbox © OpenStreetMap. Map numbers were read from NOAA's data in OSTA on 8 October 2026, with ocean data through 3 October 2026.
+            Maps: NOAA Coral Reef Watch CoralTemp v3.1 (anomaly against a 1991–2020 daily climatology) and Marine Heatwave v1.0.1 (against NOAA's 1985–2012 90th percentile); NOAA CPC Global Unified on land. Basemap © Mapbox © OpenStreetMap. Map numbers were read from NOAA's data in OSTA on October 8, 2026, with ocean data through October 3, 2026.
           </p>
           <p>Every impact links to its source on its own card, and every card opens its view in OSTA.</p>
           <p>
@@ -27,7 +27,7 @@ import { STORY_BASE, viewLink, type StoryReference, type StoryStep } from '~/uti
  * "A Fever on Canada's Pacific Coast", the CIOOS Pacific story about the
  * 2013-16 marine heatwave, told over the live map (components/story/Scroll.vue).
  *
- * Map numbers were read from the API on 8 October 2026. Impacts lead with
+ * Map numbers were read from the API on October 8, 2026. Impacts lead with
  * Canadian sources, DFO's State of the Pacific Ocean reports first, and each
  * is linked on its own card.
  */
@@ -76,6 +76,16 @@ const REFERENCES: Record<string, StoryReference> = {
     full: 'Piatt, J.F., Parrish, J.K., Renner, H.M. et al. 2020. Extreme mortality and reproductive failure of common murres resulting from the northeast Pacific marine heatwave of 2014–2016. PLOS ONE 15(1): e0226087.',
     url: 'https://doi.org/10.1371/journal.pone.0226087',
   },
+  ap2026: {
+    short: 'AP, July 2026',
+    full: 'Watson, J. 2026. A marine heat wave caused seabird deaths off California. El Nino could worsen the die-off. Associated Press, July 1, 2026.',
+    url: 'https://www.kpbs.org/news/environment/2026/07/01/a-marine-heat-wave-caused-seabird-deaths-off-california-el-nino-could-worsen-the-die-off',
+  },
+  ctv2026: {
+    short: 'CTV News, September 2026',
+    full: 'Dying sea birds washing ashore in Bay Area due to effects of warming ocean. CNN, via CTV News, September 17, 2026.',
+    url: 'https://www.ctvnews.ca/climate-and-environment/article/dying-sea-birds-washing-ashore-in-bay-area-due-to-effects-of-warming-ocean/',
+  },
   noaaHab: {
     short: 'NOAA National Ocean Service 2016',
     full: 'NOAA National Ocean Service. 2016. West Coast harmful algal bloom.',
@@ -88,7 +98,7 @@ const REFERENCES: Record<string, StoryReference> = {
   },
   alaskaPublic2019: {
     short: 'Alaska Public Media 2019',
-    full: 'Alaska Public Media. 6 December 2019. Extremely low cod numbers linked to the marine heatwave lead feds to close the Gulf of Alaska fishery for the first time.',
+    full: 'Alaska Public Media. December 6, 2019. Extremely low cod numbers linked to the marine heatwave lead feds to close the Gulf of Alaska fishery for the first time.',
     url: 'https://alaskapublic.org/news/2019-12-07/extremely-low-cod-numbers-linked-to-the-marine-heatwave-lead-feds-to-close-the-gulf-of-alaska-fishery-for-the-first-time',
   },
 }
@@ -133,10 +143,10 @@ const steps: StoryStep[] = [
   {
     id: 'blob',
     align: 'right',
-    eyebrow: '11 June 2014 · Northeast Pacific',
+    eyebrow: 'June 11, 2014 · Northeast Pacific',
     title: 'The Blob takes shape',
     body: [
-      'A stubborn ridge of high pressure kept winter storms away, and the summer\'s heat stayed in the water. At its peak the Blob covered about nine million square kilometres, more than Australia.',
+      'A stubborn ridge of high pressure kept winter storms away, and the summer\'s heat stayed in the water. At its peak the Blob covered about nine million square kilometres, an area almost as large as Canada.',
       'The map now shows NOAA\'s marine heatwave categories.',
     ],
     refs: ['original'],
@@ -148,7 +158,7 @@ const steps: StoryStep[] = [
     id: 'oregon',
     eyebrow: 'Autumn 2014 · Off Newport, Oregon',
     title: 'Down the coast',
-    body: ['By autumn the warmth reached all the way down the coast. The cell off Newport stayed in a heatwave from 19 September 2014 to 1 May 2015, peaking at Category 3, Severe.'],
+    body: ['By autumn the warmth reached all the way down the coast. The cell off Newport stayed in a heatwave from September 19, 2014, to May 1, 2015, peaking at Category 3, Severe.'],
     readout: { value: 225, digits: 0, unit: ' days', label: 'in a heatwave without a break', color: HOT },
     view: { ...STORY_BASE, variable: 'mhw', period: 'daily', date: '2014-12-24', point: { lat: 44.67, lon: -124.55 } },
     camera: { center: [-127.5, 43.5], zoom: 4.6, pitch: 50, bearing: -25 },
@@ -176,7 +186,7 @@ const steps: StoryStep[] = [
     id: 'bc',
     eyebrow: '2015 · British Columbia',
     title: 'It came to BC, and stayed',
-    body: ['Offshore, heatwave extent peaked in 2014. In BC\'s waters the peak came a year later, and on 1 April 2016, 99.97% of them were in a marine heatwave.'],
+    body: ['Offshore, heatwave extent peaked in 2014. In BC\'s waters the peak came a year later, and by April 1, 2016, 99.97% of BC\'s waters were in a marine heatwave.'],
     readout: { value: 73.5, digits: 1, unit: '%', label: 'of BC\'s waters in a heatwave on an average day of 2015', color: HOT },
     view: { ...STORY_BASE, variable: 'mhw', period: 'monthly', date: '2015-07-01', region: 'pacific_bioregions' },
     camera: { center: [-130, 51.5], zoom: 4.3, pitch: 40, bearing: -15 },
@@ -206,7 +216,7 @@ const steps: StoryStep[] = [
     eyebrow: '2015 · West coast of Vancouver Island',
     title: 'Poorer food at the bottom of the chain',
     body: [
-      'Surveys west of Vancouver Island caught more and more southern copepods, which are poor food for fish, and fewer of the sub-Arctic species usually found there. Gelatinous animals such as doliolids increased too.',
+      'Surveys west of Vancouver Island caught more and more southern copepods, which are poor food for fish, and fewer of the sub-Arctic species usually found there.',
       'The warm surface layer also kept nutrients from mixing up from below through the winter of 2014–15.',
     ],
     refs: ['dfo2015'],
@@ -221,6 +231,7 @@ const steps: StoryStep[] = [
     body: [
       'Cassin\'s auklets had a banner breeding season in 2014 on Triangle Island, off the northwest tip of Vancouver Island and the largest colony in the world. That fall and winter, young auklets died in huge numbers along the coast from California to BC.',
       'A year later it was the common murres: about 62,000 dead or dying birds washed ashore from California to Alaska, and the total may have approached a million.',
+      'It is happening again. Off California, where the water has been in a marine heatwave for a year, starving pelicans, cormorants and murres have been washing ashore through 2026.',
     ],
     photo: {
       src: '/story-assets/blob/img/murres.webp',
@@ -229,7 +240,7 @@ const steps: StoryStep[] = [
       href: 'https://www.fws.gov/media/common-murre-die-gulf-alaska',
     },
     readout: { value: 62000, digits: 0, unit: '', label: 'common murres washed ashore, 2015–16', color: IMPACT },
-    refs: ['dfo2014', 'piatt2020'],
+    refs: ['dfo2014', 'piatt2020', 'ap2026', 'ctv2026'],
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '2014-11-01', point: { lat: 50.86, lon: -129.08 } },
     camera: { center: [-131, 50.6], zoom: 5, pitch: 45, bearing: 10 },
   },
@@ -299,7 +310,7 @@ const steps: StoryStep[] = [
     id: 'now',
     eyebrow: 'September 2025 · Now',
     title: 'Back to now',
-    body: ['September 2025 was the warmest September on record across the NE Pacific region, and on 9 September 93.5% of it was in a marine heatwave, more than on any day of the original Blob. Across the record, the region\'s heatwave extent is rising by about 6 percentage points a decade.'],
+    body: ['September 2025 was the warmest September on record across the NE Pacific region, and on September 9, 93.5% of it was in a marine heatwave, more than on any day of the original Blob. Across the record, the region\'s heatwave extent is rising by about 6 percentage points a decade.'],
     readout: { value: 1.37, digits: 2, unit: ' °C', signed: true, label: 'NE Pacific region, September 2025', color: WARM },
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '2025-09-01', region: 'ne_pacific' },
     camera: { center: [-145, 44], zoom: 2.6, pitch: 15 },

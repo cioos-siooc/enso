@@ -277,6 +277,10 @@ What the stories are agreed to do:
   Pacific Canadian Marine Ecosystems* reports (Can. Tech. Rep. Fish. Aquat. Sci., one per
   year) come first; their web pages have moved, but the PDFs at `waves-vagues.dfo-mpo.gc.ca`
   still resolve.
+- **Dates are month first, Canadian Press style**: "April 1, 2016", "April 1" without a
+  year, a comma after the year mid-sentence ("from September 19, 2014, to …"), never "1st".
+  This covers card text, references and the map's daily date label (`Scroll.vue`
+  formats it `en-US`). The app outside stories keeps its `en-GB` day-month dates.
 - **Every claim beyond the map links its source on its own card** (`refs`), not in a list
   at the end. The outro keeps only data and credits.
 - **Photos must be cleared for reuse.** US federal agency photos (USFWS, NOAA) are public
