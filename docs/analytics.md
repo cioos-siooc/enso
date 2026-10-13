@@ -1,6 +1,39 @@
-# Usage analytics (PostHog)
+# Usage analytics (PostHog, and Umami on trial)
 
 What is instrumented, what deliberately is not, and why.
+
+## Umami, on trial next to PostHog (from 2026-10-13)
+
+**Why a trial.** In prod, PostHog showed every API event under an IP as the person and with
+no city. Two causes: posthog-js was not sending (no `$pageview`s at all, so no
+`X-PostHog-Distinct-Id` header and the IP fallback below), and `capture_event` sends no
+`$ip`, so PostHog geolocates the API server's address, not the visitor's. Separately, the
+data goes to US servers with a cookie. Umami is self-hosted, cookieless, and answers the
+same questions. Both run until one is chosen; then remove the other.
+
+- **One shared instance, not part of this stack.** Umami runs at
+  `analytics.cioospacific.ca` from its own repo, `cioos-pacific-analytics` (Umami v3 +
+  Postgres + Cloudflare Tunnel), the same way Prefect runs at
+  `pipelines.cioospacific.ca`.
+  Every CIOOS Pacific app is a website there; OSTA is one. Its README covers deploying,
+  adding an app, backups and upgrades.
+- **The browser loads the script straight from that host — no proxy in `front`.** Behind
+  Cloudflare, Umami reads the visitor IP from `CF-Connecting-IP`, which Cloudflare sets from
+  whoever connected. Through a `front` proxy that is this server, so every visitor would get
+  its location — PostHog's server-side problem again. The cost: some
+  ad blockers stop a separate analytics hostname.
+- **Front end only.** `app/plugins/umami.client.ts` injects `NUXT_PUBLIC_UMAMI_SCRIPT_URL`
+  when `NUXT_PUBLIC_UMAMI_WEBSITE_ID` is set; `trackEvent()` calls `window.umami?.track()`
+  next to `posthog.capture()`, so every event below goes to both with no call-site change.
+  The API's server-side events are **not** sent to Umami (a decision: they duplicate the
+  browser's `point_selected`/`region_selected`, and only direct API users are lost).
+- **`data-exclude-search="true"` is load-bearing.** The tracker reports a pageview on every
+  `replaceState` that changes the URL, and `useUrlState` rewrites the query string on every
+  selection — ten times a second in playback. With it, one pageview per path; verified in
+  headless Chromium (one pageview across a map click that rewrote the query).
+- **Umami drops bots by user agent**, headless Chromium included: `/api/send` still
+  answers 200, but nothing is stored. Set a desktop `userAgent` to test in Playwright.
+- An event fired before the deferred script loads is lost on Umami's side, not queued.
 
 ## Usage analytics (PostHog)
 

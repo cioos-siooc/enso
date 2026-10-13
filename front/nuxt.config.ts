@@ -59,6 +59,11 @@ export default defineNuxtConfig({
       // analytics need no other change.
       posthogKey: process.env.NUXT_PUBLIC_POSTHOG_KEY || '',
       posthogHost: process.env.NUXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com',
+      // Umami, on trial next to PostHog: the shared CIOOS Pacific instance
+      // (cioos-pacific-analytics). Empty ID by default, and
+      // `app/plugins/umami.client.ts` returns early without it.
+      umamiWebsiteId: process.env.NUXT_PUBLIC_UMAMI_WEBSITE_ID || '',
+      umamiScriptUrl: process.env.NUXT_PUBLIC_UMAMI_SCRIPT_URL || 'https://analytics.cioospacific.ca/script.js',
     },
   },
 

@@ -60,6 +60,10 @@ Host ports come from `docker-compose.dev.yml`'s `${VAR:-default}` fallbacks, ove
 
 Offset from the ocean-acidification-dashboard's 9010–9014 so both stacks can run at once.
 
+Usage analytics: PostHog Cloud, and on trial next to it the shared CIOOS Pacific Umami at
+`analytics.cioospacific.ca` (its own repo, `cioos-pacific-analytics`, like Prefect's) —
+docs/analytics.md.
+
 ## Common commands
 
 ```bash
