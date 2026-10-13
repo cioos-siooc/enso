@@ -9,6 +9,9 @@ The app is the **Ocean Surface Temperature Atlas (OSTA)**: full name on first me
 thereafter. The repo, compose project, database and `enso.*` storage keys keep the old name;
 the `process` image, its package and everything registered with Prefect use `osta`.
 
+##  Language
+Use ASD-STE100 when communicating with the user.
+
 **Public URL: <https://osta.cioospacific.ca>** (API: `https://mhw-api.cioospacific.ca`). Prod
 runs the same global v2.1 as dev. Deep links into the app use this host.
 
