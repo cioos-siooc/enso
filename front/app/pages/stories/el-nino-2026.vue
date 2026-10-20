@@ -177,6 +177,11 @@ const REFERENCES: Record<string, StoryReference> = {
     full: 'Watershed Watch Salmon Society. March 25, 2026. 2026 salmon outlook, part 1: environmental conditions.',
     url: 'https://watershedwatch.ca/stories/2026-salmon-outlook-part-1-environmental-conditions/',
   },
+  ctvSwordfish: {
+    short: 'CTV News, October 8, 2026',
+    full: 'Yamoah, M. 2026. What is a six-foot swordfish doing in B.C.? El Niño may hold the answer. CTV News, October 8, 2026.',
+    url: 'https://www.ctvnews.ca/vancouver/vancouver-island/article/what-is-a-six-foot-swordfish-doing-in-bc-el-nino-may-hold-the-answer/',
+  },
   climateData: {
     short: 'ClimateData.ca, August 21, 2026',
     full: 'ClimateData.ca, Canadian Centre for Climate Services. August 21, 2026. What the developing exceptional El Niño means for Canada in 2026–27.',
@@ -367,7 +372,11 @@ const steps: StoryStep[] = [
     body: [
       'Across DFO\'s Pacific bioregions, September was only a little warmer than normal. In the last two big El Niños, this water warmed through the winter.',
       'The link opens Niño 3.4 and BC\'s waters on one chart, to watch whether it happens again.',
+      'This fall a swordfish almost two metres long washed up on Haida Gwaii, far north of its usual range off Southern California and Baja.',
     ],
+    quote: { text: 'It is totally not unexpected during a year like an El Niño year, or when we\'re seeing marine heatwaves.', cite: 'Jordan Watson, Ocean Networks Canada, to CTV News' },
+    refs: ['ctvSwordfish'],
+    places: [{ name: 'Haida Gwaii', coords: [-132.1, 53.3] }],
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, region: 'pacific_bioregions', region2: 'nino34' },
     camera: { center: [-131, 51.5], zoom: 4.3, pitch: 35, bearing: -10 },
   },
@@ -516,6 +525,7 @@ const WATCH = [
 ]
 
 const LOG = [
+  { date: 'October 20, 2026', text: 'Same edition. Added the Haida Gwaii swordfish (CTV News, October 8) to the BC card, and labels for the places the BC cards name.' },
   { date: 'October 12, 2026', text: 'Retold over the live map; same edition, same numbers. BC chapter extended from DFO\'s State of the Pacific Ocean 2016.' },
   { date: 'October 8, 2026', text: 'Edition 1. NOAA data through September 30, 2026; news to October 8.' },
 ]
