@@ -21,7 +21,7 @@
 
 <script setup lang="ts">
 export interface WireItem {
-  /** As printed, '8 Oct 2026'. */
+  /** As printed, 'October 8, 2026'. */
   date: string
   /** For `<time datetime>`, '2026-10-08'. */
   iso: string

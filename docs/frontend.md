@@ -260,6 +260,9 @@ const steps: StoryStep[] = [
 - **`line`** draws a dashed line with a dot per vertex for that step only (the Blob's Line P),
   labelled with a DOM marker. A single vertex is a labelled dot for a place (Kamloops on the
   Blob's land step). It is not part of the view, so the card's link leaves it off.
+- **`places`** labels every place a card names, each with a dot (`dot: false` for an area
+  such as the Okanagan or the Rockies). Like `line`, it is drawn for that step only and
+  is not part of the view.
 - **A scrub's `values`**, one per month, make its readout follow the clock instead of
   counting up.
 - **Readouts count up** when their step arrives (instantly under `prefers-reduced-motion`,

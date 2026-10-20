@@ -73,6 +73,8 @@ All in `el-nino-2026.vue`:
   `front/public/story-assets/el-nino-2026/img/`, with `credit` and `href`.
 - `WATCH`: answer last month's items in the cards, write new ones.
 - `LOG`: one line per edition.
+- Dates everywhere (cards, `short` and `full`, `EDITION`, `LOG`) are month first,
+  "October 8, 2026", never "8 Oct 2026" (docs/frontend.md → "Story pages").
 
 Then check the page at desktop and phone width (no console errors, no
 horizontal overflow, no card taller than the screen), and lint:

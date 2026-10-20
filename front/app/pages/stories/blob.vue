@@ -254,7 +254,7 @@ const steps: StoryStep[] = [
     eyebrow: 'Summer 2015 · California to Alaska',
     title: 'A toxic bloom',
     body: [
-      'The largest and longest-lasting harmful algal bloom on the West Coast in at least 15 years stretched from California\'s Channel Islands to Alaska. Its toxin, domoic acid, shut Washington\'s razor clam fishery and Dungeness crab and razor clam harvests in parts of northern California.',
+      'The largest and longest-lasting harmful algal bloom on the West Coast in at least 15 years stretched from California\'s Channel Islands to Alaska. Its toxin, domoic acid, shut Washington\'s razor clam fishery and crab and clam harvests in parts of northern California.',
       'Off Vancouver Island the bloom came early, in May, and lasted into August, but only three areas there were closed to shellfish harvesting.',
     ],
     photo: {

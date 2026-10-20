@@ -67,6 +67,12 @@ export interface StoryStep {
    * Not part of the view, so its link leaves it off.
    */
   line?: { coords: [lon: number, lat: number][], label?: string }
+  /**
+   * Places the card names, each a dot and its label, for this step only.
+   * `dot: false` labels an area (a valley, a range) without a dot; `beside`
+   * puts the label right of the dot, clear of the selection pin on that cell.
+   */
+  places?: { name: string, coords: [lon: number, lat: number], dot?: boolean, beside?: boolean }[]
   /** Across the top of the card, credited and linked to where it came from. */
   photo?: { src: string, alt: string, credit: string, href: string }
   /** Keys into the story's references, linked under the card. */

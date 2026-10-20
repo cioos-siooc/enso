@@ -88,15 +88,15 @@
 
           <article
             v-else
-            class="my-[30dvh] w-full rounded-2xl border border-white/10 bg-[#0f1219]/85 p-6 text-white/90 shadow-2xl backdrop-blur-md transition-all duration-700 md:p-7"
+            class="my-[30dvh] w-full rounded-2xl border border-white/10 bg-[#0f1219]/85 p-5 text-white/90 shadow-2xl backdrop-blur-md transition-all duration-700 md:p-7"
             :class="[
               s.wide ? 'max-w-2xl' : 'max-w-md',
               s.scrub ? 'sticky top-[20dvh]' : '',
               i === active ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-40',
             ]"
           >
-            <figure v-if="s.photo" class="-mx-6 -mt-6 mb-5 overflow-hidden rounded-t-2xl md:-mx-7 md:-mt-7">
-              <img :src="withAppBase(s.photo.src)" :alt="s.photo.alt" class="max-h-52 w-full object-cover" loading="lazy">
+            <figure v-if="s.photo" class="-mx-5 -mt-5 mb-5 overflow-hidden rounded-t-2xl md:-mx-7 md:-mt-7">
+              <img :src="withAppBase(s.photo.src)" :alt="s.photo.alt" class="max-h-32 w-full object-cover md:max-h-52" loading="lazy">
               <figcaption class="bg-black/40 px-4 py-1.5 font-data text-[0.65rem] text-white/60">
                 <a :href="s.photo.href" target="_blank" rel="noopener" class="underline-offset-2 hover:underline">{{ s.photo.credit }}</a>
               </figcaption>
@@ -308,14 +308,14 @@ function shown(i: number): string {
   return `${r.prefix ?? ''}${n}${r.unit}`
 }
 
-// --- A step's line ---------------------------------------------------------------
+// --- A step's line and places ------------------------------------------------------
 
 const LINE_SOURCE_ID = 'story-line'
-let lineLabel: mapboxgl.Marker | null = null
+let labels: mapboxgl.Marker[] = []
 
 /**
- * Draws the step's `line`, or clears the last one. Above every map layer;
- * the label is a DOM marker so it takes the page's type, not the style's.
+ * Draws the step's `line` and `places`, or clears the last ones. Above every
+ * map layer; labels are DOM markers so they take the page's type, not the style's.
  */
 async function drawLine(s: StoryStep) {
   if (!map) return
@@ -325,12 +325,15 @@ async function drawLine(s: StoryStep) {
     return
   }
   const coords = s.line?.coords ?? []
+  const places = s.places ?? []
+  const dot = (c: [number, number]) => ({ type: 'Feature' as const, properties: {}, geometry: { type: 'Point' as const, coordinates: c } })
   const data: GeoJSON.FeatureCollection = {
     type: 'FeatureCollection',
     features: [
       // One vertex is a place, not a line: just its dot.
       ...(coords.length > 1 ? [{ type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: coords } }] : []),
-      ...coords.map(c => ({ type: 'Feature' as const, properties: {}, geometry: { type: 'Point' as const, coordinates: c } })),
+      ...coords.map(dot),
+      ...places.filter(p => p.dot !== false).map(p => dot(p.coords)),
     ],
   }
   const source = map.getSource(LINE_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
@@ -363,17 +366,24 @@ async function drawLine(s: StoryStep) {
       paint: { 'circle-radius': 3.5, 'circle-color': '#ffffff', 'circle-stroke-color': '#0b0d12', 'circle-stroke-width': 1.5 },
     })
   }
-  lineLabel?.remove()
-  lineLabel = null
-  if (coords.length && s.line?.label) {
-    const { Marker } = (await import('mapbox-gl')).default
-    if (!map || props.steps[active.value] !== s) return
+  for (const m of labels) m.remove()
+  labels = []
+  const wanted: { text: string, at: [number, number], anchor: 'bottom' | 'center' | 'left', offset: [number, number] }[] = [
+    ...(coords.length && s.line?.label ? [{ text: s.line.label, at: coords[Math.floor(coords.length / 2)]!, anchor: 'bottom' as const, offset: [0, -8] as [number, number] }] : []),
+    ...places.map(p => p.dot === false
+      ? { text: p.name, at: p.coords, anchor: 'center' as const, offset: [0, 0] as [number, number] }
+      : p.beside
+        ? { text: p.name, at: p.coords, anchor: 'left' as const, offset: [14, -14] as [number, number] }
+        : { text: p.name, at: p.coords, anchor: 'bottom' as const, offset: [0, -8] as [number, number] }),
+  ]
+  if (!wanted.length) return
+  const { Marker } = (await import('mapbox-gl')).default
+  if (!map || props.steps[active.value] !== s) return
+  for (const w of wanted) {
     const el = document.createElement('span')
     el.className = 'pointer-events-none rounded bg-black/60 px-1.5 py-0.5 font-data text-xs font-semibold uppercase tracking-wider text-white'
-    el.textContent = s.line.label
-    lineLabel = new Marker({ element: el, anchor: 'bottom', offset: [0, -8] })
-      .setLngLat(coords[Math.floor(coords.length / 2)]!)
-      .addTo(map)
+    el.textContent = w.text
+    labels.push(new Marker({ element: el, anchor: w.anchor, offset: w.offset }).setLngLat(w.at).addTo(map))
   }
 }
 
@@ -442,7 +452,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
-  lineLabel?.remove()
+  for (const m of labels) m.remove()
   map = null
 })
 </script>

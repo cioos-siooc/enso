@@ -28,7 +28,7 @@
         <div class="mt-10 flex max-w-xl flex-col gap-3 rounded-2xl border border-white/10 bg-[#0f1219]/90 p-6 text-left font-data text-[0.7rem] leading-relaxed text-white/70 backdrop-blur-md">
           <h2 class="font-display text-base font-bold text-white">Update log</h2>
           <ol class="flex flex-col gap-1">
-            <li v-for="entry in LOG" :key="entry.date" class="grid gap-x-3 sm:grid-cols-[6rem_minmax(0,1fr)]">
+            <li v-for="entry in LOG" :key="entry.date" class="grid gap-x-3 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
               <span class="text-white/50">{{ entry.date }}</span><span>{{ entry.text }}</span>
             </li>
           </ol>
@@ -84,7 +84,7 @@ const IMPACT = '#e2e8f0'
 
 /** 1997 grey, 2015 cool, 2026 in the accent; follows data.race's order. */
 const RACE_COLORS = ['#a3a3a3', '#79b5c8', '#ef6a3a']
-const RACE_KEY = ['1997–98, peak +2.42 in Nov', '2015–16, peak +2.81 in Nov', '2026–27']
+const RACE_KEY = ['1997–98, peak +2.42 in November', '2015–16, peak +2.81 in November', '2026–27']
 
 /** 1st, 2nd, 3rd, 16th, 21st. */
 function ordinal(n: number): string {
@@ -98,22 +98,22 @@ const R = data.regions
 
 const REFERENCES: Record<string, StoryReference> = {
   cpc: {
-    short: 'NOAA Climate Prediction Center, 8 Oct 2026',
+    short: 'NOAA Climate Prediction Center, October 8, 2026',
     full: 'NOAA Climate Prediction Center. ENSO Diagnostic Discussion, October 8, 2026.',
     url: 'https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/ensodisc.shtml',
   },
   wmo: {
-    short: 'WMO, 3 Sep 2026',
+    short: 'WMO, September 3, 2026',
     full: 'World Meteorological Organization. September 3, 2026. El Niño set to become very strong, raising risks of extreme weather into 2027.',
     url: 'https://wmo.int/news/media-centre/el-nino-set-become-very-strong-raising-risks-of-extreme-weather-2027',
   },
   icn: {
-    short: 'Inside Climate News, 29 Sep 2026',
+    short: 'Inside Climate News, September 29, 2026',
     full: 'Inside Climate News. September 29, 2026. Incoming El Niño is so extreme it doesn\'t have a scientific name.',
     url: 'https://insideclimatenews.org/news/29092026/record-breaking-el-nino-grows-in-pacific/',
   },
   scienceNews: {
-    short: 'Science News, 24 Sep 2026',
+    short: 'Science News, September 24, 2026',
     full: 'Science News. September 24, 2026. This year\'s El Niño just broke a record months before it\'s expected to peak.',
     url: 'https://www.sciencenews.org/article/record-breaking-el-nino-temperatures',
   },
@@ -133,37 +133,37 @@ const REFERENCES: Record<string, StoryReference> = {
     url: 'https://doi.org/10.5670/oceanog.2018.205',
   },
   grist: {
-    short: 'Grist, 8 Jul 2026',
+    short: 'Grist, July 8, 2026',
     full: 'Grist. July 8, 2026. El Niño is here, and it\'s already scrambling fisheries throughout the Pacific.',
     url: 'https://grist.org/economics/el-nino-scrambling-fisheries-throughout-the-pacific/',
   },
   watchers: {
-    short: 'The Watchers, 3 Jul 2026',
+    short: 'The Watchers, July 3, 2026',
     full: 'The Watchers. July 3, 2026. Peru declares state of emergency ahead of 2026–2027 El Niño rains.',
     url: 'https://watchers.news/2026/07/03/peru-declares-state-of-emergency-ahead-of-2026-2027-el-nino-rains/',
   },
   cdf: {
-    short: 'Charles Darwin Foundation, 4 Sep 2026',
+    short: 'Charles Darwin Foundation, September 4, 2026',
     full: 'Charles Darwin Foundation. September 4, 2026. El Niño 2026 in Galápagos.',
     url: 'https://www.darwinfoundation.org/en/news/all-news-stories/el-nino-2026-in-galapagos/',
   },
   abcBirds: {
-    short: 'American Bird Conservancy, 6 Aug 2026',
+    short: 'American Bird Conservancy, August 6, 2026',
     full: 'American Bird Conservancy. August 6, 2026. Pacific seabird die-offs demonstrate the need for fishery action.',
     url: 'https://abcbirds.org/news/pacific-seabird-dieoff-2026/',
   },
   elComercio: {
-    short: 'El Comercio, 3 Oct 2026 (Spanish)',
+    short: 'El Comercio, October 3, 2026 (Spanish)',
     full: 'El Comercio. October 3, 2026. El fenómeno de El Niño deja ríos desbordados en Esmeraldas y Pastaza.',
     url: 'https://www.elcomercio.com/actualidad/ecuador/fenomeno-nino-inundaciones-esmeraldas/',
   },
   ap: {
-    short: 'Associated Press, 1 Jul 2026',
+    short: 'Associated Press, July 1, 2026',
     full: 'Associated Press, via the Press Democrat. July 1, 2026. A marine heat wave caused seabird deaths off California. El Niño could worsen the die-off.',
     url: 'https://www.pressdemocrat.com/2026/07/01/record-ocean-heat-and-el-nino-are-leading-to-mass-california-seabird-die-offs/',
   },
   noaaFisheries: {
-    short: 'NOAA Fisheries, 12 Jun 2026',
+    short: 'NOAA Fisheries, June 12, 2026',
     full: 'NOAA Fisheries. June 12, 2026. 7 ways El Niño and large marine heatwave could affect West Coast marine species.',
     url: 'https://www.fisheries.noaa.gov/feature-story/7-ways-el-nino-and-large-marine-heatwave-could-affect-west-coast-marine-species',
   },
@@ -173,27 +173,27 @@ const REFERENCES: Record<string, StoryReference> = {
     url: 'https://waves-vagues.dfo-mpo.gc.ca/Library/40617944.pdf',
   },
   watershed: {
-    short: 'Watershed Watch Salmon Society, 25 Mar 2026',
+    short: 'Watershed Watch Salmon Society, March 25, 2026',
     full: 'Watershed Watch Salmon Society. March 25, 2026. 2026 salmon outlook, part 1: environmental conditions.',
     url: 'https://watershedwatch.ca/stories/2026-salmon-outlook-part-1-environmental-conditions/',
   },
   climateData: {
-    short: 'ClimateData.ca, 21 Aug 2026',
+    short: 'ClimateData.ca, August 21, 2026',
     full: 'ClimateData.ca, Canadian Centre for Climate Services. August 21, 2026. What the developing exceptional El Niño means for Canada in 2026–27.',
     url: 'https://climatedata.ca/news/what-the-developing-exceptional-el-nino-means-for-canada-in-2026-27/',
   },
   abcNews: {
-    short: 'ABC News (Australia), 7 Sep 2026',
+    short: 'ABC News (Australia), September 7, 2026',
     full: 'ABC News (Australia). September 7, 2026. Indonesian wildfires spurred by super El Niño choke South-East Asia.',
     url: 'https://www.abc.net.au/news/2026-09-07/indonesia-wildfires-haze-poor-air-quality-smog-drought-el-nino/107122922',
   },
   nasa: {
-    short: 'NASA Earth Observatory, 3 Sep 2026',
+    short: 'NASA Earth Observatory, September 3, 2026',
     full: 'NASA Earth Observatory. September 3, 2026. Peatland fires darken skies in Indonesia. Story by Adam Voiland.',
     url: 'https://science.nasa.gov/missions/aqua/peatland-fires-darken-skies-in-indonesia/',
   },
   carbonBrief: {
-    short: 'Carbon Brief, 15 Sep 2026',
+    short: 'Carbon Brief, September 15, 2026',
     full: 'Carbon Brief. September 15, 2026. Temperature "overshoot", world\'s warmest month and the catastrophic 1877–78 El Niño.',
     url: 'https://www.carbonbrief.org/cited-15-september-2026-temperature-overshoot-worlds-warmest-month-catastrophic-1877-78-el-nino',
   },
@@ -393,6 +393,11 @@ const steps: StoryStep[] = [
       'Sea level at Tofino, Victoria and Prince Rupert sat above its century-long trend, raised by El Niño. Off Vancouver Island, surveys caught southern copepods rarely seen there except in large El Niño events.',
     ],
     refs: ['dfo2016'],
+    places: [
+      { name: 'Prince Rupert', coords: [-130.32, 54.32] },
+      { name: 'Tofino', coords: [-125.91, 49.15] },
+      { name: 'Victoria', coords: [-123.37, 48.43] },
+    ],
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: '2016-02-01', region: 'pacific_bioregions', landLayer: 'tmin', landMode: 'anomaly' },
     camera: { center: [-125, 51.5], zoom: 4.3, pitch: 30 },
   },
@@ -425,8 +430,13 @@ const steps: StoryStep[] = [
     ],
     quote: { text: '…some ensemble members including from ECCC approaching or exceeding 4°C, which would be unprecedented in the modern record by a substantial margin.', cite: 'Bill Merryfield, Environment and Climate Change Canada, on forecasts for Niño 3.4' },
     refs: ['climateData'],
+    places: [
+      { name: 'Kamloops', coords: [-120.33, 50.67], beside: true },
+      { name: 'Okanagan', coords: [-119.5, 49.6], dot: false },
+      { name: 'Rockies', coords: [-116.3, 51.6], dot: false },
+    ],
     view: { ...STORY_BASE, variable: 'anom', period: 'monthly', date: MONTH, point: { lat: 50.67, lon: -120.33 }, landLayer: 'tmin', landMode: 'anomaly' },
-    camera: { center: [-122, 51], zoom: 4.6, pitch: 35 },
+    camera: { center: [-121.5, 51], zoom: 4.6, pitch: 35 },
   },
   {
     id: 'indonesia',
@@ -506,7 +516,7 @@ const WATCH = [
 ]
 
 const LOG = [
-  { date: '12 Oct 2026', text: 'Retold over the live map; same edition, same numbers. BC chapter extended from DFO\'s State of the Pacific Ocean 2016.' },
-  { date: 'Oct 8, 2026', text: 'Edition 1. NOAA data through September 30, 2026; news to October 8.' },
+  { date: 'October 12, 2026', text: 'Retold over the live map; same edition, same numbers. BC chapter extended from DFO\'s State of the Pacific Ocean 2016.' },
+  { date: 'October 8, 2026', text: 'Edition 1. NOAA data through September 30, 2026; news to October 8.' },
 ]
 </script>
