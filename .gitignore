@@ -30,6 +30,8 @@ clickhouse/logs/
 # === Generated tiles / rendered imagery ===
 out_tiles/
 front/public/tiles/
+stories/kelvin-wave/data/
+stories/kelvin-wave/out/
 
 # === Node / Nuxt (front) ===
 node_modules/

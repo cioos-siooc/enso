@@ -2,24 +2,33 @@
   <UApp>
     <div class="flex h-screen flex-col bg-default text-default">
       <header class="flex shrink-0 items-center gap-2 border-b border-default px-3 py-2 md:gap-3 md:px-4">
-        <img src="/osta-logo.svg" alt="" class="size-6 shrink-0 md:size-8" >
-        <div class="min-w-0">
-          <h1 class="truncate text-sm font-semibold leading-tight">
-            <!-- A phone has room for the abbreviation beside the CIOOS logo, not
-                 the full name; the full name is the tab title and About's lead. -->
-            <span class="md:hidden">OSTA</span>
-            <span class="hidden md:inline">Ocean Surface Temperature Atlas (OSTA)</span>
-          </h1>
-          <!-- The source line is reference, not orientation; a phone header has
-               room for the title and the two buttons and nothing else. -->
-          <p class="hidden text-xs leading-tight text-muted md:block">
-            NOAA Coral Reef Watch CoralTemp v3.1 &middot; daily &middot; 0.05&deg;
-            <!-- The years come from the variable's own declaration, not from a
-                 literal: `mhw` has a DIFFERENT baseline, so a hard-coded pair
-                 here is one `v-if` away from labelling the wrong one. -->
-            <span v-if="store.activeBaseline"> &middot; {{ store.activeBaselinePhrase }}</span>
-          </p>
-        </div>
+        <!-- On a story the mark is the way back to the map; on the map itself
+             it stays inert, since a link to `/` would wipe the URL state. -->
+        <component
+          :is="onStory ? NuxtLink : 'div'"
+          :to="onStory ? '/' : undefined"
+          class="flex min-w-0 items-center gap-2 md:gap-3"
+          :class="onStory && 'transition-opacity hover:opacity-80'"
+        >
+          <img :src="withAppBase('/osta-logo.svg')" alt="" class="size-6 shrink-0 md:size-8" >
+          <div class="min-w-0">
+            <h1 class="truncate text-sm font-semibold leading-tight">
+              <!-- A phone has room for the abbreviation beside the CIOOS logo, not
+                   the full name; the full name is the tab title and About's lead. -->
+              <span class="md:hidden">OSTA</span>
+              <span class="hidden md:inline">Ocean Surface Temperature Atlas (OSTA)</span>
+            </h1>
+            <!-- The source line is reference, not orientation; a phone header has
+                 room for the title and the two buttons and nothing else. -->
+            <p class="hidden text-xs leading-tight text-muted md:block">
+              NOAA Coral Reef Watch CoralTemp v3.1 &middot; daily &middot; 0.05&deg;
+              <!-- The years come from the variable's own declaration, not from a
+                   literal: `mhw` has a DIFFERENT baseline, so a hard-coded pair
+                   here is one `v-if` away from labelling the wrong one. -->
+              <span v-if="store.activeBaseline"> &middot; {{ store.activeBaselinePhrase }}</span>
+            </p>
+          </div>
+        </component>
         <div class="grow" />
         <!-- The app's own mark leads; the host organisation sits at the far end,
              so the bar never shows two logos side by side. -->
@@ -30,7 +39,7 @@
           class="shrink-0 opacity-90 transition-opacity hover:opacity-100"
           aria-label="CIOOS Pacific"
         >
-          <img src="/cioospacific-logo.svg" alt="CIOOS Pacific" class="h-6 w-auto md:h-8" >
+          <img :src="withAppBase('/cioospacific-logo.svg')" alt="CIOOS Pacific" class="h-6 w-auto md:h-8" >
         </a>
         <!-- <UBadge v-if="store.coverage" variant="subtle" color="neutral">
           {{ store.coverage.start }} &ndash; {{ store.coverage.end }}
@@ -41,8 +50,8 @@
       <!-- Under the header and above everything else, because it describes the
            basin rather than the current selection: it must not move when the
            map does. `shrink-0` so it keeps its one line and the page below it
-           takes the rest. -->
-      <StateRibbon class="shrink-0" />
+           takes the rest. A story tells its own state, so it has none. -->
+      <StateRibbon v-if="!onStory" class="shrink-0" />
 
       <NuxtPage class="grow overflow-hidden" />
     </div>
@@ -50,9 +59,12 @@
 </template>
 
 <script setup lang="ts">
+import { NuxtLink } from '#components'
 import { useMainStore } from '~/stores/main'
 
 const store = useMainStore()
+const route = useRoute()
+const onStory = computed(() => route.path.startsWith('/stories'))
 
 await store.loadMetadata()
 </script>

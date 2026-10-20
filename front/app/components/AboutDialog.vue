@@ -409,7 +409,7 @@
                 <!-- The federal signature is ~12:1 and the other two are square,
                      so height alone would let it take the whole row: each mark
                      carries its own cap. -->
-                <img :src="s.logo" :alt="s.name" class="h-auto w-auto object-contain" :class="s.size" >
+                <img :src="withAppBase(s.logo)" :alt="s.name" class="h-auto w-auto object-contain" :class="s.size" >
               </ULink>
             </li>
           </ul>
