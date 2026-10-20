@@ -54,14 +54,10 @@ export default defineNuxtConfig({
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL || 'http://localhost:9021',
       mapboxToken: process.env.NUXT_PUBLIC_MAPBOX_TOKEN || '',
       version: process.env.NUXT_PUBLIC_VERSION || 'dev',
-      // Usage analytics. Empty by default: `app/plugins/posthog.client.ts`
-      // returns early without a key, so dev and any deploy that does not want
-      // analytics need no other change.
-      posthogKey: process.env.NUXT_PUBLIC_POSTHOG_KEY || '',
-      posthogHost: process.env.NUXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com',
-      // Umami, on trial next to PostHog: the shared CIOOS Pacific instance
-      // (cioos-pacific-analytics). Empty ID by default, and
-      // `app/plugins/umami.client.ts` returns early without it.
+      // Usage analytics: the shared CIOOS Pacific Umami (cioos-pacific-analytics).
+      // Empty ID by default, and `app/plugins/umami.client.ts` returns early
+      // without it, so dev and any deploy that does not want analytics need no
+      // other change.
       umamiWebsiteId: process.env.NUXT_PUBLIC_UMAMI_WEBSITE_ID || '',
       umamiScriptUrl: process.env.NUXT_PUBLIC_UMAMI_SCRIPT_URL || 'https://analytics.cioospacific.ca/script.js',
     },

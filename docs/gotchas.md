@@ -176,16 +176,9 @@ Every trap this project has fallen into, in full. CLAUDE.md carries the one-line
 - **`CRW.cli render` runs its pool under `multiprocessing`'s `spawn` context.** Workers
   each open their own NetCDF handles and HDF5 is not fork-safe once a file has been
   touched in the parent.
-- **Editing a PostHog key does not affect a running container**, the same way every other
-  env var here does not: they are baked in at container creation. Use
-  `up -d --force-recreate front api`, not `restart`. The frontend key additionally has to
-  survive a rebuild — `posthog-js` is a dependency, so a changed `package.json` needs
-  `up -d -V` (renew the anonymous `node_modules` volume) or the container keeps the old
-  install.
-- **`_is_routable_public_ip` is false for the documentation ranges too** (192.0.2.0/24,
-  198.51.100.0/24, 203.0.113.0/24) — Python's `ipaddress` counts them as private. Real
-  public IPv4 and IPv6 pass; a test with `203.0.113.7` looks like geoip is broken when it
-  is not.
+- **Editing the Umami website ID does not affect a running container**, the same way every
+  other env var here does not: they are baked in at container creation. Use
+  `up -d --force-recreate front`, not `restart`.
 - **Lossless WebP rewrites the RGB of fully transparent pixels.** Without `exact=True`,
   libwebp may replace the value channels under alpha 0, so `_bleed()`'s coastline fill does
   not fully survive encoding. Measured on a cached 1996 frame: 1,784 of 23,279 coastal land

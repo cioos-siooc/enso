@@ -1,15 +1,15 @@
-# Usage analytics (PostHog, and Umami on trial)
+# Usage analytics (Umami)
 
 What is instrumented, what deliberately is not, and why.
 
-## Umami, on trial next to PostHog (from 2026-10-13)
+## Umami
 
-**Why a trial.** In prod, PostHog showed every API event under an IP as the person and with
-no city. Two causes: posthog-js was not sending (no `$pageview`s at all, so no
-`X-PostHog-Distinct-Id` header and the IP fallback below), and `capture_event` sends no
-`$ip`, so PostHog geolocates the API server's address, not the visitor's. Separately, the
-data goes to US servers with a cookie. Umami is self-hosted, cookieless, and answers the
-same questions. Both run until one is chosen; then remove the other.
+**Umami only, from 2026-10-20.** PostHog ran next to it on trial from 2026-10-13 and was
+removed. In prod, PostHog showed every API event under an IP as the person and with no
+city: posthog-js was not sending (no `$pageview`s at all, so no distinct_id header), and
+the API's server-side capture geolocated the API server's address, not the visitor's. It
+also sent the data to US servers with a cookie. Umami is self-hosted, cookieless, and
+answers the same questions.
 
 - **One shared instance, not part of this stack.** Umami runs at
   `analytics.cioospacific.ca` from its own repo, `cioos-pacific-analytics` (Umami v3 +
@@ -20,60 +20,29 @@ same questions. Both run until one is chosen; then remove the other.
 - **The browser loads the script straight from that host — no proxy in `front`.** Behind
   Cloudflare, Umami reads the visitor IP from `CF-Connecting-IP`, which Cloudflare sets from
   whoever connected. Through a `front` proxy that is this server, so every visitor would get
-  its location — PostHog's server-side problem again. The cost: some
-  ad blockers stop a separate analytics hostname.
+  its location. The cost: some ad blockers stop a separate analytics hostname.
 - **Front end only.** `app/plugins/umami.client.ts` injects `NUXT_PUBLIC_UMAMI_SCRIPT_URL`
-  when `NUXT_PUBLIC_UMAMI_WEBSITE_ID` is set; `trackEvent()` calls `window.umami?.track()`
-  next to `posthog.capture()`, so every event below goes to both with no call-site change.
-  The API's server-side events are **not** sent to Umami (a decision: they duplicate the
-  browser's `point_selected`/`region_selected`, and only direct API users are lost).
+  when `NUXT_PUBLIC_UMAMI_WEBSITE_ID` is set; `app/composables/useAnalytics.ts`'s
+  `trackEvent()` calls `window.umami.track()`. Both live under `app/` because that is
+  Nuxt 4's srcDir — a top-level `front/plugins/` is not picked up at all.
+  **A blank website ID is a silent no-op** and the dev default; nothing guards at the call
+  sites.
+- **The API sends nothing.** Its server-side events duplicated the browser's
+  `point_selected`/`region_selected`; only direct API users (curl, scripts) are not
+  counted.
+- **Events before the script loads are queued, not lost.** The script is deferred, so
+  `trackEvent()` holds up to 50 events and the plugin flushes them on the script's `load`.
 - **`data-exclude-search="true"` is load-bearing.** The tracker reports a pageview on every
   `replaceState` that changes the URL, and `useUrlState` rewrites the query string on every
   selection — ten times a second in playback. With it, one pageview per path; verified in
   headless Chromium (one pageview across a map click that rewrote the query).
 - **Umami drops bots by user agent**, headless Chromium included: `/api/send` still
   answers 200, but nothing is stored. Set a desktop `userAgent` to test in Playwright.
-- An event fired before the deferred script loads is lost on Umami's side, not queued.
-
-## Usage analytics (PostHog)
-
-**PostHog Cloud, not self-hosted, and the same shape as the ocean-acidification
-dashboard** — `api/modules/posthog_helpers.py` is a port of that project's file. Cloud is
-deliberate in both: the official self-hosted stack bundles its own ClickHouse, Kafka,
-Redis, Zookeeper and MinIO, and this box already runs ~100 GB of ClickHouse for the
-science data. A `usage_events` table in the database that is already here was the other
-candidate and was rejected for what comes with it rather than what it costs — retention,
-bot filtering and a query UI, i.e. building an analytics frontend instead of the dashboard.
-
-**Both sides are a silent no-op without a key**, so leaving `POSTHOG_API_KEY` and
-`NUXT_PUBLIC_POSTHOG_KEY` blank is a supported configuration and the dev default. Nothing
-guards at the call sites.
-
-- **API** (`api/modules/posthog_helpers.py`): `capture_event(http_request, event, props)`,
-  configured by `POSTHOG_API_KEY` / `POSTHOG_HOST`. One long-lived client per worker
-  process — `capture()` enqueues and a background thread batches over HTTP. Called from
-  `/timeseries`, `/monthlyRanking`, `/regionTimeseries`, `/region/{key}` and
-  `/region/{key}/monthlyRanking`.
-- **Frontend** (`front/app/plugins/posthog.client.ts` + `app/composables/useAnalytics.ts`'s
-  `trackEvent()`), configured by `NUXT_PUBLIC_POSTHOG_KEY` / `NUXT_PUBLIC_POSTHOG_HOST`.
-  Both live under `app/` because that is Nuxt 4's srcDir — a top-level `front/plugins/` is
-  not picked up at all, the same trap the composables note above describes.
-  **Autocapture and session replay are off.** This is a full-bleed Mapbox UI: autocapture
-  would log a stream of canvas clicks whose coordinates mean nothing, and replay would
-  record a map that redraws every frame of playback. Custom events only.
-- **Identity.** The plugin sets `axios.defaults.headers.common['X-PostHog-Distinct-Id']`
-  once, and `useApi()` uses the module-level axios default rather than an `axios.create()`
-  of its own, so every endpoint call carries it with no per-composable change. `SERVER.py`'s
-  `_stamp_request_context` middleware reads it into `request.state.distinct_id`, which
-  `capture_event` prefers over the IP. Non-browser callers (curl, the healthcheck) send no
-  header and fall back to IP; `disable_geoip` stays IP-based either way.
+- **No autocapture.** This is a full-bleed Mapbox UI: a click stream on the canvas means
+  nothing. Custom events only, plus Umami's own pageviews.
 
 **What is deliberately not instrumented, and why it is the load-bearing part:**
 
-- **`/image`, server-side.** Playback prefetches `AHEAD = 8` frames per tick at up to
-  10 fps, so instrumenting the image route would emit hundreds of events a minute from one
-  person watching one animation — none of them a decision. `/health`, `/domain`,
-  `/coverage` and `/variables` are out for the same reason: page-load plumbing.
 - **`store.setDate()`.** The playhead writes through it ten times a second. Playback is one
   `playback_started` per press instead, carrying the fps and the bucket it started from.
 - **The colour range slider, per frame.** `ColorLegend`'s `trackRange()` is a 1 s trailing
@@ -91,16 +60,14 @@ guards at the call sites.
 Events, all fired from the store or the component that owns the gesture rather than from
 each call site: `point_selected`, `region_selected` (with `enteredScope`), `scope_changed`,
 `variable_changed`, `period_changed`, `playback_started`, `color_range_changed`,
+`color_scale_linked`, `land_layer_changed`,
 `csv_downloaded` (`kind: series | ranking`, plus `quantity` and, on a ranking,
 `basis: month | year`), `ranking_guide_opened`, `ranking_basis_changed`,
 `baseline_note_opened` (`variable`), `region_about_opened` (`region`),
-`about_opened`, `intro_closed` (`action: dismiss | guide`), `state_ribbon_clicked` (`half: enso`), `state_guide_opened`,
-`compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`, `compare_date_changed` (1 s trailing debounce, like the colour
-range).
-Server-side:
-`land_point_queried` (`surface`, `buckets`), `point_queried` (including the out-of-domain 400 — where people click outside the box is
-the argument for widening it, which costs only a `domain.yml` edit), `point_ranking_queried`,
-`region_queried`, `region_box_queried`, `region_ranking_queried`.
+`about_opened`, `guide_opened`, `intro_closed` (`action: dismiss | guide`),
+`state_ribbon_clicked` (`half: enso`), `state_guide_opened`,
+`compare_toggled` (`on`), `point_added` (`source`), `region_added`, `point_removed`,
+`compare_date_changed` (1 s trailing debounce, like the colour range).
 
 **`region_selected` is reported on every call, not only when the key changes.** It is
 reached only from the region menu, so picking the region already active is still a choice

@@ -37,7 +37,7 @@ not intended to merge).
 | [docs/api.md](docs/api.md) | endpoints, how `mhw` is bucketed per query shape, `/state`, rankings |
 | [docs/imagery.md](docs/imagery.md) | value-encoded WebP frames, `raster-color`, categorical `mhw` |
 | [docs/frontend.md](docs/frontend.md) | components, store getters, URL state, compare modes, phone layout, CSV, colour range, map, **story pages (the `<StoryScroll>` template)** |
-| [docs/analytics.md](docs/analytics.md) | PostHog: what is and is deliberately not instrumented |
+| [docs/analytics.md](docs/analytics.md) | Umami: what is and is deliberately not instrumented |
 | [docs/testing.md](docs/testing.md) | tests, `CRW.cli check`, driving the app in headless Chromium |
 | [docs/gotchas.md](docs/gotchas.md) | every gotcha in full (one-liners below) |
 | [docs/verification.md](docs/verification.md) | what has been verified, with numbers — history, not instructions |
@@ -60,9 +60,8 @@ Host ports come from `docker-compose.dev.yml`'s `${VAR:-default}` fallbacks, ove
 
 Offset from the ocean-acidification-dashboard's 9010–9014 so both stacks can run at once.
 
-Usage analytics: PostHog Cloud, and on trial next to it the shared CIOOS Pacific Umami at
-`analytics.cioospacific.ca` (its own repo, `cioos-pacific-analytics`, like Prefect's) —
-docs/analytics.md.
+Usage analytics: the shared CIOOS Pacific Umami at `analytics.cioospacific.ca` (its own
+repo, `cioos-pacific-analytics`, like Prefect's), browser only — docs/analytics.md.
 
 ## Common commands
 
@@ -168,7 +167,7 @@ touching anything.
 - Nuxt UI: icons are mdi (remap in `app.config.ts`); `UButtonGroup` is now `UFieldGroup`.
 
 **Containers and Prefect** ([gotchas](docs/gotchas.md), [pipeline](docs/pipeline.md))
-- Env vars and PostHog keys are baked in at creation: `up -d --force-recreate`, not
+- Env vars (the Umami website ID too) are baked in at creation: `up -d --force-recreate`, not
   `restart`. `domain.yml` edits need an API restart.
 - `process` and `scheduler` must keep sharing one `image:` name, or `process` stops being
   rebuilt.

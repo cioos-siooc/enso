@@ -1,7 +1,8 @@
+import { flushAnalytics } from '~/composables/useAnalytics'
+
 /**
- * Umami, browser side, on trial next to PostHog (docs/analytics.md).
- * **Client-only**, like `posthog.client.ts`, and the same no-op without its
- * setting.
+ * Umami, browser side (docs/analytics.md). **Client-only**, and a no-op
+ * without its website ID.
  *
  * The script comes **straight from the shared instance**
  * (analytics.cioospacific.ca, the cioos-pacific-analytics stack), not through
@@ -23,5 +24,6 @@ export default defineNuxtPlugin(() => {
   script.src = config.public.umamiScriptUrl as string
   script.dataset.websiteId = websiteId
   script.dataset.excludeSearch = 'true'
+  script.addEventListener('load', flushAnalytics)
   document.head.appendChild(script)
 })

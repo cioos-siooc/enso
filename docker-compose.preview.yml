@@ -5,7 +5,7 @@
 #   docker compose -f docker-compose.preview.yml --env-file .env.preview up -d --build
 #
 # The container gets only the variables listed below, not the whole env file,
-# so a PostHog key that finds its way into .env.preview is still not passed:
+# so an Umami website ID that finds its way into .env.preview is still not passed:
 # preview visits must not be counted as visitors.
 
 name: enso-preview

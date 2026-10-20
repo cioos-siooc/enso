@@ -97,7 +97,7 @@ both the browser and SSR reading the production API — so API changes on the br
 show. `.env.preview.example` is the template; only `NUXT_PUBLIC_MAPBOX_TOKEN` is required.
 SSR's URL is set as **`NUXT_API_INTERNAL_BASE_URL`**, not prod's `API_INTERNAL_BASE_URL`:
 `nuxt.config.ts` reads the plain name only at build time, which baked in `http://api:4000`.
-The container gets only the variables the file lists, so PostHog stays off. Verified
+The container gets only the variables the file lists, so Umami stays off. Verified
 2026-10-13: SSR rendered "as of 12 Oct 2026" from the production API and the map drew.
 
 **Pipeline CLI** (the `process` service idles on `sleep infinity` and is driven on demand):
